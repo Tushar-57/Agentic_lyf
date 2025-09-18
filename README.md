@@ -25,7 +25,7 @@ A sophisticated personal AI assistant system featuring specialized agents for pr
 - 🔄 Enhancing Agent Ecosystem for better/in line responses
 - 🔄 Upgrading knowledge base ingestion/persistence logic for better user relatability in responses.
 - 🔄 Telegram Bot Integration. v1.2
-- 🔄 Profile View (If I have time)
+- 🔄 Profile View ~~(If I have time)~~
 
 ### Upcoming Features (v1.2)
 - 🔄 Mobile app (React Native) v1.3
