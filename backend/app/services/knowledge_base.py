@@ -33,14 +33,15 @@ class KnowledgeBaseService:
     async def _generate_embedding(self, text: str) -> List[float]:
         """Generate embedding for text using the configured LLM provider."""
         try:
-            llm_service = await get_llm_service()
-            
-            # Check if service is properly initialized
-            if not llm_service:
+            # Check if LLM service is already initialized before trying to get it
+            from ..llm import service as llm_service_module
+            if not llm_service_module._llm_service or not llm_service_module._llm_service._initialized:
                 logger.warning("LLM service not initialized, using dummy embedding")
                 # Return a dummy embedding to allow functionality to continue
                 return [0.0] * 1536  # Standard embedding dimension for compatibility
-                
+            
+            llm_service = llm_service_module._llm_service
+            
             request = EmbeddingRequest(text=text)
             response = await llm_service.generate_embedding(request)
             return response.embedding
@@ -784,10 +785,17 @@ class KnowledgeBaseService:
             for entry in all_entries:
                 entries_by_category[entry.category] = entries_by_category.get(entry.category, 0) + 1
             
-            # Get current LLM model for embedding info
-            llm_service = await get_llm_service()
-            current_provider = llm_service.get_current_provider()
-            embedding_model = f"{current_provider}_embedding" if current_provider else "unknown"
+            # Get current LLM model for embedding info (but don't initialize if not available)
+            embedding_model = "unknown"
+            try:
+                from ..llm import service as llm_service_module
+                if llm_service_module._llm_service and llm_service_module._llm_service._initialized:
+                    llm_service = llm_service_module._llm_service
+                    current_provider = llm_service.get_current_provider()
+                    embedding_model = f"{current_provider}_embedding" if current_provider else "unknown"
+            except Exception:
+                # Don't fail stats if LLM service is not available
+                pass
             
             return KnowledgeStats(
                 total_entries=len(all_entries),

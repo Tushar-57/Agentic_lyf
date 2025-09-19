@@ -6,7 +6,7 @@ from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from ..models.knowledge import (
+from app.models.knowledge import (
     KnowledgeEntry,
     KnowledgeEntryType,
     KnowledgeQuery,
@@ -15,7 +15,7 @@ from ..models.knowledge import (
     UserPreferences,
     KnowledgeEntrySubType
 )
-from ..services.knowledge_base import get_knowledge_base_service
+from app.services.knowledge_base import get_knowledge_base_service
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 

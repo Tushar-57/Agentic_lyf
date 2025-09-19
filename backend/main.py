@@ -1,29 +1,33 @@
-# AI Agent Ecosystem Backend
-# FastAPI application entry point
+#Fast API main.py 
 
 import os
+import json
+import asyncio
+import logging
+from datetime import datetime
+from contextlib import asynccontextmanager
+from typing import Optional, Any
+
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, Any
-import asyncio
+
 from app.langgraph.workflow import AgentGraphWorkflow
-import json
-from datetime import datetime
-from contextlib import asynccontextmanager
 from app.agents.registry import get_agent_registry
-from app.llm import get_llm_service, reset_llm_service, ChatMessage, CompletionRequest
 from app.api.knowledge import router as knowledge_router
 from app.agents.factory import initialize_agents
 from app.agents.base import AgentType
-import logging
-
+from app.llm import service as llm_service_module
+from app.llm.service import LLMService, get_llm_service
+from app.llm.config import LLMConfig
+from app.utils.logging import get_api_category_logger
 
 # Load environment variables from .env file
 load_dotenv()
 
-logger = logging.getLogger("agent_factory")
+# Use enhanced logging
+logger = get_api_category_logger("main")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -219,6 +223,7 @@ async def get_agents_status():
 
 class ProviderSwitchRequest(BaseModel):
     provider: str
+    config: Optional[dict] = {}
 
 @app.post("/api/llm/switch-provider")
 async def switch_provider(request: ProviderSwitchRequest):
@@ -230,16 +235,23 @@ async def switch_provider(request: ProviderSwitchRequest):
             raise HTTPException(status_code=400, detail="Invalid provider type")
         
         provider_type = LLMProviderType.OPENAI if request.provider == 'openai' else LLMProviderType.OLLAMA
-        
-        # Import global service
-        from app.llm import service as llm_service_module
-        from app.llm.service import LLMService
-        from app.llm.config import LLMConfig
-        import os
+    
         
         # Create new service with updated provider preference
+        # Start with default config but clear OpenAI API key to force frontend to provide it
         config = LLMConfig.from_env(dict(os.environ))
         config.provider = provider_type  # Set the preferred provider
+        
+        # For OpenAI, clear any default API key and require it from frontend
+        if provider_type == LLMProviderType.OPENAI:
+            config.openai_api_key = None  # Clear any default/environment key
+        
+        # Override config with frontend-provided values
+        if request.config:
+            if provider_type == LLMProviderType.OPENAI and 'api_key' in request.config:
+                config.openai_api_key = request.config['api_key']
+            elif provider_type == LLMProviderType.OLLAMA and 'endpoint' in request.config:
+                config.ollama_endpoint = request.config['endpoint']
         
         # Create new service instance
         new_service = LLMService(config)
@@ -262,7 +274,15 @@ async def switch_provider(request: ProviderSwitchRequest):
                 new_service.factory._current_provider = provider
                 
             elif provider_type == LLMProviderType.OPENAI:
-                # Create OpenAI provider directly (but skip health check)
+                # Only create OpenAI provider if API key is provided
+                if not config.openai_api_key:
+                    return {
+                        "success": False,
+                        "current_provider": "none",
+                        "message": "OpenAI API key is required to use OpenAI provider"
+                    }
+                
+                # Create OpenAI provider directly
                 from app.llm.openai_provider import OpenAIProvider
                 provider = OpenAIProvider(
                     api_key=config.openai_api_key,
@@ -271,7 +291,8 @@ async def switch_provider(request: ProviderSwitchRequest):
                     temperature=config.temperature,
                     base_url=config.openai_base_url
                 )
-                # Don't initialize to avoid quota usage
+                # Initialize the provider to test the connection
+                await provider.initialize()
                 new_service.factory._providers[provider_type] = provider
                 new_service.factory._current_provider = provider
             
@@ -372,21 +393,71 @@ async def test_connection(request: ConnectionTestRequest):
         
         provider_type = LLMProviderType.OPENAI if request.provider == 'openai' else LLMProviderType.OLLAMA
         
-        llm_service = await get_llm_service()
-        health_status = await llm_service.health_check()
-        provider_health = health_status.get(provider_type)
+        # Create a temporary provider with provided configuration for testing
+        start_time = datetime.now()
         
-        if provider_health:
-            return {
-                "healthy": provider_health.is_healthy,
-                "responseTime": provider_health.response_time_ms,
-                "model": provider_health.model,
-                "error": provider_health.error if not provider_health.is_healthy else None
-            }
-        else:
+        try:
+            if provider_type == LLMProviderType.OPENAI:
+                # Require API key for OpenAI testing
+                api_key = request.config.get('api_key') if request.config else None
+                if not api_key:
+                    return {
+                        "healthy": False,
+                        "error": "OpenAI API key is required for testing"
+                    }
+                
+                from app.llm.openai_provider import OpenAIProvider
+                test_provider = OpenAIProvider(
+                    api_key=api_key,
+                    model="gpt-3.5-turbo",  # Use a standard model for testing
+                    max_tokens=10,  # Minimal tokens for test
+                    temperature=0.7
+                )
+                
+                # Initialize and test the provider
+                await test_provider.initialize()
+                health_check = await test_provider.health_check()
+                
+                response_time = (datetime.now() - start_time).total_seconds() * 1000
+                
+                return {
+                    "healthy": health_check.is_healthy,
+                    "responseTime": int(response_time),
+                    "model": health_check.model,
+                    "error": health_check.error if not health_check.is_healthy else None
+                }
+                
+            elif provider_type == LLMProviderType.OLLAMA:
+                # Use provided endpoint or default
+                endpoint = request.config.get('endpoint', 'http://localhost:11434') if request.config else 'http://localhost:11434'
+                
+                from app.llm.ollama_provider import OllamaProvider
+                test_provider = OllamaProvider(
+                    endpoint=endpoint,
+                    model="llama3.2:3b",  # Use default model for testing
+                    max_tokens=10,  # Minimal tokens for test
+                    temperature=0.7
+                )
+                
+                # Initialize and test the provider
+                await test_provider.initialize()
+                health_check = await test_provider.health_check()
+                
+                response_time = (datetime.now() - start_time).total_seconds() * 1000
+                
+                return {
+                    "healthy": health_check.is_healthy,
+                    "responseTime": int(response_time),
+                    "model": health_check.model,
+                    "error": health_check.error if not health_check.is_healthy else None
+                }
+                
+        except Exception as e:
+            response_time = (datetime.now() - start_time).total_seconds() * 1000
             return {
                 "healthy": False,
-                "error": "Provider not available"
+                "responseTime": int(response_time),
+                "error": str(e)
             }
             
     except Exception as e:

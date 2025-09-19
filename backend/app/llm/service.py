@@ -3,7 +3,6 @@ LLM service that provides a high-level interface to the LLM providers.
 """
 
 import os
-import logging
 from typing import AsyncGenerator, Dict, Any, List, Optional
 
 from .base import (
@@ -16,8 +15,9 @@ from .base import (
 )
 from .config import LLMConfig
 from .factory import LLMProviderFactory
+from ..utils.logging import get_llm_category_logger
 
-logger = logging.getLogger(__name__)
+logger = get_llm_category_logger(__name__)
 
 
 class LLMService:
@@ -146,8 +146,23 @@ async def get_llm_service() -> LLMService:
     global _llm_service
     
     if _llm_service is None:
-        _llm_service = LLMService()
-        await _llm_service.initialize()
+        # Create service but don't initialize if no valid providers are configured
+        config = LLMConfig.from_env(dict(os.environ))
+        
+        # Check if any provider has valid configuration
+        has_valid_provider = (
+            config.validate_provider_config(config.provider) or
+            (config.fallback_enabled and config.fallback_provider and 
+             config.validate_provider_config(config.fallback_provider))
+        )
+        
+        if not has_valid_provider:
+            logger.warning("No valid LLM provider configurations found - LLM service will be created but not initialized")
+            _llm_service = LLMService(config)
+            # Don't initialize - service will be available but not functional until provider is configured
+        else:
+            _llm_service = LLMService(config)
+            await _llm_service.initialize()
     
     return _llm_service
 

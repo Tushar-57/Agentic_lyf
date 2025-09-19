@@ -1,3 +1,4 @@
+
 """
 LLM provider factory with health checks and fallback mechanisms.
 """
@@ -29,17 +30,21 @@ class LLMProviderFactory:
     async def initialize(self) -> None:
         """Initialize the factory and providers."""
         try:
-            # Initialize primary provider
-            primary_provider = await self._create_provider_by_type(self.config.provider)
-            if primary_provider:
-                self._providers[self.config.provider] = primary_provider
-                self._current_provider = primary_provider
-                logger.info(f"Initialized primary provider: {self.config.provider}")
+            # Initialize primary provider only if config is valid
+            if self.config.validate_provider_config(self.config.provider):
+                primary_provider = await self._create_provider_by_type(self.config.provider)
+                if primary_provider:
+                    self._providers[self.config.provider] = primary_provider
+                    self._current_provider = primary_provider
+                    logger.info(f"Initialized primary provider: {self.config.provider}")
+            else:
+                logger.warning(f"Primary provider {self.config.provider} has invalid configuration, skipping initialization")
             
-            # Initialize fallback provider if enabled
+            # Initialize fallback provider if enabled and has valid config
             if (self.config.fallback_enabled and 
                 self.config.fallback_provider and 
-                self.config.fallback_provider != self.config.provider):
+                self.config.fallback_provider != self.config.provider and
+                self.config.validate_provider_config(self.config.fallback_provider)):
                 
                 fallback_provider = await self._create_provider_by_type(self.config.fallback_provider)
                 if fallback_provider:
@@ -51,10 +56,13 @@ class LLMProviderFactory:
                     if not self._current_provider:
                         self._current_provider = fallback_provider
                         logger.info(f"Using fallback provider as current: {self.config.fallback_provider}")
+            elif self.config.fallback_enabled and self.config.fallback_provider:
+                logger.warning(f"Fallback provider {self.config.fallback_provider} has invalid configuration, skipping initialization")
             
+            # If no providers were initialized, create a minimal setup
             if not self._current_provider:
-                raise Exception("No providers could be initialized")
-                raise Exception("No providers could be initialized")
+                logger.warning("No providers could be initialized with valid configuration")
+                # Don't raise an exception, just log a warning
                 
         except Exception as e:
             logger.error(f"Failed to initialize LLM providers: {e}")

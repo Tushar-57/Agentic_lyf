@@ -5,8 +5,7 @@ LLM provider configuration management.
 from typing import Optional, Dict, Any
 from pydantic import BaseModel, Field
 from enum import Enum
-
-from .base import LLMProviderType
+from app.llm.base import LLMProviderType
 
 
 class LLMConfig(BaseModel):
@@ -70,11 +69,12 @@ class LLMConfig(BaseModel):
     def from_env(cls, env_vars: Dict[str, str]) -> "LLMConfig":
         """Create configuration from environment variables."""
         return cls(
-            provider=LLMProviderType(env_vars.get("LLM_PROVIDER", "openai")),
+            provider=LLMProviderType(env_vars.get("LLM_PROVIDER", "ollama")),  # Default to Ollama
             fallback_enabled=env_vars.get("LLM_FALLBACK_ENABLED", "true").lower() == "true",
-            fallback_provider=LLMProviderType(env_vars.get("LLM_FALLBACK_PROVIDER", "ollama")) if env_vars.get("LLM_FALLBACK_PROVIDER") else None,
+            fallback_provider=LLMProviderType(env_vars.get("LLM_FALLBACK_PROVIDER", "openai")) if env_vars.get("LLM_FALLBACK_PROVIDER") else LLMProviderType.OPENAI,  # Default to OpenAI as fallback
             
-            openai_api_key=env_vars.get("OPENAI_API_KEY"),
+            # Don't load OpenAI API key from environment - force frontend to provide it
+            openai_api_key=None,  # Always None - will be set by frontend when switching to OpenAI
             openai_model=env_vars.get("OPENAI_MODEL", "gpt-3.5-turbo"),
             openai_base_url=env_vars.get("OPENAI_BASE_URL"),
             

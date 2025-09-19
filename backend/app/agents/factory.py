@@ -13,7 +13,7 @@ from langsmith.run_helpers import traceable
 
 from .base import BaseAgent, AgentType, AgentCapability
 from .orchestrator import OrchestratorAgent
-from .specialized import HealthAgent, ProductivityAgent
+from .specialized_agents import HealthAgent, ProductivityAgent
 from .registry import get_agent_registry
 from .communication import get_communication_protocol, start_communication_protocol
 from .prompts import get_agent_prompt
@@ -91,19 +91,19 @@ class AgentFactory:
                     agent.agent_id = agent_id
             elif agent_type == AgentType.FINANCE:
                 # Use specialized finance agent
-                from .specialized import FinanceAgent
+                from .specialized_agents import FinanceAgent
                 agent = FinanceAgent()
                 if agent_id != "finance_specialized":
                     agent.agent_id = agent_id
             elif agent_type == AgentType.SCHEDULING:
                 # Use specialized scheduling agent
-                from .specialized import SchedulingAgent
+                from .specialized_agents import SchedulingAgent
                 agent = SchedulingAgent()
                 if agent_id != "scheduling_specialized":
                     agent.agent_id = agent_id
             elif agent_type == AgentType.JOURNAL:
                 # Use specialized journal agent
-                from .specialized import JournalAgent
+                from .specialized_agents import JournalAgent
                 agent = JournalAgent()
                 if agent_id != "journal_specialized":
                     agent.agent_id = agent_id
