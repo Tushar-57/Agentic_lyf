@@ -68,17 +68,24 @@ class LLMConfig(BaseModel):
     @classmethod
     def from_env(cls, env_vars: Dict[str, str]) -> "LLMConfig":
         """Create configuration from environment variables."""
+        # Import here to avoid circular imports
+        from app.services.config_storage import get_config_storage
+        
+        config_storage = get_config_storage()
+        openai_config = config_storage.get_openai_config()
+        ollama_config = config_storage.get_ollama_config()
+        
         return cls(
             provider=LLMProviderType(env_vars.get("LLM_PROVIDER", "ollama")),  # Default to Ollama
             fallback_enabled=env_vars.get("LLM_FALLBACK_ENABLED", "true").lower() == "true",
             fallback_provider=LLMProviderType(env_vars.get("LLM_FALLBACK_PROVIDER", "openai")) if env_vars.get("LLM_FALLBACK_PROVIDER") else LLMProviderType.OPENAI,  # Default to OpenAI as fallback
             
-            # Don't load OpenAI API key from environment - force frontend to provide it
-            openai_api_key=None,  # Always None - will be set by frontend when switching to OpenAI
+            # Load OpenAI API key from stored config
+            openai_api_key=openai_config.get("api_key"),
             openai_model=env_vars.get("OPENAI_MODEL", "gpt-3.5-turbo"),
             openai_base_url=env_vars.get("OPENAI_BASE_URL"),
             
-            ollama_endpoint=env_vars.get("OLLAMA_ENDPOINT", "http://localhost:11434"),
+            ollama_endpoint=ollama_config.get("endpoint", "http://localhost:11434"),
             ollama_model=env_vars.get("OLLAMA_MODEL", "llama3.2:3b"),
             
             max_tokens=int(env_vars.get("LLM_MAX_TOKENS", "4000")),

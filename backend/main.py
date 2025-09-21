@@ -22,6 +22,7 @@ from app.llm import service as llm_service_module
 from app.llm.service import LLMService, get_llm_service
 from app.llm.config import LLMConfig
 from app.utils.logging import get_api_category_logger
+from app.services.config_storage import get_config_storage
 
 # Load environment variables from .env file
 load_dotenv()
@@ -238,20 +239,31 @@ async def switch_provider(request: ProviderSwitchRequest):
     
         
         # Create new service with updated provider preference
-        # Start with default config but clear OpenAI API key to force frontend to provide it
         config = LLMConfig.from_env(dict(os.environ))
         config.provider = provider_type  # Set the preferred provider
         
-        # For OpenAI, clear any default API key and require it from frontend
-        if provider_type == LLMProviderType.OPENAI:
-            config.openai_api_key = None  # Clear any default/environment key
+        # Import config storage to save settings
+        config_storage = get_config_storage()
         
-        # Override config with frontend-provided values
+        # Override config with frontend-provided values and save them
         if request.config:
             if provider_type == LLMProviderType.OPENAI and 'api_key' in request.config:
                 config.openai_api_key = request.config['api_key']
+                # Handle model selection
+                if 'model' in request.config:
+                    config.openai_model = request.config['model']
+                # Save OpenAI config for persistence
+                openai_config = {'api_key': request.config['api_key']}
+                if 'model' in request.config:
+                    openai_config['model'] = request.config['model']
+                config_storage.set_openai_config(openai_config)
             elif provider_type == LLMProviderType.OLLAMA and 'endpoint' in request.config:
                 config.ollama_endpoint = request.config['endpoint']
+                # Save Ollama config for persistence
+                config_storage.set_ollama_config({'endpoint': request.config['endpoint']})
+        
+        # Save provider preference
+        config_storage.set_provider_preference(request.provider)
         
         # Create new service instance
         new_service = LLMService(config)
@@ -407,9 +419,13 @@ async def test_connection(request: ConnectionTestRequest):
                     }
                 
                 from app.llm.openai_provider import OpenAIProvider
+                
+                # Use provided model or default
+                model = request.config.get('model', 'gpt-3.5-turbo') if request.config else 'gpt-3.5-turbo'
+                
                 test_provider = OpenAIProvider(
                     api_key=api_key,
-                    model="gpt-3.5-turbo",  # Use a standard model for testing
+                    model=model,
                     max_tokens=10,  # Minimal tokens for test
                     temperature=0.7
                 )
@@ -465,6 +481,55 @@ async def test_connection(request: ConnectionTestRequest):
             "healthy": False,
             "error": str(e)
         }
+
+# Configuration management endpoints
+class ConfigUpdateRequest(BaseModel):
+    openai: Optional[dict] = None
+    ollama: Optional[dict] = None
+    provider_preference: Optional[str] = None
+
+@app.get("/api/config")
+async def get_config():
+    """Get current stored configuration."""
+    try:
+        from app.services.config_storage import get_config_storage
+        
+        config_storage = get_config_storage()
+        
+        return {
+            "openai": config_storage.get_openai_config(),
+            "ollama": config_storage.get_ollama_config(),
+            "provider_preference": config_storage.get_provider_preference()
+        }
+    except Exception as e:
+        logger.error(f"Error getting configuration: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get configuration: {str(e)}")
+
+@app.post("/api/config")
+async def update_config(request: ConfigUpdateRequest):
+    """Update stored configuration."""
+    try:
+        from app.services.config_storage import get_config_storage
+        
+        config_storage = get_config_storage()
+        
+        # Update configurations if provided
+        if request.openai is not None:
+            config_storage.set_openai_config(request.openai)
+        
+        if request.ollama is not None:
+            config_storage.set_ollama_config(request.ollama)
+            
+        if request.provider_preference is not None:
+            config_storage.set_provider_preference(request.provider_preference)
+        
+        return {
+            "success": True,
+            "message": "Configuration updated successfully"
+        }
+    except Exception as e:
+        logger.error(f"Error updating configuration: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update configuration: {str(e)}")
 
 # Global workflow instance
 _workflow = None

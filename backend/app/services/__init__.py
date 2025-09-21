@@ -5,9 +5,11 @@ This module contains services for:
 - Knowledge base management and operations
 - Vector storage and similarity search
 - Data persistence and retrieval
+- Configuration storage and management
 """
 
 from .knowledge_base import get_knowledge_base_service, KnowledgeBaseService
+from .config_storage import get_config_storage, ConfigStorage
 from .interaction_recorder import get_interaction_recorder, InteractionRecorder
 from .vector_store import VectorStore
 
