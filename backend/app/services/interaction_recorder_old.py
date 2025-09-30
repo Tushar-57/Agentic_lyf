@@ -1,8 +1,8 @@
 """
-Enhanced Interaction Recording Service with User Approval
+Intelligent Interaction Recording Service
 
-This service requires explicit user approval before recording interactions
-to prevent knowledge base pollution with unvalidated assumptions.
+This service intelligently determines whether an interaction should be recorded
+to the knowledge base based on content analysis and REQUIRES USER APPROVAL.
 """
 import logging
 import re
@@ -15,19 +15,17 @@ class PendingInteraction:
     """Represents an interaction awaiting user approval."""
     
     def __init__(self, user_input: str, agent_response: str, agent_type: str, 
-                 context: Optional[Dict] = None, interaction_id: str = None, 
-                 knowledge_sources: Optional[List[Dict]] = None):
+                 context: Optional[Dict] = None, interaction_id: str = None):
         self.id = interaction_id or f"pending_{datetime.now().isoformat()}"
         self.user_input = user_input
         self.agent_response = agent_response
         self.agent_type = agent_type
         self.context = context or {}
-        self.knowledge_sources = knowledge_sources or []  # Store KB sources used
         self.timestamp = datetime.now()
         self.status = "pending_approval"
 
 class InteractionRecorder:
-    """Enhanced service requiring user approval before recording interactions."""
+    """Intelligent service for recording valuable interactions with user approval."""
     
     def __init__(self, knowledge_base_service, llm_service):
         self.knowledge_base = knowledge_base_service
@@ -58,22 +56,14 @@ class InteractionRecorder:
             r'(data|analysis|report|metrics|statistics)',
             r'(preference|setting|configuration|customize)',
         ]
-    
+        
     async def create_pending_interaction(self, user_input: str, agent_response: str, 
-                                       agent_type: str = "general", context: Optional[Dict] = None,
-                                       knowledge_sources: Optional[List[Dict]] = None) -> Optional[str]:
+                                       agent_type: str = "general", context: Optional[Dict] = None) -> str:
         """
         Create a pending interaction that requires user approval.
         
-        Args:
-            user_input: User's input
-            agent_response: Agent's response
-            agent_type: Type of agent
-            context: Interaction context
-            knowledge_sources: List of knowledge base sources used
-        
         Returns:
-            str: Interaction ID for approval tracking, None if filtered out
+            str: Interaction ID for approval tracking
         """
         try:
             # Check if interaction should even be considered for recording
@@ -90,8 +80,7 @@ class InteractionRecorder:
                 user_input=user_input,
                 agent_response=agent_response,
                 agent_type=agent_type,
-                context=context,
-                knowledge_sources=knowledge_sources or []
+                context=context
             )
             
             self.pending_interactions.append(pending)
@@ -162,8 +151,6 @@ class InteractionRecorder:
     
     def get_pending_interactions(self) -> List[Dict[str, Any]]:
         """Get all pending interactions waiting for approval."""
-        self.logger.info("Getting pending interactions - count: %d, instance id: %s", 
-                        len(self.pending_interactions), id(self))
         return [
             {
                 "id": pending.id,
@@ -171,34 +158,32 @@ class InteractionRecorder:
                 "agent_response": pending.agent_response,
                 "agent_type": pending.agent_type,
                 "timestamp": pending.timestamp.isoformat(),
-                "status": pending.status,
-                "knowledge_sources": pending.knowledge_sources or []
+                "status": pending.status
             }
             for pending in self.pending_interactions
         ]
-
-    async def record_if_valuable(self, user_input: str, agent_response: str, 
-                                agent_type: str = "general", context: Optional[Dict] = None, 
-                                user_approved: bool = False) -> bool:
         """
-        DEPRECATED: Use create_pending_interaction() instead.
-        This method now only works with explicit user approval.
-        """
-        if not user_approved:
-            self.logger.info("Use create_pending_interaction() for new approval workflow")
-            return False
+        Analyze interaction and record only if it's valuable AND user-approved.
         
-        return await self._record_approved_interaction(user_input, agent_response, agent_type, context)
-    
-    async def _record_approved_interaction(self, user_input: str, agent_response: str, 
-                                         agent_type: str, context: Optional[Dict] = None) -> bool:
-        """Internal method to record already-approved interactions."""
+        Args:
+            user_approved: Whether the user has explicitly approved this response
+        
+        Returns:
+            bool: True if recorded, False if filtered out or not approved
+        """
         try:
+            # CRITICAL: Only record if user has explicitly approved the response
+            if not user_approved:
+                self.logger.info(f"Interaction not recorded - waiting for user approval for {agent_type}")
+                return False
+            
+            # Check if interaction should be recorded
             should_record = await self.should_record_interaction(
                 user_input, agent_response, agent_type, context
             )
             
             if should_record:
+                # Record the interaction only after user approval
                 await self.knowledge_base.add_interaction_history(
                     agent_type=agent_type,
                     user_input=user_input,
@@ -206,23 +191,33 @@ class InteractionRecorder:
                     context=context or {}
                 )
                 
-                self.logger.info("Recorded USER-APPROVED interaction for %s", agent_type)
+                self.logger.info(f"Recorded USER-APPROVED interaction for {agent_type}")
                 return True
             else:
-                self.logger.debug("Filtered out trivial interaction for %s", agent_type)
+                self.logger.debug(f"Filtered out trivial interaction for {agent_type}")
                 return False
                 
         except Exception as e:
-            self.logger.error("Error recording approved interaction: %s", str(e))
+            self.logger.error(f"Error in interaction recording: {e}")
+            # On error, DO NOT auto-record without approval
             return False
     
     async def should_record_interaction(self, user_input: str, agent_response: str, 
                                       agent_type: str = "general", context: Optional[Dict] = None) -> bool:
         """
         Determine if an interaction is worth recording based on content analysis.
+        
+        Args:
+            user_input: User's message
+            agent_response: Agent's response
+            agent_type: Type of agent handling the interaction
+            context: Additional context about the interaction
+            
+        Returns:
+            bool: True if should record, False otherwise
         """
         try:
-            # Always consider for certain agent types that handle important data
+            # Always record for certain agent types that handle important data
             important_agents = {'health', 'finance', 'productivity', 'journal', 'scheduling'}
             if agent_type.lower() in important_agents:
                 # But still filter obvious greetings/test messages
@@ -246,8 +241,8 @@ class InteractionRecorder:
             return False
             
         except Exception as e:
-            self.logger.error("Error analyzing interaction value: %s", str(e))
-            # On error, default to considering it recordable
+            self.logger.error(f"Error analyzing interaction value: {e}")
+            # On error, default to recording
             return True
     
     def _is_trivial_interaction(self, user_input: str, agent_response: str) -> bool:
@@ -276,85 +271,90 @@ class InteractionRecorder:
         return False
     
     def _contains_valuable_content(self, user_input: str, agent_response: str) -> bool:
-        """Check if content contains valuable patterns worth recording."""
+        """Check if interaction contains valuable content patterns."""
         combined_text = f"{user_input} {agent_response}".lower()
         
+        # Check for valuable content patterns
         for pattern in self.valuable_patterns:
             if re.search(pattern, combined_text, re.IGNORECASE):
                 return True
-                
+        
+        # Check for questions that indicate learning/information seeking
+        question_indicators = ['how', 'what', 'why', 'when', 'where', 'which', 'can you', 'could you']
+        if any(indicator in user_input.lower() for indicator in question_indicators):
+            if len(user_input) > 20:  # Substantial questions
+                return True
+        
+        # Check for actionable content
+        action_words = ['create', 'build', 'make', 'develop', 'implement', 'setup', 'configure', 'install']
+        if any(word in combined_text for word in action_words):
+            return True
+        
         return False
     
     async def _llm_analysis(self, user_input: str, agent_response: str, agent_type: str) -> bool:
-        """Use LLM to analyze if interaction is worth recording."""
+        """Use LLM to analyze if interaction has long-term value."""
         try:
             analysis_prompt = f"""
-            Analyze if this interaction should be recorded to a knowledge base:
+            Analyze this interaction to determine if it should be recorded for future reference.
             
-            User: {user_input}
-            Agent ({agent_type}): {agent_response}
+            User Input: "{user_input}"
+            Agent Response: "{agent_response}"
+            Agent Type: {agent_type}
             
-            Consider:
-            - Does it contain useful information or preferences?
-            - Would it help personalize future interactions?
-            - Is it more than just casual conversation?
+            Consider these factors:
+            - Does it contain personal preferences, goals, or important information?
+            - Could this information be useful for future interactions?
+            - Is it more than just casual conversation or troubleshooting?
+            - Does it contain domain-specific knowledge or insights?
+            - Would losing this interaction impact future personalization?
             
-            Respond only: YES or NO
+            Respond with only "YES" if it should be recorded, or "NO" if it should be filtered out.
             """
             
-            response = await self.llm_service.generate_response(analysis_prompt)
+            response = await self.llm_service.get_completion(
+                messages=[{"role": "user", "content": analysis_prompt}],
+                max_tokens=10,
+                temperature=0.1
+            )
             
-            return "yes" in response.lower()
+            result = response.content.strip().upper()
+            return result == "YES"
             
         except Exception as e:
-            self.logger.error("Error in LLM analysis: %s", str(e))
-            return False
+            self.logger.error(f"Error in LLM analysis: {e}")
+            # On error, default to recording
+            return True
     
-    def get_recording_stats(self) -> Dict[str, Any]:
-        """Get statistics about recording activity."""
+    async def get_recording_stats(self) -> Dict[str, Any]:
+        """Get statistics about recording behavior."""
         try:
-            pending_count = len(self.pending_interactions)
-            agents_with_pending = len(set(p.agent_type for p in self.pending_interactions))
-            
-            self.logger.info("Recording stats - pending count: %d, agents: %d, instance id: %s", 
-                            pending_count, agents_with_pending, id(self))
-            
+            # This would be implemented based on your tracking needs
             return {
-                "pending_interactions": pending_count,
-                "total_pending": pending_count,
-                "agents_with_pending": agents_with_pending
+                "total_analyzed": 0,
+                "recorded": 0,
+                "filtered": 0,
+                "filter_rate": 0.0,
+                "last_analysis": datetime.now().isoformat()
             }
         except Exception as e:
-            self.logger.error("Error getting recording stats: %s", str(e))
-            return {"error": "Failed to get stats"}
+            self.logger.error(f"Error getting recording stats: {e}")
+            return {}
 
-# Singleton instance
-interaction_recorder_instance = None
 
-def get_interaction_recorder(knowledge_base_service=None, llm_service=None):
-    """Get or create the interaction recorder singleton."""
-    global interaction_recorder_instance  # noqa: PLW0603
+# Global instance
+_interaction_recorder = None
+
+def get_interaction_recorder():
+    """Get the global interaction recorder instance."""
+    global _interaction_recorder
     
-    logger.info("Getting interaction recorder - current instance: %s, kb_service: %s, llm_service: %s", 
-                id(interaction_recorder_instance) if interaction_recorder_instance else None,
-                knowledge_base_service is not None, llm_service is not None)
+    if _interaction_recorder is None:
+        from .knowledge_base import get_knowledge_base_service
+        from ..llm.service import get_llm_service
+        
+        knowledge_base = get_knowledge_base_service()
+        llm_service = get_llm_service()
+        _interaction_recorder = InteractionRecorder(knowledge_base, llm_service)
     
-    # If instance doesn't exist and we have services, create it
-    if interaction_recorder_instance is None and knowledge_base_service and llm_service:
-        interaction_recorder_instance = InteractionRecorder(knowledge_base_service, llm_service)
-        logger.info("Created new interaction recorder instance: %s", id(interaction_recorder_instance))
-    
-    # If instance doesn't exist but we don't have services, try to get them
-    elif interaction_recorder_instance is None:
-        try:
-            from app.services.knowledge_base import get_knowledge_base_service
-            from app.llm.service import get_llm_service
-            kb_service = get_knowledge_base_service()
-            llm_svc = get_llm_service()
-            if kb_service and llm_svc:
-                interaction_recorder_instance = InteractionRecorder(kb_service, llm_svc)
-                logger.info("Auto-initialized interaction recorder instance: %s", id(interaction_recorder_instance))
-        except Exception as e:
-            logger.error("Failed to auto-initialize interaction recorder: %s", str(e))
-    
-    return interaction_recorder_instance
+    return _interaction_recorder

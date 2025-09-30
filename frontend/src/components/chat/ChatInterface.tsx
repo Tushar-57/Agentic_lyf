@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Bot, User, Sparkles, Zap, Brain, Settings } from 'lucide-react'
+import { Send, Bot, User, Sparkles, Zap, Brain, Settings, Database, ChevronDown, ChevronUp } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -36,6 +37,14 @@ interface AgentThinking {
     to: string
     reason: string
   }
+  knowledge_sources?: Array<{
+    type: string
+    content: string
+    similarity?: number
+    created_at?: string
+    category?: string
+    metadata?: Record<string, any>
+  }>
   error?: string
 }
 
@@ -58,6 +67,7 @@ const agentIcons = {
 
 const AgentThinkingDisplay = ({ thinking }: { thinking: AgentThinking }) => {
   const [isExpanded, setIsExpanded] = useState(false)
+  const [showSources, setShowSources] = useState(false)
 
   return (
     <motion.div
@@ -99,6 +109,66 @@ const AgentThinkingDisplay = ({ thinking }: { thinking: AgentThinking }) => {
                   <span className="ml-2 opacity-75">({Math.round(thinking.classification.confidence * 100)}% confidence)</span>
                 </div>
                 <div className="text-xs text-blue-500 dark:text-blue-400 mt-1">{thinking.classification.reason}</div>
+              </div>
+            )}
+
+            {thinking.knowledge_sources && thinking.knowledge_sources.length > 0 && (
+              <div className="mb-3 p-2 bg-purple-50 dark:bg-purple-900/20 rounded border-l-4 border-purple-400">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <Database className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                    <div className="font-medium text-sm text-purple-800 dark:text-purple-200">
+                      Knowledge Sources ({thinking.knowledge_sources.length})
+                    </div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowSources(!showSources)}
+                    className="h-6 w-6 p-0 text-purple-600 dark:text-purple-400"
+                  >
+                    {showSources ? (
+                      <ChevronUp className="h-3 w-3" />
+                    ) : (
+                      <ChevronDown className="h-3 w-3" />
+                    )}
+                  </Button>
+                </div>
+                
+                {showSources && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="space-y-2 max-h-32 overflow-y-auto"
+                  >
+                    {thinking.knowledge_sources.map((source, index) => (
+                      <div 
+                        key={index}
+                        className="bg-white dark:bg-slate-800 p-2 rounded text-xs border"
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <Badge variant="outline" className="text-xs">
+                            {source.type}
+                          </Badge>
+                          {source.similarity && (
+                            <span className="text-purple-600 dark:text-purple-400">
+                              {Math.round(source.similarity * 100)}% match
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-slate-700 dark:text-slate-300 break-words">
+                          {source.content}
+                        </p>
+                        {source.created_at && (
+                          <p className="text-slate-500 dark:text-slate-500 mt-1">
+                            {new Date(source.created_at).toLocaleDateString()}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </motion.div>
+                )}
               </div>
             )}
 

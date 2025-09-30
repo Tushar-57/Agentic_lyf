@@ -1,10 +1,14 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
+import { Brain } from 'lucide-react'
 import { Toaster } from 'sonner'
 import { ChatInterface } from '@/components/chat/ChatInterface'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { SettingsPanel } from '@/components/settings/SettingsPanel'
 import { KnowledgeManagement } from '@/components/knowledge/KnowledgeManagement'
+import { DeepAgentStatus } from '@/components/chat/DeepAgentStatus'
+import { FloatingApprovalNotification } from '@/components/chat/FloatingApprovalNotification'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import './globals.css'
 
@@ -16,6 +20,51 @@ interface Message {
   agent?: string
   reasoning?: string
   isStreaming?: boolean
+  deepAgentState?: DeepAgentState  // Add deep agent state
+}
+
+interface DeepAgentState {
+  current_agent: string
+  agent_hierarchy: string[]
+  active_planning: {
+    id: string
+    title: string
+    status: 'planning' | 'executing' | 'completed'
+    complexity: 'simple' | 'moderate' | 'complex' | 'expert'
+    created_at: string
+  }[]
+  files: Record<string, string>
+  todos: {
+    id: number
+    title: string
+    description: string
+    status: 'not-started' | 'in-progress' | 'completed'
+  }[]
+  approval_requests: {
+    id: string
+    agent_id: string
+    action_type: string
+    description: string
+    priority: 'low' | 'medium' | 'high' | 'critical'
+    status: 'pending' | 'approved' | 'denied' | 'timeout'
+    created_at: string
+  }[]
+  guidance_requests: {
+    id: string
+    agent_id: string
+    question: string
+    urgency: 'low' | 'normal' | 'high'
+    status: 'pending' | 'answered'
+    created_at: string
+  }[]
+  escalations: {
+    id: string
+    agent_id: string
+    issue: string
+    severity: 'low' | 'medium' | 'high' | 'critical'
+    status: 'pending' | 'resolved'
+    created_at: string
+  }[]
 }
 
 function App() {
@@ -37,6 +86,10 @@ function App() {
     openai: { healthy: false, model: 'gpt-4', responseTime: 0 },
     ollama: { healthy: false, model: 'llama3.2:3b', responseTime: 0 }
   })
+  
+  // Deep Agent System State
+  const [deepAgentState, setDeepAgentState] = useState<DeepAgentState | null>(null)
+  const [showDeepAgentPanel, setShowDeepAgentPanel] = useState(false)
 
   // Theme management
   useEffect(() => {
@@ -190,10 +243,26 @@ function App() {
           role: 'assistant',
           timestamp: new Date(),
           agent: data.agent || currentAgent,
-          reasoning: data.reasoning
+          reasoning: data.reasoning,
+          deepAgentState: data.deep_agent_state  // Include deep agent state from response
         }
 
         setMessages(prev => [...prev, assistantMessage])
+        
+        // Update deep agent state if provided
+        if (data.deep_agent_state) {
+          setDeepAgentState(data.deep_agent_state)
+          
+          // Show deep agent panel if there are pending human interactions
+          const hasHumanInteraction = 
+            (data.deep_agent_state.approval_requests?.some((req: any) => req.status === 'pending')) ||
+            (data.deep_agent_state.guidance_requests?.some((req: any) => req.status === 'pending')) ||
+            (data.deep_agent_state.escalations?.some((esc: any) => esc.status === 'pending'))
+          
+          if (hasHumanInteraction) {
+            setShowDeepAgentPanel(true)
+          }
+        }
       } else {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`)
       }
@@ -242,6 +311,116 @@ function App() {
       setMessages(prev => [...prev, demoResponse])
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  // Human-in-the-Loop Response Handlers
+  const handleApprovalResponse = async (requestId: string, decision: 'approve' | 'deny' | 'modify', feedback?: string) => {
+    try {
+      const response = await fetch('/api/human-approval', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          request_id: requestId,
+          decision,
+          feedback: feedback || ''
+        })
+      })
+      
+      if (response.ok) {
+        const data = await response.json()
+        
+        // Update deep agent state with the response
+        if (data.deep_agent_state) {
+          setDeepAgentState(data.deep_agent_state)
+        }
+        
+        // Add a system message about the approval decision
+        const systemMessage: Message = {
+          id: `system-approval-${Date.now()}`,
+          content: `✅ Approval ${decision}${decision === 'approve' ? 'ed' : decision === 'deny' ? 'ied' : 'ied with modifications'} for request ${requestId}${feedback ? `\n\n**Feedback:** ${feedback}` : ''}`,
+          role: 'system',
+          timestamp: new Date()
+        }
+        
+        setMessages(prev => [...prev, systemMessage])
+      }
+    } catch (error) {
+      console.error('Error handling approval response:', error)
+    }
+  }
+
+  const handleGuidanceResponse = async (requestId: string, guidance: string) => {
+    try {
+      const response = await fetch('/api/human-guidance', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          request_id: requestId,
+          guidance
+        })
+      })
+      
+      if (response.ok) {
+        const data = await response.json()
+        
+        // Update deep agent state
+        if (data.deep_agent_state) {
+          setDeepAgentState(data.deep_agent_state)
+        }
+        
+        // Add system message
+        const systemMessage: Message = {
+          id: `system-guidance-${Date.now()}`,
+          content: `💭 Guidance provided for request ${requestId}\n\n**Guidance:** ${guidance}`,
+          role: 'system',
+          timestamp: new Date()
+        }
+        
+        setMessages(prev => [...prev, systemMessage])
+      }
+    } catch (error) {
+      console.error('Error handling guidance response:', error)
+    }
+  }
+
+  const handleEscalationResponse = async (escalationId: string, resolution: string) => {
+    try {
+      const response = await fetch('/api/human-escalation', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          escalation_id: escalationId,
+          resolution
+        })
+      })
+      
+      if (response.ok) {
+        const data = await response.json()
+        
+        // Update deep agent state
+        if (data.deep_agent_state) {
+          setDeepAgentState(data.deep_agent_state)
+        }
+        
+        // Add system message
+        const systemMessage: Message = {
+          id: `system-escalation-${Date.now()}`,
+          content: `🚨 Escalation ${escalationId} resolved\n\n**Resolution:** ${resolution}`,
+          role: 'system',
+          timestamp: new Date()
+        }
+        
+        setMessages(prev => [...prev, systemMessage])
+      }
+    } catch (error) {
+      console.error('Error handling escalation response:', error)
     }
   }
 
@@ -297,14 +476,77 @@ function App() {
       >
         {/* Main Content */}
         {currentView === 'chat' && (
-          <ChatInterface
-            messages={messages}
-            onSendMessage={handleSendMessage}
-            isLoading={isLoading}
-            currentAgent={currentAgent}
-            currentProvider={currentProvider}
-            className="flex-1"
-          />
+          <div className="flex-1 flex relative">
+            {/* Chat Interface */}
+            <div className={cn(
+              "flex-1 transition-all duration-300",
+              showDeepAgentPanel ? "mr-96" : ""
+            )}>
+              <ChatInterface
+                messages={messages}
+                onSendMessage={handleSendMessage}
+                isLoading={isLoading}
+                currentAgent={currentAgent}
+                currentProvider={currentProvider}
+                className="h-full"
+              />
+            </div>
+            
+            {/* Deep Agent Toggle Button */}
+            {deepAgentState && (
+              <Button
+                onClick={() => setShowDeepAgentPanel(!showDeepAgentPanel)}
+                className={cn(
+                  "fixed bottom-20 right-6 h-12 w-12 p-0 rounded-full shadow-lg z-10 transition-all",
+                  "bg-blue-600 hover:bg-blue-700 text-white",
+                  showDeepAgentPanel ? "right-[25rem]" : "right-6"
+                )}
+                title="Toggle Deep Agent Panel"
+              >
+                <div className="relative">
+                  <Brain className="w-6 h-6" />
+                  {/* Notification indicator for pending human interactions */}
+                  {((deepAgentState.approval_requests?.some(req => req.status === 'pending')) ||
+                    (deepAgentState.guidance_requests?.some(req => req.status === 'pending')) ||
+                    (deepAgentState.escalations?.some(esc => esc.status === 'pending'))) && (
+                    <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full border-2 border-white" />
+                  )}
+                </div>
+              </Button>
+            )}
+            
+            {/* Deep Agent Status Panel */}
+            {showDeepAgentPanel && (
+              <motion.div
+                initial={{ x: 384, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                exit={{ x: 384, opacity: 0 }}
+                transition={{ duration: 0.3, ease: "easeInOut" }}
+                className="w-96 border-l bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60"
+              >
+                <div className="p-4 border-b flex items-center justify-between">
+                  <h3 className="font-semibold text-lg">Deep Agent System</h3>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowDeepAgentPanel(false)}
+                    className="h-8 w-8 p-0"
+                  >
+                    ✕
+                  </Button>
+                </div>
+                <div className="h-[calc(100vh-8rem)] overflow-y-auto">
+                  <DeepAgentStatus
+                    agentState={deepAgentState}
+                    onApprovalResponse={handleApprovalResponse}
+                    onGuidanceResponse={handleGuidanceResponse}
+                    onEscalationResponse={handleEscalationResponse}
+                    className="border-0"
+                  />
+                </div>
+              </motion.div>
+            )}
+          </div>
         )}
         
         {currentView === 'knowledge' && (
@@ -354,6 +596,11 @@ function App() {
         theme={isDarkMode ? 'dark' : 'light'}
         richColors
         closeButton
+      />
+
+      {/* Floating Approval Notification */}
+      <FloatingApprovalNotification 
+        onOpenApprovalPanel={() => setShowDeepAgentPanel(true)}
       />
     </div>
   )

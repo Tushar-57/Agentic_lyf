@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from app.langgraph.workflow import AgentGraphWorkflow
 from app.agents.registry import get_agent_registry
 from app.api.knowledge import router as knowledge_router
+from app.api.approval import router as approval_router
 from app.agents.factory import initialize_agents
 from app.agents.base import AgentType
 from app.llm import service as llm_service_module
@@ -23,6 +24,9 @@ from app.llm.service import LLMService, get_llm_service
 from app.llm.config import LLMConfig
 from app.utils.logging import get_api_category_logger
 from app.services.config_storage import get_config_storage
+from app.services.interaction_recorder import get_interaction_recorder
+from app.services.knowledge_base import get_knowledge_base_service
+from app.llm.service import get_llm_service
 
 # Load environment variables from .env file
 load_dotenv()
@@ -34,6 +38,16 @@ logger = get_api_category_logger("main")
 async def lifespan(app: FastAPI):
     # Initialize agents (LLM service will be initialized on-demand)
     await initialize_agents()
+    
+    # Initialize the interaction recorder with required service
+    
+    try:
+        knowledge_service = get_knowledge_base_service()
+        llm_service = get_llm_service()
+        recorder = get_interaction_recorder(knowledge_service, llm_service)
+        logger.info("Successfully initialized interaction recorder")
+    except Exception as e:
+        logger.warning(f"Could not initialize interaction recorder: {e}")
     
     # Initialize the workflow with agents now loaded
     global _workflow, _graph
@@ -65,6 +79,7 @@ app.add_middleware(
 
 # Include API routers
 app.include_router(knowledge_router)
+app.include_router(approval_router, prefix="/api/approval", tags=["approval"])
 
 
 class ChatRequest(BaseModel):

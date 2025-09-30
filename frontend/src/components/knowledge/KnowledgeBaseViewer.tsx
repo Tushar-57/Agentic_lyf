@@ -388,8 +388,8 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
                       
                       {entry.tags.length > 0 && (
                         <div className="flex flex-wrap gap-1">
-                          {entry.tags.map(tag => (
-                            <Badge key={tag} variant="outline" className="text-xs">
+                          {entry.tags.map((tag, tagIndex) => (
+                            <Badge key={`${entry.entry_id}-tag-${tagIndex}`} variant="outline" className="text-xs">
                               <Tag className="w-3 h-3 mr-1" />
                               {tag}
                             </Badge>

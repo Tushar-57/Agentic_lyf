@@ -5,7 +5,6 @@ API endpoints for knowledge base operations.
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
-
 from app.models.knowledge import (
     KnowledgeEntry,
     KnowledgeEntryType,

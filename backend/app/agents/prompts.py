@@ -1,9 +1,18 @@
 """
 Prompt library for AI agents with specialized prompts for each agent type.
+Enhanced with Deep Agent patterns and advanced prompt engineering.
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from .base import AgentType
+
+# Import enhanced prompt capabilities
+try:
+    from .enhanced_prompts import EnhancedPromptLibrary
+    ENHANCED_PROMPTS_AVAILABLE = True
+except ImportError:
+    EnhancedPromptLibrary = None
+    ENHANCED_PROMPTS_AVAILABLE = False
 
 
 class PromptLibrary:
@@ -313,12 +322,12 @@ Original user query: "{user_input}"{context_section}
 Please enhance the response while keeping the core information intact."""
 
     @staticmethod
-    def get_context_aware_system_prompt(agent_type: str, conversation_history: list = None, user_preferences: dict = None) -> str:
+    def get_context_aware_system_prompt(agent_type: str, conversation_history: Optional[List] = None, user_preferences: Optional[Dict] = None) -> str:
         """Get context-aware prompt that considers conversation history and user preferences."""
         
         history_context = ""
         if conversation_history and len(conversation_history) > 0:
-            history_context = f"\n\nRecent conversation context:\n"
+            history_context = "\n\nRecent conversation context:\n"
             for msg in conversation_history[-3:]:  # Last 3 messages
                 role = msg.get('role', 'unknown')
                 content = msg.get('content', '')[:100]  # Truncate for brevity
@@ -326,14 +335,23 @@ Please enhance the response while keeping the core information intact."""
         
         preferences_context = ""
         if user_preferences:
-            preferences_context = f"\n\nUser preferences:\n"
+            preferences_context = "\n\nUser preferences:\n"
             for key, value in user_preferences.items():
                 preferences_context += f"- {key}: {value}\n"
         
-        try:
-            base_prompt = PromptLibrary.get_agent_prompt(AgentType.from_string(agent_type))
-        except:
-            base_prompt = PromptLibrary.get_system_prompt(AgentType.ORCHESTRATOR)
+        # Map string to AgentType
+        agent_type_map = {
+            "orchestrator": AgentType.ORCHESTRATOR,
+            "productivity": AgentType.PRODUCTIVITY,
+            "health": AgentType.HEALTH,
+            "finance": AgentType.FINANCE,
+            "scheduling": AgentType.SCHEDULING,
+            "journal": AgentType.JOURNAL,
+            "general": AgentType.GENERAL
+        }
+        
+        agent_enum = agent_type_map.get(agent_type.lower(), AgentType.ORCHESTRATOR)
+        base_prompt = PromptLibrary.get_system_prompt(agent_enum)
         
         return f"""{base_prompt}
 
@@ -354,6 +372,93 @@ Remember to be helpful, accurate, and maintain your agent's personality while us
     def get_error_response_prompt() -> str:
         """Get error response prompt for graceful error handling."""
         return "I apologize for the inconvenience."
+    
+    @classmethod
+    def get_enhanced_prompt(cls, 
+                           agent_type: AgentType,
+                           user_input: str,
+                           context: Dict[str, Any],
+                           interaction_history: Optional[List[Dict[str, Any]]] = None) -> str:
+        """Get enhanced prompt with deep agent patterns if available."""
+        if ENHANCED_PROMPTS_AVAILABLE:
+            try:
+                # Use already imported EnhancedPromptLibrary
+                return EnhancedPromptLibrary.get_adaptive_prompt(
+                    agent_type=agent_type,
+                    user_input=user_input,
+                    context=context,
+                    interaction_history=interaction_history
+                )
+            except (ImportError, AttributeError):
+                # Fallback to standard prompts
+                pass
+        
+        # Standard prompt with basic context
+        return cls.build_context_aware_prompt(
+            agent_type=agent_type,
+            user_preferences=context.get("user_preferences"),
+            recent_interactions=interaction_history,
+            current_context=context
+        )
+    
+    @classmethod
+    def get_delegation_prompt(cls,
+                             target_agent: AgentType,
+                             user_input: str,
+                             selection_reason: str,
+                             context: Dict[str, Any]) -> str:
+        """Get delegation prompt for agent handoff."""
+        if ENHANCED_PROMPTS_AVAILABLE:
+            try:
+                # Use already imported EnhancedPromptLibrary
+                return EnhancedPromptLibrary.get_delegation_prompt(
+                    target_agent=target_agent,
+                    user_input=user_input,
+                    selection_reason=selection_reason,
+                    context=context,
+                    expected_outputs=["Specialized response with domain expertise"],
+                    success_criteria=["Request fully addressed", "Response is actionable"]
+                )
+            except (ImportError, AttributeError):
+                pass
+        
+        # Fallback delegation prompt
+        return f"""You are being delegated this task by the Orchestrator.
+
+**User Request:** {user_input}
+
+**Why you were selected:** {selection_reason}
+
+**Context:** {context}
+
+Please handle this request using your specialized capabilities and provide a comprehensive response."""
+
+
+# Enhanced convenience functions
+def get_enhanced_agent_prompt(agent_type: AgentType, 
+                            user_input: str,
+                            context: Dict[str, Any],
+                            interaction_history: Optional[List[Dict[str, Any]]] = None) -> str:
+    """Get enhanced agent prompt with deep patterns."""
+    return PromptLibrary.get_enhanced_prompt(
+        agent_type=agent_type,
+        user_input=user_input,
+        context=context,
+        interaction_history=interaction_history
+    )
+
+
+def get_delegation_prompt(target_agent: AgentType,
+                         user_input: str,
+                         selection_reason: str,
+                         context: Dict[str, Any]) -> str:
+    """Get delegation prompt for agent handoff."""
+    return PromptLibrary.get_delegation_prompt(
+        target_agent=target_agent,
+        user_input=user_input,
+        selection_reason=selection_reason,
+        context=context
+    )
 
 
 # Convenience function to get prompts

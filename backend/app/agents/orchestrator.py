@@ -178,7 +178,12 @@ class OrchestratorAgent(BaseAgent):
                 
                 # Delegate to appropriate agent
                 delegation_result = await self._delegate_to_agent(target_agent_type, user_input, context)
-                if delegation_result:
+                if delegation_result and delegation_result.get("response"):
+                    # Merge knowledge sources from specialist agent into orchestrator reasoning
+                    specialist_reasoning = delegation_result.get("reasoning", {})
+                    if specialist_reasoning.get("knowledge_sources"):
+                        reasoning["knowledge_sources"] = specialist_reasoning["knowledge_sources"]
+                    
                     reasoning.update({
                         "finalAgent": target_agent_type.value,
                         "handoff": {
@@ -193,7 +198,7 @@ class OrchestratorAgent(BaseAgent):
                         "result": "Request handled by specialist"
                     })
                     return {
-                        "response": delegation_result,
+                        "response": delegation_result["response"],
                         "reasoning": reasoning
                     }
             
@@ -548,7 +553,7 @@ class OrchestratorAgent(BaseAgent):
             "metrics": metrics
         }
 
-    async def _delegate_to_agent(self, target_agent_type: AgentType, user_input: str, context: Dict[str, Any]) -> str:
+    async def _delegate_to_agent(self, target_agent_type: AgentType, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """Delegate the request to the appropriate specialist agent."""
         try:
             # Get the target agent from registry
@@ -568,15 +573,14 @@ class OrchestratorAgent(BaseAgent):
             # Execute the agent
             result = await target_agent.execute(agent_state)
             
-            # Extract response from result
+            # Return the full result with response and reasoning
             if isinstance(result, dict):
-                response = result.get("response")
-                if response:
+                if result.get("response"):
                     logger.info(f"Successfully delegated to {target_agent_type.value} agent")
-                    return response
+                    return result
             elif isinstance(result, str):
                 logger.info(f"Successfully delegated to {target_agent_type.value} agent")
-                return result
+                return {"response": result, "reasoning": None}
             
             logger.warning(f"Invalid response from {target_agent_type.value} agent: {result}")
             return None
