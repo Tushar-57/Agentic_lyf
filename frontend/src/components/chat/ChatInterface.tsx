@@ -239,7 +239,7 @@ const TypingIndicator = () => (
   </div>
 )
 
-const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLast: boolean }>(({ message, isLast: _ }, ref) => {
+const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLast: boolean; coachAvatar?: string }>(({ message, isLast: _, coachAvatar = '' }, ref) => {
   const isUser = message.role === 'user'
   const AgentIcon = message.agent ? agentIcons[message.agent as keyof typeof agentIcons] || Bot : Bot
 
@@ -314,13 +314,17 @@ const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLas
     >
       {/* Avatar */}
       <div className={cn(
-        "flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center",
+        "flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center overflow-hidden",
         isUser 
           ? "bg-primary text-primary-foreground" 
-          : "bg-gradient-to-br from-blue-500 to-purple-600 text-white"
+          : coachAvatar 
+            ? "bg-transparent" 
+            : "bg-gradient-to-br from-blue-500 to-purple-600 text-white"
       )}>
         {isUser ? (
           <User className="w-4 h-4" />
+        ) : coachAvatar ? (
+          <img src={coachAvatar} alt="Coach" className="w-full h-full object-cover" />
         ) : (
           <AgentIcon className="w-4 h-4" />
         )}
@@ -459,6 +463,31 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [isComposing, setIsComposing] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  
+  // User profile state
+  const [userProfile, setUserProfile] = useState<any>(null)
+  const [userAvatar, setUserAvatar] = useState<string>('')
+  const [communicationStyle, setCommunicationStyle] = useState<string>('Direct')
+
+  // Load user profile on mount
+  useEffect(() => {
+    const loadProfile = async () => {
+      try {
+        const response = await fetch('http://localhost:8000/api/knowledge/onboarding/profile');
+        if (response.ok) {
+          const data = await response.json();
+          setUserProfile(data);
+          // Set avatar from mentor selection
+          setUserAvatar(data.coachAvatar || data.mentor?.avatar || '');
+          // Set communication style
+          setCommunicationStyle(data.mentor?.style || 'Direct');
+        }
+      } catch (error) {
+        console.log('No user profile found, using defaults');
+      }
+    };
+    loadProfile();
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -487,8 +516,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b bg-card/50 backdrop-blur-sm">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
-            <Brain className="w-5 h-5 text-white" />
+          <div className={cn(
+            "w-10 h-10 rounded-full flex items-center justify-center overflow-hidden",
+            userAvatar ? "bg-transparent" : "bg-gradient-to-br from-blue-500 to-purple-600"
+          )}>
+            {userAvatar ? (
+              <img src={userAvatar} alt="Coach" className="w-full h-full object-cover" />
+            ) : (
+              <Brain className="w-5 h-5 text-white" />
+            )}
           </div>
           <div>
             <h2 className="font-semibold">AI Agent Ecosystem</h2>
@@ -498,6 +534,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           </div>
         </div>
         <div className="flex items-center gap-3">
+          {/* Communication Style Indicator */}
+          {communicationStyle && communicationStyle !== 'Direct' && (
+            <div className="flex items-center gap-2 px-2 py-1 rounded-full bg-purple-100 dark:bg-purple-900/30">
+              <span className="text-xs text-purple-700 dark:text-purple-300 font-medium">
+                {communicationStyle} Style
+              </span>
+            </div>
+          )}
           {/* Provider Indicator */}
           <div className="flex items-center gap-2 px-2 py-1 rounded-full bg-muted/50">
             <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
@@ -535,6 +579,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 key={message.id}
                 message={message}
                 isLast={index === messages.length - 1}
+                coachAvatar={userAvatar}
               />
             ))
           )}

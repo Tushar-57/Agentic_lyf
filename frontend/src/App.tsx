@@ -6,6 +6,7 @@ import { ChatInterface } from '@/components/chat/ChatInterface'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { SettingsPanel } from '@/components/settings/SettingsPanel'
 import { KnowledgeManagement } from '@/components/knowledge/KnowledgeManagement'
+import ChatOnboarding from '@/components/onboarding/ChatOnboarding'
 import { DeepAgentStatus } from '@/components/chat/DeepAgentStatus'
 import { FloatingApprovalNotification } from '@/components/chat/FloatingApprovalNotification'
 import { Button } from '@/components/ui/button'
@@ -551,6 +552,15 @@ function App() {
         
         {currentView === 'knowledge' && (
           <KnowledgeManagement className="flex-1" />
+        )}
+        
+        {currentView === 'onboarding' && (
+          <ChatOnboarding 
+            onComplete={(data) => {
+              console.log('Onboarding completed:', data);
+              setCurrentView('chat');
+            }}
+          />
         )}
         
         {currentView === 'analytics' && (

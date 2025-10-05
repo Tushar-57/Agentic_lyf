@@ -16,7 +16,8 @@ import {
   BarChart3,
   MessageSquare,
   User,
-  Database
+  Database,
+  Sparkles
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -91,6 +92,12 @@ const navigationItems = [
     name: 'Chat',
     icon: MessageSquare,
     path: '/chat'
+  },
+  {
+    id: 'onboarding',
+    name: 'Setup Profile',
+    icon: Sparkles,
+    path: '/onboarding'
   },
   {
     id: 'knowledge',
