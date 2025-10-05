@@ -176,8 +176,8 @@ class OrchestratorAgent(BaseAgent):
                     "result": f"High confidence ({confidence:.2f}) in agent selection"
                 })
                 
-                # Delegate to appropriate agent
-                delegation_result = await self._delegate_to_agent(target_agent_type, user_input, context)
+                # Delegate to appropriate agent WITH user preferences
+                delegation_result = await self._delegate_to_agent(target_agent_type, user_input, context, user_preferences_dict)
                 if delegation_result and delegation_result.get("response"):
                     # Merge knowledge sources from specialist agent into orchestrator reasoning
                     specialist_reasoning = delegation_result.get("reasoning", {})
@@ -553,8 +553,8 @@ class OrchestratorAgent(BaseAgent):
             "metrics": metrics
         }
 
-    async def _delegate_to_agent(self, target_agent_type: AgentType, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Delegate the request to the appropriate specialist agent."""
+    async def _delegate_to_agent(self, target_agent_type: AgentType, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Delegate the request to the appropriate specialist agent with full user context."""
         try:
             # Get the target agent from registry
             target_agent = self.registry.get_agent_by_type(target_agent_type)
@@ -562,13 +562,16 @@ class OrchestratorAgent(BaseAgent):
                 logger.warning(f"Target agent {target_agent_type.value} not found in registry")
                 return None
             
-            # Create agent state for delegation
+            # Create agent state for delegation with user preferences
             agent_state = {
                 "user_input": user_input,
                 "context": context,
+                "user_preferences": user_preferences or {},
                 "conversation_id": context.get("conversation_id"),
                 "agent": target_agent.agent_id
             }
+            
+            logger.info(f"Delegating to {target_agent_type.value} with preferences: {bool(user_preferences)}")
             
             # Execute the agent
             result = await target_agent.execute(agent_state)

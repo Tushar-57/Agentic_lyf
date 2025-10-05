@@ -197,14 +197,56 @@ Maintain a friendly, professional demeanor while being adaptable to various type
         
         context_additions = []
         
-        # Add user preferences context
+        # Add user preferences context with onboarding data
         if user_preferences:
-            context_additions.append("\n**User Preferences Context:**")
+            general = user_preferences.get("general", {})
+            
+            # Add communication style from onboarding
+            mentor = general.get("mentor", {})
+            if mentor:
+                communication_style = mentor.get("style", "Direct")
+                mentor_name = mentor.get("name", "AI Assistant")
+                context_additions.append(f"\n**Communication Style:** {communication_style}")
+                context_additions.append(f"Your persona is '{mentor_name}'. Embody this style consistently.")
+                
+                # Add style-specific instructions
+                style_instructions = {
+                    "Sarcastic Poet": "Use witty sarcasm, poetic language, and clever wordplay while being helpful. Balance entertainment with practical advice.",
+                    "Direct": "Be clear, concise, and to the point. No fluff.",
+                    "Friendly": "Be warm, encouraging, and conversational. Use a supportive tone.",
+                    "Encouraging": "Be positive, motivating, and uplifting. Focus on progress and achievements.",
+                    "Nurturing": "Be gentle, caring, and patient. Provide emotional support.",
+                    "Patient": "Be calm, understanding, and never rush. Take time to explain thoroughly.",
+                    "Challenging": "Push the user to grow. Ask tough questions and set high standards."
+                }
+                if communication_style in style_instructions:
+                    context_additions.append(f"**Style Guide:** {style_instructions[communication_style]}")
+            
+            # Add user role and priorities from onboarding
+            if general.get("role"):
+                context_additions.append(f"\n**User Role:** {general['role'].capitalize()}")
+            if general.get("priorities"):
+                context_additions.append(f"**User Priorities:** {', '.join(general['priorities'])}")
+            
+            # Add goals from different categories
+            productivity_goals = user_preferences.get("productivity", {}).get("goals", [])
+            health_goals = user_preferences.get("health", {}).get("goals", [])
+            
+            if productivity_goals or health_goals:
+                context_additions.append("\n**User Goals:**")
+                for goal in productivity_goals:
+                    context_additions.append(f"- {goal['title']} (Priority: {goal['priority']}, Category: Career/Productivity)")
+                for goal in health_goals:
+                    context_additions.append(f"- {goal['title']} (Priority: {goal['priority']}, Category: Health)")
+            
+            # Add other preferences
+            context_additions.append("\n**Other Preferences:**")
             for key, value in user_preferences.items():
-                if isinstance(value, dict):
-                    context_additions.append(f"- {key}: {', '.join(f'{k}: {v}' for k, v in value.items())}")
-                else:
-                    context_additions.append(f"- {key}: {value}")
+                if key not in ["general"] and isinstance(value, dict):
+                    # Filter out goals since we already handled them
+                    filtered_value = {k: v for k, v in value.items() if k != "goals"}
+                    if filtered_value:
+                        context_additions.append(f"- {key}: {', '.join(f'{k}: {v}' for k, v in filtered_value.items())}")
         
         # Add recent interactions context
         if recent_interactions:
@@ -219,7 +261,7 @@ Maintain a friendly, professional demeanor while being adaptable to various type
                 context_additions.append(f"- {key}: {value}")
         
         if context_additions:
-            context_additions.append("\nUse this context to provide more personalized and relevant assistance.")
+            context_additions.append("\n**IMPORTANT:** Use ALL the above context to provide personalized, relevant assistance. Reference the user's goals, priorities, and role when appropriate. Maintain the specified communication style consistently.")
             return base_prompt + "\n" + "\n".join(context_additions)
         
         return base_prompt

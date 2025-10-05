@@ -307,20 +307,85 @@ class KnowledgeBaseService:
         """
         try:
             if self._user_preferences is None:
-                    import os, json
-                    prefs_path = os.path.join(os.path.dirname(__file__), "user_preferences.json")
-                    try:
-                        if os.path.exists(prefs_path):
-                            with open(prefs_path) as f:
-                                data = f.read().strip()
-                                if not data:
-                                    raise ValueError("Empty preferences file")
-                                prefs_dict = json.loads(data)
-                                return UserPreferences(**prefs_dict)
-                    except Exception as e:
-                        logger.warning(f"Failed to parse stored preferences: {e}. Using defaults.")
-                    # Always fallback to defaults
-                    return UserPreferences()
+                # Try to load from knowledge base first (onboarding data)
+                try:
+                    all_entries = await self.get_all_entries()
+                    user_entries = [e for e in all_entries if e.entry_type == KnowledgeEntryType.USER_PREFERENCE]
+                    
+                    if user_entries:
+                        # Build preferences from knowledge base entries
+                        prefs_dict = {
+                            "productivity": {},
+                            "health": {},
+                            "finance": {},
+                            "journal": {},
+                            "llm_provider": {},
+                            "general": {}
+                        }
+                        
+                        for entry in user_entries:
+                            if entry.entry_sub_type == KnowledgeEntrySubType.USER_PROFILE:
+                                metadata = entry.metadata or {}
+                                # Add onboarding data to general preferences
+                                prefs_dict["general"]["role"] = metadata.get("role", "professional")
+                                prefs_dict["general"]["priorities"] = metadata.get("preferences", [])
+                                prefs_dict["general"]["mentor"] = metadata.get("mentor", {})
+                                prefs_dict["general"]["onboarding_completed"] = metadata.get("onboarding_completed", True)
+                                
+                            elif entry.entry_sub_type == KnowledgeEntrySubType.GOAL:
+                                metadata = entry.metadata or {}
+                                # Add goals to relevant category
+                                category = metadata.get("category", "general").lower()
+                                if category == "career":
+                                    if "goals" not in prefs_dict["productivity"]:
+                                        prefs_dict["productivity"]["goals"] = []
+                                    prefs_dict["productivity"]["goals"].append({
+                                        "title": entry.title,
+                                        "priority": metadata.get("priority", "Medium"),
+                                        "milestones": metadata.get("milestones", [])
+                                    })
+                                elif category == "health":
+                                    if "goals" not in prefs_dict["health"]:
+                                        prefs_dict["health"]["goals"] = []
+                                    prefs_dict["health"]["goals"].append({
+                                        "title": entry.title,
+                                        "priority": metadata.get("priority", "Medium"),
+                                        "milestones": metadata.get("milestones", [])
+                                    })
+                                    
+                            elif entry.entry_sub_type == KnowledgeEntrySubType.SCHEDULE:
+                                metadata = entry.metadata or {}
+                                availability = metadata.get("availability", {})
+                                prefs_dict["general"]["work_hours"] = f"{availability.get('workHours', {}).get('start', '09:00')}-{availability.get('workHours', {}).get('end', '17:00')}"
+                                prefs_dict["general"]["timezone"] = availability.get("timezone", "UTC")
+                                prefs_dict["journal"]["check_in_time"] = availability.get("checkIn", {}).get("preferredTime", "09:00")
+                        
+                        logger.info(f"Loaded user preferences from knowledge base: {prefs_dict}")
+                        self._user_preferences = UserPreferences(**prefs_dict)
+                        return self._user_preferences
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to load preferences from knowledge base: {e}, trying JSON file")
+                
+                # Fallback to JSON file
+                import os, json
+                prefs_path = os.path.join(os.path.dirname(__file__), "user_preferences.json")
+                try:
+                    if os.path.exists(prefs_path):
+                        with open(prefs_path) as f:
+                            data = f.read().strip()
+                            if not data:
+                                raise ValueError("Empty preferences file")
+                            prefs_dict = json.loads(data)
+                            self._user_preferences = UserPreferences(**prefs_dict)
+                            return self._user_preferences
+                except Exception as e:
+                    logger.warning(f"Failed to parse stored preferences: {e}. Using defaults.")
+                
+                # Always fallback to defaults
+                self._user_preferences = UserPreferences()
+                return self._user_preferences
+                
             return self._user_preferences
         except Exception as e:
             logger.error(f"Failed to get user preferences: {e}")

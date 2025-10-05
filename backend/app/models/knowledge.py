@@ -13,6 +13,7 @@ import os
 class KnowledgeEntryType(str, Enum):
     """Types of knowledge entries."""
     PREFERENCE = "preference"
+    USER_PREFERENCE = "user_preference"
     INTERACTION = "interaction"
     PATTERN = "pattern"
     INSIGHT = "insight"
@@ -24,6 +25,9 @@ class KnowledgeEntrySubType(str, Enum):
     PERSONAL_PREFERENCE = "personal preference"
     WORK_PREFERENCE = "work preference"
     OTHER_PREFERENCE = "other preference"
+    USER_PROFILE = "user profile"
+    GOAL = "goal"
+    SCHEDULE = "schedule"
     PERSONAL_INTERACTION = "personal interaction"
     DEEP_PERSONAL_INTERACTION = "deep personal interaction"
     WORK_INTERACTION = "work interaction"

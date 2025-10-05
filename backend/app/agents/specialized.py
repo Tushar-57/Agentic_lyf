@@ -50,10 +50,17 @@ class HealthAgent(BaseAgent):
         self.knowledge_base = get_knowledge_base_service()
 
     async def execute(self, state: AgentState) -> Dict[str, Any]:
-        """Execute health-related requests with contextual awareness."""
+        """Execute health-related requests with contextual awareness and user preferences."""
         try:
-            user_input = state.get("user_input", "")
-            logger.info(f"HealthAgent executing request: {user_input}")
+            # Extract from state
+            if isinstance(state, dict):
+                user_input = state.get("user_input", "")
+                user_preferences = state.get("user_preferences", {})
+            else:
+                user_input = str(state) if state else ""
+                user_preferences = {}
+                
+            logger.info(f"HealthAgent executing request: {user_input} with preferences: {bool(user_preferences)}")
             
             # Get relevant context from knowledge base
             context = await self.knowledge_base.get_contextual_knowledge_for_agent(
@@ -68,13 +75,13 @@ class HealthAgent(BaseAgent):
             # Check if this is a meal planning request
             if self._is_meal_planning_request(user_input):
                 logger.info("Processing as meal planning request")
-                response = await self._handle_meal_planning(user_input, context)
+                response = await self._handle_meal_planning(user_input, context, user_preferences)
             elif self._is_habit_tracking_request(user_input):
                 logger.info("Processing as habit tracking request")
-                response = await self._handle_habit_tracking(user_input, context)
+                response = await self._handle_habit_tracking(user_input, context, user_preferences)
             else:
                 logger.info("Processing as general health query")
-                response = await self._handle_general_health_query(user_input, context)
+                response = await self._handle_general_health_query(user_input, context, user_preferences)
             
             # Intelligently record interaction if valuable
             recorder = get_interaction_recorder()
@@ -117,7 +124,7 @@ class HealthAgent(BaseAgent):
         habit_keywords = ["habit", "routine", "track", "exercise", "workout", "sleep", "water", "steps"]
         return any(keyword in user_input.lower() for keyword in habit_keywords)
 
-    async def _handle_meal_planning(self, user_input: str, context: Dict[str, Any]) -> str:
+    async def _handle_meal_planning(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
         """Handle meal planning requests with personalized context."""
         try:
             logger.info(f"Handling meal planning with context: {context}")
@@ -188,13 +195,13 @@ class HealthAgent(BaseAgent):
         
         return "\n".join(context_parts)
 
-    async def _handle_habit_tracking(self, user_input: str, context: Dict[str, Any]) -> str:
-        """Handle habit tracking requests."""
+    async def _handle_habit_tracking(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
+        """Handle habit tracking requests with personalization."""
         # Implementation for habit tracking
         return "I'll help you track your health habits. Based on your request, I can assist with monitoring exercise, sleep, nutrition, or mood patterns."
 
-    async def _handle_general_health_query(self, user_input: str, context: Dict[str, Any]) -> str:
-        """Handle general health queries with context."""
+    async def _handle_general_health_query(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
+        """Handle general health queries with context and personalization."""
         try:
             context_summary = context.get("context_summary", "")
             
@@ -260,10 +267,21 @@ class ProductivityAgent(BaseAgent):
         
         self.knowledge_base = get_knowledge_base_service()
     
-    async def execute(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute productivity-related requests with contextual knowledge."""
+    async def execute(self, state: AgentState) -> Dict[str, Any]:
+        """Execute productivity-related requests with full user context and preferences."""
         try:
-            logger.info(f"ProductivityAgent processing: {user_input}")
+            # Extract from state (supports both dict and direct params for backward compatibility)
+            if isinstance(state, dict):
+                user_input = state.get("user_input", "")
+                context = state.get("context", {})
+                user_preferences = state.get("user_preferences", {})
+            else:
+                # Fallback for old signature
+                user_input = state if isinstance(state, str) else ""
+                context = {}
+                user_preferences = {}
+            
+            logger.info(f"ProductivityAgent processing: {user_input} with preferences: {bool(user_preferences)}")
             
             # Get contextual knowledge from knowledge base
             contextual_knowledge = await self.knowledge_base.get_contextual_knowledge_for_agent(
@@ -272,15 +290,15 @@ class ProductivityAgent(BaseAgent):
                 max_results=10
             )
             
-            # Determine productivity task type
+            # Determine productivity task type and pass user_preferences
             if any(keyword in user_input.lower() for keyword in ["task", "todo", "organize", "project"]):
-                response = await self._handle_task_management(user_input, contextual_knowledge)
-            elif any(keyword in user_input.lower() for keyword in ["goal", "objective", "target", "achieve"]):
-                response = await self._handle_goal_setting(user_input, contextual_knowledge)
+                response = await self._handle_task_management(user_input, contextual_knowledge, user_preferences)
+            elif any(keyword in user_input.lower() for keyword in ["goal", "objective", "target", "achieve", "problem", "leetcode"]):
+                response = await self._handle_goal_setting(user_input, contextual_knowledge, user_preferences)
             elif any(keyword in user_input.lower() for keyword in ["time", "schedule", "productivity", "focus"]):
-                response = await self._handle_time_management(user_input, contextual_knowledge)
+                response = await self._handle_time_management(user_input, contextual_knowledge, user_preferences)
             else:
-                response = await self._handle_general_productivity(user_input, contextual_knowledge)
+                response = await self._handle_general_productivity(user_input, contextual_knowledge, user_preferences)
             
             # Intelligently record interaction if valuable
             recorder = get_interaction_recorder()
@@ -296,34 +314,44 @@ class ProductivityAgent(BaseAgent):
             logger.error(f"ProductivityAgent execution failed: {e}")
             return {"response": "I'm having trouble with productivity assistance right now. Please try again later.", "status": "error"}
     
-    async def _handle_task_management(self, user_input: str, context: Dict[str, Any]) -> str:
-        """Handle task management requests."""
+    async def _handle_task_management(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
+        """Handle task management requests with personalized context."""
         try:
+            from .prompts import PromptLibrary
+            
             task_context = self._build_productivity_context(context, "tasks")
+            
+            # Build context-aware system prompt
+            system_prompt = PromptLibrary.build_context_aware_prompt(
+                agent_type=AgentType.PRODUCTIVITY,
+                user_preferences=user_preferences or {},
+                current_context={"task_type": "task_management"}
+            )
             
             llm_service = await get_llm_service()
             if not llm_service:
                 return "📋 I'd be happy to help you manage your tasks! What tasks would you like to organize?"
             
-            prompt = f"""
-            As a productivity coach, help the user with task management and organization.
-            
-            User Request: {user_input}
-            Task Context: {task_context}
-            
-            Provide:
-            1. Task organization strategies (using Eisenhower Matrix or similar)
-            2. Priority recommendations based on their work style
-            3. Deadline and milestone suggestions
-            4. Task breakdown for complex projects
-            5. Tracking and review methods
-            
-            Use emojis and format nicely with actionable task management advice.
-            """
+            user_prompt = f"""
+User Request: {user_input}
+Task Context: {task_context}
+
+Provide:
+1. Task organization strategies (using Eisenhower Matrix or similar)
+2. Priority recommendations based on their work style
+3. Deadline and milestone suggestions
+4. Task breakdown for complex projects
+5. Tracking and review methods
+
+Use emojis and format nicely with actionable task management advice.
+"""
             
             request = CompletionRequest(
-                messages=[ChatMessage(role="user", content=prompt)],
-                temperature=0.3,
+                messages=[
+                    ChatMessage(role="system", content=system_prompt),
+                    ChatMessage(role="user", content=user_prompt)
+                ],
+                temperature=0.7,
                 max_tokens=1000
             )
             
@@ -334,34 +362,106 @@ class ProductivityAgent(BaseAgent):
             logger.error(f"Task management failed: {e}")
             return "📋 I'd be happy to help you manage your tasks! What specific tasks would you like to organize?"
     
-    async def _handle_goal_setting(self, user_input: str, context: Dict[str, Any]) -> str:
-        """Handle goal setting and tracking requests."""
+    async def _handle_goal_setting(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
+        """Handle goal setting and tracking requests with personalized context."""
         try:
+            from .prompts import PromptLibrary
+            from .leetcode_tools import LeetcodeTools
+            
             goal_context = self._build_productivity_context(context, "goals")
             
             llm_service = await get_llm_service()
             if not llm_service:
                 return "🎯 I'd love to help you set and achieve your goals! What goals are you working on?"
             
-            prompt = f"""
-            As a goal-setting expert, help the user create and track meaningful goals.
+            # Check if this is a leetcode-specific request (problems, today's problems, etc.)
+            is_leetcode_request = any(keyword in user_input.lower() for keyword in ["problem", "leetcode", "coding", "algorithm"])
             
-            User Request: {user_input}
-            Goal Context: {goal_context}
+            # If user has goals and is asking for problems/specific help
+            has_goals = False
+            leetcode_data = None
+            if user_preferences:
+                productivity_prefs = user_preferences.get("productivity", {})
+                existing_goals = productivity_prefs.get("goals", [])
+                has_goals = len(existing_goals) > 0
+                
+                # If asking for problems, get specific leetcode problems
+                if is_leetcode_request and has_goals:
+                    leetcode_data = LeetcodeTools.get_todays_problems(existing_goals, count=2)
+                    
+                    # If we successfully got problems, format and return with personality
+                    if leetcode_data and not leetcode_data.get("error"):
+                        problems_formatted = LeetcodeTools.format_problems_for_response(leetcode_data)
+                        
+                        # Build context-aware system prompt
+                        system_prompt = PromptLibrary.build_context_aware_prompt(
+                            agent_type=AgentType.PRODUCTIVITY,
+                            user_preferences=user_preferences,
+                            current_context={"task_type": "leetcode_problems"}
+                        )
+                        
+                        user_prompt = f"""
+The user asked for leetcode problems. Here are today's problems based on their goal:
+
+{problems_formatted}
+
+Present these problems with your persona and communication style. Be specific, engaging, and reference their goal details.
+Keep it concise but add personality. Encourage them to tackle these problems.
+"""
+                        
+                        request = CompletionRequest(
+                            messages=[
+                                ChatMessage(role="system", content=system_prompt),
+                                ChatMessage(role="user", content=user_prompt)
+                            ],
+                            temperature=0.8,  # Higher for more creative/sarcastic responses
+                            max_tokens=800
+                        )
+                        
+                        response = await llm_service.chat_completion(request)
+                        return response.content
             
-            Provide:
-            1. SMART goal framework application
-            2. Goal breakdown into actionable steps
-            3. Progress tracking recommendations
-            4. Motivation and accountability strategies
-            5. Timeline and milestone suggestions
+            # Standard goal-setting response (non-leetcode or no problems found)
+            # Build context-aware system prompt with user preferences
+            system_prompt = PromptLibrary.build_context_aware_prompt(
+                agent_type=AgentType.PRODUCTIVITY,
+                user_preferences=user_preferences or {},
+                current_context={"task_type": "goal_setting"}
+            )
             
-            Use emojis and format nicely with structured goal-setting guidance.
-            """
+            # Build user prompt based on whether they have goals
+            if has_goals:
+                user_prompt = f"""
+User Request: {user_input}
+
+IMPORTANT: The user has ALREADY set goals during onboarding. DO NOT explain basic goal-setting concepts or SMART framework.
+Instead, help them with their SPECIFIC existing goals. Reference their goals by name and provide actionable next steps.
+
+Context from knowledge base: {goal_context}
+
+Provide specific, actionable guidance for their existing goals. Be concise and reference their actual goal details.
+"""
+            else:
+                user_prompt = f"""
+User Request: {user_input}
+Goal Context: {goal_context}
+
+Provide:
+1. SMART goal framework application
+2. Goal breakdown into actionable steps
+3. Progress tracking recommendations
+4. Motivation and accountability strategies
+5. Timeline and milestone suggestions
+
+Use emojis and format nicely with structured goal-setting guidance.
+"""
             
             request = CompletionRequest(
-                messages=[ChatMessage(role="user", content=prompt)],
-                temperature=0.3,
+                messages=[
+                    ChatMessage(role="system", content=system_prompt),
+                    ChatMessage(role="user", content=user_prompt)
+                ],
+                temperature=0.7,
                 max_tokens=1000
             )
             
@@ -372,34 +472,44 @@ class ProductivityAgent(BaseAgent):
             logger.error(f"Goal setting failed: {e}")
             return "🎯 I'd love to help you set and achieve your goals! What specific goals would you like to work on?"
     
-    async def _handle_time_management(self, user_input: str, context: Dict[str, Any]) -> str:
-        """Handle time management and productivity optimization."""
+    async def _handle_time_management(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
+        """Handle time management and productivity optimization with personalized context."""
         try:
+            from .prompts import PromptLibrary
+            
             time_context = self._build_productivity_context(context, "time")
+            
+            # Build context-aware system prompt
+            system_prompt = PromptLibrary.build_context_aware_prompt(
+                agent_type=AgentType.PRODUCTIVITY,
+                user_preferences=user_preferences or {},
+                current_context={"task_type": "time_management"}
+            )
             
             llm_service = await get_llm_service()
             if not llm_service:
                 return "⏰ I'd be happy to help optimize your time! What time management challenges are you facing?"
             
-            prompt = f"""
-            As a time management expert, help the user optimize their productivity and time usage.
-            
-            User Request: {user_input}
-            Time Management Context: {time_context}
-            
-            Provide:
-            1. Time blocking strategies for their schedule
-            2. Productivity techniques (Pomodoro, deep work, etc.)
-            3. Focus and concentration tips
-            4. Energy management recommendations
-            5. Work-life balance suggestions
-            
-            Use emojis and format nicely with practical time management advice.
-            """
+            user_prompt = f"""
+User Request: {user_input}
+Time Management Context: {time_context}
+
+Provide:
+1. Time blocking strategies for their schedule
+2. Productivity techniques (Pomodoro, deep work, etc.)
+3. Focus and concentration tips
+4. Energy management recommendations
+5. Work-life balance suggestions
+
+Use emojis and format nicely with practical time management advice.
+"""
             
             request = CompletionRequest(
-                messages=[ChatMessage(role="user", content=prompt)],
-                temperature=0.3,
+                messages=[
+                    ChatMessage(role="system", content=system_prompt),
+                    ChatMessage(role="user", content=user_prompt)
+                ],
+                temperature=0.7,
                 max_tokens=1000
             )
             
@@ -410,28 +520,38 @@ class ProductivityAgent(BaseAgent):
             logger.error(f"Time management failed: {e}")
             return "⏰ I'd be happy to help optimize your time! What specific time management areas would you like to improve?"
     
-    async def _handle_general_productivity(self, user_input: str, context: Dict[str, Any]) -> str:
-        """Handle general productivity queries."""
+    async def _handle_general_productivity(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
+        """Handle general productivity queries with personalized context."""
         try:
+            from .prompts import PromptLibrary
+            
             productivity_context = self._build_productivity_context(context, "general")
+            
+            # Build context-aware system prompt
+            system_prompt = PromptLibrary.build_context_aware_prompt(
+                agent_type=AgentType.PRODUCTIVITY,
+                user_preferences=user_preferences or {},
+                current_context={"task_type": "general_productivity"}
+            )
             
             llm_service = await get_llm_service()
             if not llm_service:
                 return "🚀 I'm here to boost your productivity! What can I help you with?"
             
-            prompt = f"""
-            As a productivity expert, provide helpful advice for the user's productivity question.
-            
-            User Request: {user_input}
-            Productivity Context: {productivity_context}
-            
-            Provide relevant productivity advice, tips, and recommendations based on their question.
-            Use emojis and format nicely with clear, actionable information.
-            """
+            user_prompt = f"""
+User Request: {user_input}
+Productivity Context: {productivity_context}
+
+Provide relevant productivity advice, tips, and recommendations based on their question.
+Use emojis and format nicely with clear, actionable information.
+"""
             
             request = CompletionRequest(
-                messages=[ChatMessage(role="user", content=prompt)],
-                temperature=0.3,
+                messages=[
+                    ChatMessage(role="system", content=system_prompt),
+                    ChatMessage(role="user", content=user_prompt)
+                ],
+                temperature=0.7,
                 max_tokens=800
             )
             
@@ -497,10 +617,18 @@ class FinanceAgent(BaseAgent):
         
         self.knowledge_base = get_knowledge_base_service()
     
-    async def execute(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute finance-related requests with contextual knowledge."""
+    async def execute(self, state: AgentState) -> Dict[str, Any]:
+        """Execute finance-related requests with contextual knowledge and user preferences."""
         try:
-            logger.info(f"FinanceAgent processing: {user_input}")
+            # Extract from state
+            if isinstance(state, dict):
+                user_input = state.get("user_input", "")
+                user_preferences = state.get("user_preferences", {})
+            else:
+                user_input = str(state) if state else ""
+                user_preferences = {}
+            
+            logger.info(f"FinanceAgent processing: {user_input} with preferences: {bool(user_preferences)}")
             
             # Get contextual knowledge from knowledge base
             contextual_knowledge = await self.knowledge_base.get_contextual_knowledge_for_agent(
@@ -511,13 +639,13 @@ class FinanceAgent(BaseAgent):
             
             # Determine finance task type
             if any(keyword in user_input.lower() for keyword in ["budget", "budgeting", "monthly budget"]):
-                response = await self._handle_budget_planning(user_input, contextual_knowledge)
+                response = await self._handle_budget_planning(user_input, contextual_knowledge, user_preferences)
             elif any(keyword in user_input.lower() for keyword in ["expense", "spending", "track expenses"]):
-                response = await self._handle_expense_tracking(user_input, contextual_knowledge)
+                response = await self._handle_expense_tracking(user_input, contextual_knowledge, user_preferences)
             elif any(keyword in user_input.lower() for keyword in ["save", "savings", "financial goal"]):
-                response = await self._handle_financial_goals(user_input, contextual_knowledge)
+                response = await self._handle_financial_goals(user_input, contextual_knowledge, user_preferences)
             else:
-                response = await self._handle_general_finance(user_input, contextual_knowledge)
+                response = await self._handle_general_finance(user_input, contextual_knowledge, user_preferences)
             
             # Intelligently record interaction if valuable
             recorder = get_interaction_recorder()
@@ -533,34 +661,86 @@ class FinanceAgent(BaseAgent):
             logger.error(f"FinanceAgent execution failed: {e}")
             return {"response": "I'm having trouble with financial analysis right now. Please try again later.", "status": "error"}
     
-    async def _handle_budget_planning(self, user_input: str, context: Dict[str, Any]) -> str:
-        """Handle budget planning requests."""
+    async def _handle_budget_planning(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
+        """Handle budget planning requests with personalization."""
         try:
+            from .prompts import PromptLibrary
+            
             budget_context = self._build_finance_context(context, "budget")
             
             llm_service = await get_llm_service()
             if not llm_service:
                 return "💰 I'd be happy to help with budget planning! Could you share your monthly income and main expense categories?"
             
-            prompt = f"""
-            As a financial advisor, create a personalized budget plan based on the user's request and financial context.
+            # Check if user has existing budget data in context
+            # More strict check: must have actual numeric budget data, not just the word "budget"
+            has_budget_data = (
+                "budget" in budget_context.lower() and 
+                "no specific" not in budget_context.lower() and
+                any(char.isdigit() for char in budget_context)  # Must contain numbers
+            )
             
-            User Request: {user_input}
-            Financial Context: {budget_context}
+            logger.info(f"[FinanceAgent] Budget check - has_budget_data: {has_budget_data}, context: {budget_context[:200]}")
             
-            Provide a detailed budget plan with:
-            1. Budget breakdown by categories (housing, food, transportation, etc.)
-            2. Savings recommendations (50/30/20 rule or adjusted for their situation)
-            3. Specific actionable tips for their financial situation
-            4. Monthly tracking suggestions
+            # If NO budget data exists, return a direct response WITHOUT calling LLM
+            # This prevents hallucination entirely
+            if not has_budget_data:
+                mentor_style = user_preferences.get("general", {}).get("mentor", {}).get("style", "Professional")
+                
+                if "sarcastic" in mentor_style.lower():
+                    return """🤷 **Well, here's the thing...**
+
+I'd *love* to tell you about your monthly budget, but there's a tiny problem: **you don't have one set up yet!** 
+
+I know, I know - shocking stuff. But hey, no judgment! We all start somewhere.
+
+Instead of me making up fancy numbers (tempting as it is), how about we create your *actual* budget together? 
+
+**Here's what I need from you:**
+1. 💵 Your monthly income (the real number, not what you wish it was)
+2. 🏠 Major expense categories you want to track
+3. 🎯 Financial goals (save for iPhone 17? Emergency fund? World domination?)
+
+Once you give me the real data, I'll help you build a budget that actually makes sense for YOUR life. Deal?"""
+                else:
+                    return """💰 **Budget Information Needed**
+
+I notice you don't have a budget set up in the system yet, so I can't provide specific budget details or recommendations.
+
+To help you effectively, I'll need some information:
+
+**To Create Your Budget:**
+1. 💵 Monthly income
+2. 🏠 Current expense categories (housing, food, transportation, etc.)
+3. 🎯 Financial goals (savings targets, debt reduction, etc.)
+
+Once you provide this information, I can help you create a personalized budget plan that aligns with your financial situation and goals.
+
+Would you like to start by sharing your monthly income and main expense categories?"""
             
-            Use emojis and format nicely with clear sections.
-            """
+            # Only if we have actual budget data, use LLM
+            system_prompt = PromptLibrary.build_context_aware_prompt(
+                agent_type=AgentType.FINANCE,
+                user_preferences=user_preferences or {},
+                current_context={"task_type": "budget_planning", "has_existing_budget": True}
+            )
+            
+            user_prompt = f"""
+User Request: {user_input}
+Existing Budget Context: {budget_context}
+
+The user has existing budget data. Help them manage, update, or analyze their current budget.
+Provide specific recommendations based on their actual budget data.
+DO NOT invent or hallucinate any budget numbers - only use the data provided above.
+"""
             
             from ..llm.base import CompletionRequest, ChatMessage
             request = CompletionRequest(
-                messages=[ChatMessage(role="user", content=prompt)],
-                temperature=0.3,
+                messages=[
+                    ChatMessage(role="system", content=system_prompt),
+                    ChatMessage(role="user", content=user_prompt)
+                ],
+                temperature=0.7,
                 max_tokens=1000
             )
             
@@ -571,35 +751,91 @@ class FinanceAgent(BaseAgent):
             logger.error(f"Budget planning failed: {e}")
             return "💰 I'd be happy to help you create a personalized budget! Could you share your monthly income and main expense categories so I can provide specific recommendations?"
     
-    async def _handle_expense_tracking(self, user_input: str, context: Dict[str, Any]) -> str:
-        """Handle expense tracking requests."""
+    async def _handle_expense_tracking(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
+        """Handle expense tracking requests with personalization."""
         try:
+            from .prompts import PromptLibrary
+            
             expense_context = self._build_finance_context(context, "expenses")
             
             llm_service = await get_llm_service()
             if not llm_service:
                 return "📊 I'd be happy to help track your expenses! What specific expenses would you like to track?"
             
-            prompt = f"""
-            As a financial advisor, help the user with expense tracking and analysis.
+            # Check if user has existing expense data
+            has_expense_data = (
+                "expense" in expense_context.lower() and 
+                "no specific" not in expense_context.lower() and
+                any(char.isdigit() for char in expense_context)
+            )
             
-            User Request: {user_input}
-            Expense Context: {expense_context}
+            logger.info(f"[FinanceAgent] Expense check - has_expense_data: {has_expense_data}, context: {expense_context[:200]}")
             
-            Provide:
-            1. Expense tracking recommendations and tools
-            2. Category suggestions for their lifestyle
-            3. Analysis of spending patterns if available
-            4. Tips to reduce unnecessary expenses
-            5. Monthly review suggestions
+            # If NO expense data, provide general guidance without hallucinating
+            if not has_expense_data:
+                mentor_style = user_preferences.get("general", {}).get("mentor", {}).get("style", "Professional")
+                
+                if "sarcastic" in mentor_style.lower():
+                    return """📊 **Expense Tracking? Let's Talk.**
+
+So you want to know about your expenses, but here's the plot twist: **you haven't tracked any yet!**
+
+I could make up some numbers about your coffee addiction, but that feels... wrong?
+
+**Here's what would actually help:**
+1. 💳 Start logging your expenses (yes, even that $7 latte)
+2. 📁 Categorize them (Food, Transport, "Things I Regret", etc.)
+3. 📱 Use an expense tracking app (or a good old spreadsheet if you're vintage)
+
+Once you have *real* expense data, I can give you *real* insights. Fair deal?"""
+                else:
+                    return """📊 **Expense Tracking Guidance**
+
+I don't have any expense data recorded in your profile yet, so I can't analyze your spending patterns.
+
+**To start tracking expenses effectively:**
+1. 💳 Record daily expenses as they occur
+2. 📁 Categorize by type (food, transport, utilities, entertainment, etc.)
+3. 📱 Use tracking tools (apps, spreadsheets, or budgeting software)
+4. 📅 Review weekly to identify patterns
+
+**Common expense categories to track:**
+- Housing & Utilities
+- Food & Groceries
+- Transportation
+- Entertainment & Subscriptions
+- Healthcare
+- Personal & Miscellaneous
+
+Would you like help setting up an expense tracking system?"""
             
-            Use emojis and format nicely with actionable advice.
-            """
+            # Only use LLM if we have actual expense data
+            system_prompt = PromptLibrary.build_context_aware_prompt(
+                agent_type=AgentType.FINANCE,
+                user_preferences=user_preferences or {},
+                current_context={"task_type": "expense_tracking"}
+            )
+            
+            user_prompt = f"""
+User Request: {user_input}
+Expense Context: {expense_context}
+
+The user has existing expense data. Provide analysis and recommendations based ONLY on their actual data.
+DO NOT invent or hallucinate expense numbers.
+
+Provide:
+1. Analysis of their spending patterns
+2. Recommendations to optimize expenses
+3. Tips specific to their expense categories
+"""
             
             from ..llm.base import CompletionRequest, ChatMessage
             request = CompletionRequest(
-                messages=[ChatMessage(role="user", content=prompt)],
-                temperature=0.3,
+                messages=[
+                    ChatMessage(role="system", content=system_prompt),
+                    ChatMessage(role="user", content=user_prompt)
+                ],
+                temperature=0.7,
                 max_tokens=1000
             )
             
@@ -610,35 +846,95 @@ class FinanceAgent(BaseAgent):
             logger.error(f"Expense tracking failed: {e}")
             return "📊 I'd be happy to help you track your expenses effectively! What specific expense categories would you like to focus on?"
     
-    async def _handle_financial_goals(self, user_input: str, context: Dict[str, Any]) -> str:
-        """Handle financial goal setting and tracking."""
+    async def _handle_financial_goals(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
+        """Handle financial goal setting and tracking with personalization."""
         try:
+            from .prompts import PromptLibrary
+            
             goals_context = self._build_finance_context(context, "goals")
             
             llm_service = await get_llm_service()
             if not llm_service:
                 return "🎯 I'd be happy to help with your financial goals! What specific financial objectives do you have in mind?"
             
-            prompt = f"""
-            As a financial advisor, help the user set and achieve their financial goals.
+            # Check if user has existing financial goals data
+            has_goals_data = (
+                "goal" in goals_context.lower() and 
+                "no specific" not in goals_context.lower() and
+                any(char.isdigit() for char in goals_context)
+            )
             
-            User Request: {user_input}
-            Financial Goals Context: {goals_context}
+            logger.info(f"[FinanceAgent] Goals check - has_goals_data: {has_goals_data}, context: {goals_context[:200]}")
             
-            Provide:
-            1. SMART financial goal framework
-            2. Specific savings strategies for their goals
-            3. Timeline recommendations
-            4. Progress tracking methods
-            5. Motivation and milestone celebration ideas
+            # If NO goals data, provide guidance without hallucinating
+            if not has_goals_data:
+                mentor_style = user_preferences.get("general", {}).get("mentor", {}).get("style", "Professional")
+                
+                if "sarcastic" in mentor_style.lower():
+                    return """🎯 **Financial Goals? Bold of You.**
+
+You want to know about your financial goals, but there's a small issue: **you haven't set any!**
+
+I mean, I could assume you want to retire on a yacht in Monaco, but that seems... presumptuous?
+
+**Let's actually set some goals:**
+1. 💰 Emergency fund (how many months of expenses?)
+2. 🏠 Big purchases (house, car, that yacht?)
+3. 📈 Investment targets (retirement, education, etc.)
+4. 📅 Timeline for each goal
+
+Give me the *real* goals, and I'll help you build a *real* plan. Sound good?"""
+                else:
+                    return """🎯 **Financial Goals Setup**
+
+I don't have any financial goals recorded in your profile yet.
+
+**Common financial goals to consider:**
+1. 💰 Emergency Fund (3-6 months expenses)
+2. 🏠 Down Payment for Home
+3. 🚗 Vehicle Purchase
+4. 📚 Education Savings
+5. 📈 Retirement Planning
+6. 💳 Debt Elimination
+7. 🌴 Vacation Fund
+8. 📱 Major Purchases (like that iPhone 17!)
+
+**For each goal, consider:**
+- Target amount needed
+- Timeline to achieve it
+- Monthly savings required
+- Priority level
+
+Would you like help setting up your first financial goal?"""
             
-            Use emojis and format nicely with actionable steps.
-            """
+            # Only use LLM if we have actual goals data
+            system_prompt = PromptLibrary.build_context_aware_prompt(
+                agent_type=AgentType.FINANCE,
+                user_preferences=user_preferences or {},
+                current_context={"task_type": "financial_goals"}
+            )
+            
+            user_prompt = f"""
+User Request: {user_input}
+Financial Goals Context: {goals_context}
+
+The user has existing financial goals. Help them track progress and adjust strategies based ONLY on their actual goals.
+DO NOT invent or hallucinate financial goals or numbers.
+
+Provide:
+1. Analysis of their current financial goals
+2. Progress tracking recommendations
+3. Strategies specific to their goals
+4. Timeline optimization if needed
+"""
             
             from ..llm.base import CompletionRequest, ChatMessage
             request = CompletionRequest(
-                messages=[ChatMessage(role="user", content=prompt)],
-                temperature=0.3,
+                messages=[
+                    ChatMessage(role="system", content=system_prompt),
+                    ChatMessage(role="user", content=user_prompt)
+                ],
+                temperature=0.7,
                 max_tokens=1000
             )
             
@@ -649,29 +945,38 @@ class FinanceAgent(BaseAgent):
             logger.error(f"Financial goals failed: {e}")
             return "🎯 I'd be happy to help you set and achieve your financial goals! What specific financial objectives do you have in mind?"
     
-    async def _handle_general_finance(self, user_input: str, context: Dict[str, Any]) -> str:
-        """Handle general financial queries."""
+    async def _handle_general_finance(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
+        """Handle general financial queries with personalization."""
         try:
+            from .prompts import PromptLibrary
+            
             finance_context = self._build_finance_context(context, "general")
             
             llm_service = await get_llm_service()
             if not llm_service:
                 return "💰 I'm here to help with your financial questions! What specific financial topic would you like assistance with?"
             
-            prompt = f"""
-            As a financial advisor, provide helpful advice for the user's financial question.
+            # Build context-aware system prompt
+            system_prompt = PromptLibrary.build_context_aware_prompt(
+                agent_type=AgentType.FINANCE,
+                user_preferences=user_preferences or {},
+                current_context={"task_type": "general_finance"}
+            )
             
-            User Request: {user_input}
-            Financial Context: {finance_context}
-            
-            Provide relevant financial advice, tips, and recommendations based on their question.
-            Use emojis and format nicely with clear, actionable information.
-            """
+            user_prompt = f"""
+User Request: {user_input}
+Financial Context: {finance_context}
+
+Provide relevant financial advice, tips, and recommendations based on their question.
+"""
             
             from ..llm.base import CompletionRequest, ChatMessage
             request = CompletionRequest(
-                messages=[ChatMessage(role="user", content=prompt)],
-                temperature=0.3,
+                messages=[
+                    ChatMessage(role="system", content=system_prompt),
+                    ChatMessage(role="user", content=user_prompt)
+                ],
+                temperature=0.7,
                 max_tokens=800
             )
             
@@ -737,10 +1042,18 @@ class SchedulingAgent(BaseAgent):
         
         self.knowledge_base = get_knowledge_base_service()
     
-    async def execute(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute scheduling-related requests with contextual knowledge."""
+    async def execute(self, state: AgentState) -> Dict[str, Any]:
+        """Execute scheduling-related requests with contextual knowledge and user preferences."""
         try:
-            logger.info(f"SchedulingAgent processing: {user_input}")
+            # Extract from state
+            if isinstance(state, dict):
+                user_input = state.get("user_input", "")
+                user_preferences = state.get("user_preferences", {})
+            else:
+                user_input = str(state) if state else ""
+                user_preferences = {}
+            
+            logger.info(f"SchedulingAgent processing: {user_input} with preferences: {bool(user_preferences)}")
             
             # Get contextual knowledge from knowledge base
             contextual_knowledge = await self.knowledge_base.get_contextual_knowledge_for_agent(
@@ -751,13 +1064,13 @@ class SchedulingAgent(BaseAgent):
             
             # Determine scheduling task type
             if any(keyword in user_input.lower() for keyword in ["schedule", "calendar", "appointment", "meeting"]):
-                response = await self._handle_scheduling(user_input, contextual_knowledge)
+                response = await self._handle_scheduling(user_input, contextual_knowledge, user_preferences)
             elif any(keyword in user_input.lower() for keyword in ["time block", "optimize", "time management"]):
-                response = await self._handle_time_optimization(user_input, contextual_knowledge)
+                response = await self._handle_time_optimization(user_input, contextual_knowledge, user_preferences)
             elif any(keyword in user_input.lower() for keyword in ["book", "booking", "available", "availability"]):
-                response = await self._handle_appointment_booking(user_input, contextual_knowledge)
+                response = await self._handle_appointment_booking(user_input, contextual_knowledge, user_preferences)
             else:
-                response = await self._handle_general_scheduling(user_input, contextual_knowledge)
+                response = await self._handle_general_scheduling(user_input, contextual_knowledge, user_preferences)
             
             # Intelligently record interaction if valuable
             recorder = get_interaction_recorder()
@@ -773,35 +1086,43 @@ class SchedulingAgent(BaseAgent):
             logger.error(f"SchedulingAgent execution failed: {e}")
             return {"response": "I'm having trouble with scheduling right now. Please try again later.", "status": "error"}
     
-    async def _handle_scheduling(self, user_input: str, context: Dict[str, Any]) -> str:
-        """Handle general scheduling requests."""
+    async def _handle_scheduling(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
+        """Handle general scheduling requests with personalization."""
         try:
+            from .prompts import PromptLibrary
+            
             schedule_context = self._build_schedule_context(context, "general")
             
             llm_service = await get_llm_service()
             if not llm_service:
                 return "📅 I'd be happy to help with your scheduling! What would you like to schedule?"
             
-            prompt = f"""
-            As a scheduling assistant, help the user with their calendar and scheduling needs.
+            # Build context-aware system prompt
+            system_prompt = PromptLibrary.build_context_aware_prompt(
+                agent_type=AgentType.SCHEDULING,
+                user_preferences=user_preferences or {},
+                current_context={"task_type": "scheduling"}
+            )
             
-            User Request: {user_input}
-            Schedule Context: {schedule_context}
-            
-            Provide:
-            1. Specific scheduling recommendations
-            2. Time slot suggestions based on their preferences
-            3. Calendar organization tips
-            4. Conflict resolution if needed
-            5. Follow-up reminders
-            
-            Use emojis and format nicely with clear time recommendations.
-            """
+            user_prompt = f"""
+User Request: {user_input}
+Schedule Context: {schedule_context}
+
+Provide:
+1. Specific scheduling recommendations
+2. Time slot suggestions based on their preferences
+3. Calendar organization tips
+4. Conflict resolution if needed
+5. Follow-up reminders
+"""
             
             from ..llm.base import CompletionRequest, ChatMessage
             request = CompletionRequest(
-                messages=[ChatMessage(role="user", content=prompt)],
-                temperature=0.3,
+                messages=[
+                    ChatMessage(role="system", content=system_prompt),
+                    ChatMessage(role="user", content=user_prompt)
+                ],
+                temperature=0.7,
                 max_tokens=800
             )
             
@@ -851,35 +1172,39 @@ class SchedulingAgent(BaseAgent):
             logger.error(f"Time optimization failed: {e}")
             return "⏰ I'd be happy to help you optimize your time! What specific areas of your schedule would you like to improve?"
     
-    async def _handle_appointment_booking(self, user_input: str, context: Dict[str, Any]) -> str:
-        """Handle appointment booking requests."""
+    async def _handle_appointment_booking(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
+        """Handle appointment booking requests with personalization."""
         try:
+            from .prompts import PromptLibrary
+            
             booking_context = self._build_schedule_context(context, "booking")
             
             llm_service = await get_llm_service()
             if not llm_service:
                 return "📞 I'd be happy to help you book appointments! What type of appointment do you need to schedule?"
             
-            prompt = f"""
-            As a scheduling assistant, help the user with appointment booking and management.
+            # Build context-aware system prompt
+            system_prompt = PromptLibrary.build_context_aware_prompt(
+                agent_type=AgentType.SCHEDULING,
+                user_preferences=user_preferences or {},
+                current_context={"task_type": "appointment_booking"}
+            )
             
-            User Request: {user_input}
-            Booking Context: {booking_context}
-            
-            Provide:
-            1. Appointment booking guidance
-            2. Optimal time slot recommendations
-            3. Preparation checklist for the appointment
-            4. Reminder and follow-up suggestions
-            5. Calendar integration tips
-            
-            Use emojis and format nicely with practical booking advice.
-            """
+            user_prompt = f"""
+User Request: {user_input}
+Booking Context: {booking_context}
+
+Help the user with appointment booking and management.
+Provide specific guidance on scheduling, availability checking, and confirmation.
+"""
             
             from ..llm.base import CompletionRequest, ChatMessage
             request = CompletionRequest(
-                messages=[ChatMessage(role="user", content=prompt)],
-                temperature=0.3,
+                messages=[
+                    ChatMessage(role="system", content=system_prompt),
+                    ChatMessage(role="user", content=user_prompt)
+                ],
+                temperature=0.7,
                 max_tokens=800
             )
             
@@ -890,29 +1215,38 @@ class SchedulingAgent(BaseAgent):
             logger.error(f"Appointment booking failed: {e}")
             return "📞 I'd be happy to help you book appointments! What type of appointment do you need to schedule?"
     
-    async def _handle_general_scheduling(self, user_input: str, context: Dict[str, Any]) -> str:
-        """Handle general scheduling queries."""
+    async def _handle_general_scheduling(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
+        """Handle general scheduling queries with personalization."""
         try:
+            from .prompts import PromptLibrary
+            
             schedule_context = self._build_schedule_context(context, "general")
             
             llm_service = await get_llm_service()
             if not llm_service:
                 return "📅 I'm here to help with your scheduling needs! What would you like assistance with?"
             
-            prompt = f"""
-            As a scheduling assistant, provide helpful advice for the user's scheduling question.
+            # Build context-aware system prompt
+            system_prompt = PromptLibrary.build_context_aware_prompt(
+                agent_type=AgentType.SCHEDULING,
+                user_preferences=user_preferences or {},
+                current_context={"task_type": "general_scheduling"}
+            )
             
-            User Request: {user_input}
-            Schedule Context: {schedule_context}
-            
-            Provide relevant scheduling advice, tips, and recommendations based on their question.
-            Use emojis and format nicely with clear, actionable information.
-            """
+            user_prompt = f"""
+User Request: {user_input}
+Schedule Context: {schedule_context}
+
+Provide relevant scheduling advice, tips, and recommendations based on their question.
+"""
             
             from ..llm.base import CompletionRequest, ChatMessage
             request = CompletionRequest(
-                messages=[ChatMessage(role="user", content=prompt)],
-                temperature=0.3,
+                messages=[
+                    ChatMessage(role="system", content=system_prompt),
+                    ChatMessage(role="user", content=user_prompt)
+                ],
+                temperature=0.7,
                 max_tokens=800
             )
             
@@ -978,10 +1312,18 @@ class JournalAgent(BaseAgent):
         
         self.knowledge_base = get_knowledge_base_service()
     
-    async def execute(self, user_input: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute journaling-related requests with contextual knowledge."""
+    async def execute(self, state: AgentState) -> Dict[str, Any]:
+        """Execute journaling-related requests with contextual knowledge and user preferences."""
         try:
-            logger.info(f"JournalAgent processing: {user_input}")
+            # Extract from state
+            if isinstance(state, dict):
+                user_input = state.get("user_input", "")
+                user_preferences = state.get("user_preferences", {})
+            else:
+                user_input = str(state) if state else ""
+                user_preferences = {}
+            
+            logger.info(f"JournalAgent processing: {user_input} with preferences: {bool(user_preferences)}")
             
             # Get contextual knowledge from knowledge base
             contextual_knowledge = await self.knowledge_base.get_contextual_knowledge_for_agent(
@@ -992,15 +1334,15 @@ class JournalAgent(BaseAgent):
             
             # Determine journaling task type
             if any(keyword in user_input.lower() for keyword in ["journal", "reflection", "reflect", "mood"]):
-                response = await self._handle_daily_journaling(user_input, contextual_knowledge)
+                response = await self._handle_daily_journaling(user_input, contextual_knowledge, user_preferences)
             elif any(keyword in user_input.lower() for keyword in ["goal", "progress", "achievement", "milestone"]):
-                response = await self._handle_goal_tracking(user_input, contextual_knowledge)
+                response = await self._handle_goal_tracking(user_input, contextual_knowledge, user_preferences)
             elif any(keyword in user_input.lower() for keyword in ["habit", "streak", "routine", "consistency"]):
-                response = await self._handle_habit_tracking(user_input, contextual_knowledge)
+                response = await self._handle_habit_tracking(user_input, contextual_knowledge, user_preferences)
             elif any(keyword in user_input.lower() for keyword in ["feeling", "emotion", "stress", "wellness"]):
-                response = await self._handle_emotional_wellness(user_input, contextual_knowledge)
+                response = await self._handle_emotional_wellness(user_input, contextual_knowledge, user_preferences)
             else:
-                response = await self._handle_general_journaling(user_input, contextual_knowledge)
+                response = await self._handle_general_journaling(user_input, contextual_knowledge, user_preferences)
             
             # Intelligently record interaction if valuable
             recorder = get_interaction_recorder()
@@ -1016,35 +1358,43 @@ class JournalAgent(BaseAgent):
             logger.error(f"JournalAgent execution failed: {e}")
             return {"response": "I'm having trouble with journaling assistance right now. Please try again later.", "status": "error"}
     
-    async def _handle_daily_journaling(self, user_input: str, context: Dict[str, Any]) -> str:
-        """Handle daily journaling and reflection requests."""
+    async def _handle_daily_journaling(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
+        """Handle daily journaling and reflection requests with personalization."""
         try:
+            from .prompts import PromptLibrary
+            
             journal_context = self._build_journal_context(context, "reflection")
             
             llm_service = await get_llm_service()
             if not llm_service:
                 return "📝 I'd be happy to guide your journaling practice! What would you like to reflect on today?"
             
-            prompt = f"""
-            As a thoughtful journaling guide, help the user with their daily reflection and journaling practice.
+            # Build context-aware system prompt
+            system_prompt = PromptLibrary.build_context_aware_prompt(
+                agent_type=AgentType.JOURNAL,
+                user_preferences=user_preferences or {},
+                current_context={"task_type": "daily_journaling"}
+            )
             
-            User Request: {user_input}
-            Journal Context: {journal_context}
-            
-            Provide:
-            1. Thoughtful reflection prompts
-            2. Guided questions for deeper insight
-            3. Mood and emotion processing support
-            4. Gratitude practice suggestions
-            5. Personal growth observations
-            
-            Use emojis and format nicely with gentle, encouraging guidance.
-            """
+            user_prompt = f"""
+User Request: {user_input}
+Journal Context: {journal_context}
+
+Provide:
+1. Thoughtful reflection prompts
+2. Guided questions for deeper insight
+3. Mood and emotion processing support
+4. Gratitude practice suggestions
+5. Personal growth observations
+"""
             
             from ..llm.base import CompletionRequest, ChatMessage
             request = CompletionRequest(
-                messages=[ChatMessage(role="user", content=prompt)],
-                temperature=0.4,
+                messages=[
+                    ChatMessage(role="system", content=system_prompt),
+                    ChatMessage(role="user", content=user_prompt)
+                ],
+                temperature=0.7,
                 max_tokens=1000
             )
             
@@ -1055,35 +1405,43 @@ class JournalAgent(BaseAgent):
             logger.error(f"Daily journaling failed: {e}")
             return "📝 I'd be happy to guide your journaling practice! What would you like to reflect on today?"
     
-    async def _handle_goal_tracking(self, user_input: str, context: Dict[str, Any]) -> str:
-        """Handle goal tracking and milestone celebration."""
+    async def _handle_goal_tracking(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
+        """Handle goal tracking and milestone celebration with personalization."""
         try:
+            from .prompts import PromptLibrary
+            
             goals_context = self._build_journal_context(context, "goals")
             
             llm_service = await get_llm_service()
             if not llm_service:
                 return "🎯 I'd love to help you track your goals! What goals are you working on?"
             
-            prompt = f"""
-            As a personal growth coach, help the user with goal tracking and achievement recognition.
+            # Build context-aware system prompt
+            system_prompt = PromptLibrary.build_context_aware_prompt(
+                agent_type=AgentType.JOURNAL,
+                user_preferences=user_preferences or {},
+                current_context={"task_type": "goal_tracking"}
+            )
             
-            User Request: {user_input}
-            Goals Context: {goals_context}
-            
-            Provide:
-            1. Goal progress assessment
-            2. Milestone recognition and celebration
-            3. Next steps and action items
-            4. Motivation and encouragement
-            5. Course correction suggestions if needed
-            
-            Use emojis and format nicely with motivational, supportive guidance.
-            """
+            user_prompt = f"""
+User Request: {user_input}
+Goals Context: {goals_context}
+
+Provide:
+1. Goal progress assessment
+2. Milestone recognition and celebration
+3. Next steps and action items
+4. Motivation and encouragement
+5. Course correction suggestions if needed
+"""
             
             from ..llm.base import CompletionRequest, ChatMessage
             request = CompletionRequest(
-                messages=[ChatMessage(role="user", content=prompt)],
-                temperature=0.3,
+                messages=[
+                    ChatMessage(role="system", content=system_prompt),
+                    ChatMessage(role="user", content=user_prompt)
+                ],
+                temperature=0.7,
                 max_tokens=1000
             )
             
@@ -1094,35 +1452,43 @@ class JournalAgent(BaseAgent):
             logger.error(f"Goal tracking failed: {e}")
             return "🎯 I'd love to help you track your goals! What goals are you working on?"
     
-    async def _handle_habit_tracking(self, user_input: str, context: Dict[str, Any]) -> str:
-        """Handle habit tracking and formation support."""
+    async def _handle_habit_tracking(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
+        """Handle habit tracking and formation support with personalization."""
         try:
+            from .prompts import PromptLibrary
+            
             habits_context = self._build_journal_context(context, "habits")
             
             llm_service = await get_llm_service()
             if not llm_service:
                 return "🔄 I'd be happy to help with your habit tracking! What habits are you building?"
             
-            prompt = f"""
-            As a habit formation expert, help the user with habit tracking and consistency building.
+            # Build context-aware system prompt
+            system_prompt = PromptLibrary.build_context_aware_prompt(
+                agent_type=AgentType.JOURNAL,
+                user_preferences=user_preferences or {},
+                current_context={"task_type": "habit_tracking"}
+            )
             
-            User Request: {user_input}
-            Habits Context: {habits_context}
-            
-            Provide:
-            1. Habit streak recognition and motivation
-            2. Consistency strategies and tips
-            3. Barrier identification and solutions
-            4. Habit stacking suggestions
-            5. Small wins celebration
-            
-            Use emojis and format nicely with encouraging, practical advice.
-            """
+            user_prompt = f"""
+User Request: {user_input}
+Habits Context: {habits_context}
+
+Provide:
+1. Habit streak recognition and motivation
+2. Consistency strategies and tips
+3. Barrier identification and solutions
+4. Habit stacking suggestions
+5. Small wins celebration
+"""
             
             from ..llm.base import CompletionRequest, ChatMessage
             request = CompletionRequest(
-                messages=[ChatMessage(role="user", content=prompt)],
-                temperature=0.3,
+                messages=[
+                    ChatMessage(role="system", content=system_prompt),
+                    ChatMessage(role="user", content=user_prompt)
+                ],
+                temperature=0.7,
                 max_tokens=1000
             )
             
@@ -1133,36 +1499,45 @@ class JournalAgent(BaseAgent):
             logger.error(f"Habit tracking failed: {e}")
             return "🔄 I'd be happy to help with your habit tracking! What habits are you building?"
     
-    async def _handle_emotional_wellness(self, user_input: str, context: Dict[str, Any]) -> str:
-        """Handle emotional processing and wellness support."""
+    async def _handle_emotional_wellness(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
+        """Handle emotional processing and wellness support with personalization."""
         try:
+            from .prompts import PromptLibrary
+            
             wellness_context = self._build_journal_context(context, "wellness")
             
             llm_service = await get_llm_service()
             if not llm_service:
                 return "💙 I'm here to support your emotional wellness! How are you feeling today?"
             
-            prompt = f"""
-            As a supportive wellness companion, help the user with emotional processing and mental wellness.
+            # Build context-aware system prompt
+            system_prompt = PromptLibrary.build_context_aware_prompt(
+                agent_type=AgentType.JOURNAL,
+                user_preferences=user_preferences or {},
+                current_context={"task_type": "emotional_wellness"}
+            )
             
-            User Request: {user_input}
-            Wellness Context: {wellness_context}
-            
-            Provide:
-            1. Emotional validation and support
-            2. Gentle processing questions
-            3. Stress management techniques
-            4. Self-care suggestions
-            5. Professional help recommendations if needed
-            
-            Use emojis and format nicely with compassionate, supportive guidance.
-            Note: If serious mental health concerns are expressed, gently suggest professional support.
-            """
+            user_prompt = f"""
+User Request: {user_input}
+Wellness Context: {wellness_context}
+
+Provide:
+1. Emotional validation and support
+2. Gentle processing questions
+3. Stress management techniques
+4. Self-care suggestions
+5. Professional help recommendations if needed
+
+Note: If serious mental health concerns are expressed, gently suggest professional support.
+"""
             
             from ..llm.base import CompletionRequest, ChatMessage
             request = CompletionRequest(
-                messages=[ChatMessage(role="user", content=prompt)],
-                temperature=0.4,
+                messages=[
+                    ChatMessage(role="system", content=system_prompt),
+                    ChatMessage(role="user", content=user_prompt)
+                ],
+                temperature=0.7,
                 max_tokens=1000
             )
             
@@ -1173,29 +1548,38 @@ class JournalAgent(BaseAgent):
             logger.error(f"Emotional wellness failed: {e}")
             return "💙 I'm here to support your emotional wellness! How are you feeling today?"
     
-    async def _handle_general_journaling(self, user_input: str, context: Dict[str, Any]) -> str:
-        """Handle general journaling queries."""
+    async def _handle_general_journaling(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
+        """Handle general journaling queries with personalization."""
         try:
+            from .prompts import PromptLibrary
+            
             journal_context = self._build_journal_context(context, "general")
             
             llm_service = await get_llm_service()
             if not llm_service:
                 return "📖 I'm here to support your journaling journey! What would you like to explore?"
             
-            prompt = f"""
-            As a journaling companion, provide helpful support for the user's personal reflection needs.
+            # Build context-aware system prompt
+            system_prompt = PromptLibrary.build_context_aware_prompt(
+                agent_type=AgentType.JOURNAL,
+                user_preferences=user_preferences or {},
+                current_context={"task_type": "general_journaling"}
+            )
             
-            User Request: {user_input}
-            Journal Context: {journal_context}
-            
-            Provide relevant journaling guidance, prompts, and support based on their question.
-            Use emojis and format nicely with gentle, encouraging information.
-            """
+            user_prompt = f"""
+User Request: {user_input}
+Journal Context: {journal_context}
+
+Provide relevant journaling guidance, prompts, and support based on their question.
+"""
             
             from ..llm.base import CompletionRequest, ChatMessage
             request = CompletionRequest(
-                messages=[ChatMessage(role="user", content=prompt)],
-                temperature=0.4,
+                messages=[
+                    ChatMessage(role="system", content=system_prompt),
+                    ChatMessage(role="user", content=user_prompt)
+                ],
+                temperature=0.7,
                 max_tokens=800
             )
             

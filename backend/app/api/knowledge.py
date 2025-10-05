@@ -2,6 +2,7 @@
 API endpoints for knowledge base operations.
 """
 
+import logging
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -17,6 +18,7 @@ from app.models.knowledge import (
 from app.services.knowledge_base import get_knowledge_base_service
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
+logger = logging.getLogger(__name__)
 
 
 class CreateEntryRequest(BaseModel):
@@ -322,3 +324,170 @@ async def get_embedding_details(entry_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get embedding details: {str(e)}")
+
+
+class OnboardingData(BaseModel):
+    """Model for onboarding data."""
+    role: str
+    goals: List[Dict[str, Any]]
+    preferences: List[str]
+    mentor: Dict[str, Any]
+    planner: Dict[str, Any]
+
+
+@router.post("/onboarding")
+async def save_onboarding_data(data: OnboardingData):
+    """Save user onboarding data to knowledge base."""
+    try:
+        kb_service = get_knowledge_base_service()
+        
+        # First, delete all existing onboarding entries to avoid duplicates
+        all_entries = await kb_service.get_all_entries()
+        user_pref_entries = [e for e in all_entries if e.entry_type == KnowledgeEntryType.USER_PREFERENCE]
+        
+        for entry in user_pref_entries:
+            try:
+                await kb_service.delete_entry(entry.entry_id)
+            except Exception as e:
+                logger.warning(f"Failed to delete entry {entry.entry_id}: {str(e)}")
+        
+        # Now save new user profile
+        profile_entry = await kb_service.create_entry(
+            entry_type=KnowledgeEntryType.USER_PREFERENCE,
+            entry_sub_type=KnowledgeEntrySubType.USER_PROFILE,
+            category="user_profile",
+            title="User Profile",
+            content=f"Role: {data.role}\nPreferences: {', '.join(data.preferences)}\nMentor: {data.mentor.get('name', 'AI Assistant')}",
+            metadata={
+                "role": data.role,
+                "preferences": data.preferences,
+                "mentor": data.mentor,
+                "onboarding_completed": True
+            },
+            tags=["profile", "onboarding", data.role.lower()]
+        )
+        
+        # Save each goal
+        goal_entries = []
+        for goal in data.goals:
+            goal_entry = await kb_service.create_entry(
+                entry_type=KnowledgeEntryType.USER_PREFERENCE,
+                entry_sub_type=KnowledgeEntrySubType.GOAL,
+                category="goals",
+                title=goal.get('title', 'Untitled Goal'),
+                content=f"{goal.get('title', 'Untitled Goal')}: {goal.get('description', '')}",
+                metadata={
+                    "priority": goal.get('priority', 'Medium'),
+                    "category": goal.get('category', data.role),
+                    "milestones": goal.get('milestones', []),
+                    "smart_criteria": goal.get('smartCriteria', {})
+                },
+                tags=["goal", data.role.lower(), goal.get('priority', 'medium').lower()]
+            )
+            goal_entries.append(goal_entry)
+        
+        # Save planner configuration
+        planner_entry = await kb_service.create_entry(
+            entry_type=KnowledgeEntryType.USER_PREFERENCE,
+            entry_sub_type=KnowledgeEntrySubType.SCHEDULE,
+            category="planner",
+            title="Planner Configuration",
+            content=f"Work Hours: {data.planner.get('availability', {}).get('workHours', {}).get('start', '09:00')} - {data.planner.get('availability', {}).get('workHours', {}).get('end', '17:00')}\nTimezone: {data.planner.get('availability', {}).get('timezone', 'UTC')}",
+            metadata={
+                "availability": data.planner.get('availability', {}),
+                "notifications": data.planner.get('notifications', {}),
+                "integrations": data.planner.get('integrations', {})
+            },
+            tags=["planner", "schedule", "configuration"]
+        )
+        
+        return {
+            "success": True,
+            "message": "Onboarding data saved successfully",
+            "profile_id": profile_entry.entry_id,
+            "goals_count": len(goal_entries),
+            "planner_id": planner_entry.entry_id
+        }
+    except Exception as e:
+        import traceback
+        error_detail = f"Failed to save onboarding data: {str(e)}\n{traceback.format_exc()}"
+        logger.error(error_detail)
+        raise HTTPException(status_code=500, detail=error_detail)
+
+
+@router.get("/onboarding/profile")
+async def get_onboarding_profile():
+    """Retrieve user's onboarding profile from knowledge base."""
+    try:
+        kb_service = get_knowledge_base_service()
+        
+        # Get all user preference entries
+        all_entries = await kb_service.get_all_entries()
+        user_entries = [e for e in all_entries if e.entry_type == KnowledgeEntryType.USER_PREFERENCE]
+        
+        if not user_entries:
+            raise HTTPException(status_code=404, detail="No onboarding profile found")
+        
+        # Reconstruct profile from entries
+        profile_data = {
+            "role": None,
+            "goals": [],
+            "answers": [],
+            "mentor": {},
+            "planner": {},
+            "preferences": [],
+            "coachAvatar": None,
+            "schedule": None
+        }
+        
+        for entry in user_entries:
+            if entry.entry_sub_type == KnowledgeEntrySubType.USER_PROFILE:
+                metadata = entry.metadata or {}
+                profile_data["role"] = metadata.get("role")
+                profile_data["preferences"] = metadata.get("preferences", [])
+                profile_data["mentor"] = metadata.get("mentor", {})
+                profile_data["coachAvatar"] = metadata.get("mentor", {}).get("avatar")
+                # Convert preferences to Answer format
+                for pref in metadata.get("preferences", []):
+                    profile_data["answers"].append({
+                        "id": f"pref-{len(profile_data['answers'])}",
+                        "answer": pref,
+                        "description": f"Priority: {pref}"
+                    })
+                
+            elif entry.entry_sub_type == KnowledgeEntrySubType.GOAL:
+                metadata = entry.metadata or {}
+                profile_data["goals"].append({
+                    "id": entry.entry_id,
+                    "title": entry.title,
+                    "description": entry.content.split(": ", 1)[1] if ": " in entry.content else entry.content,
+                    "category": metadata.get("category", "General"),
+                    "priority": metadata.get("priority", "Medium"),
+                    "milestones": metadata.get("milestones", []),
+                    "smartCriteria": metadata.get("smart_criteria", {}),
+                    "linkedPriorities": metadata.get("linkedPriorities", [])
+                })
+                
+            elif entry.entry_sub_type == KnowledgeEntrySubType.SCHEDULE:
+                metadata = entry.metadata or {}
+                profile_data["planner"] = {
+                    "goals": profile_data["goals"],  # Will be populated after processing all entries
+                    "availability": metadata.get("availability", {}),
+                    "notifications": metadata.get("notifications", {}),
+                    "integrations": metadata.get("integrations", {})
+                }
+                profile_data["schedule"] = metadata.get("availability", {})
+        
+        # Update planner goals after all goals are collected
+        if profile_data["planner"]:
+            profile_data["planner"]["goals"] = profile_data["goals"]
+        
+        return profile_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        error_detail = f"Error retrieving profile: {str(e)}\n{traceback.format_exc()}"
+        logger.error(error_detail)
+        raise HTTPException(status_code=500, detail=error_detail)
