@@ -231,6 +231,10 @@ class BaseAgent(ABC):
         try:
             response = state.get("agent_response", "")
             
+            # Extract string from dict if needed
+            if isinstance(response, dict):
+                response = response.get("response", str(response))
+            
             # Add AI message to conversation
             if response:
                 ai_msg = AIMessage(content=response)
