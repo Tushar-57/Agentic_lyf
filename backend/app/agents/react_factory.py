@@ -65,12 +65,12 @@ class ReActSubAgent:
         # Create comprehensive tool set
         self.tools = self._create_tool_set()
         
-        # Create the ReAct agent
+        # Create the ReAct agent  
+        # Note: create_react_agent uses its own internal state schema
         self.react_agent = create_react_agent(
             self.model,
             self.tools,
-            prompt=self._build_full_prompt(),
-            state_schema=DeepAgentState
+            prompt=self._build_full_prompt()
         )
         
         logger.info(f"Created ReAct sub-agent: {self.name} ({self.agent_id})")

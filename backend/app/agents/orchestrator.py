@@ -29,7 +29,7 @@ class OrchestratorAgent(BaseAgent):
             AgentCapability(
                 name="agent_coordination",
                 description="Coordinate between multiple agents for complex tasks",
-                parameters={"max_handoffs": 3}
+                parameters={"max_handoffs": 5}
             ),
             AgentCapability(
                 name="conversation_management",

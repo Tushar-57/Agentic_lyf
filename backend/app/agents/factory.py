@@ -12,7 +12,7 @@ from langsmith import Client as LangSmithClient
 from langsmith.run_helpers import traceable
 
 from .base import BaseAgent, AgentType, AgentCapability
-from .orchestrator import OrchestratorAgent
+from .enhanced_orchestrator import EnhancedOrchestratorAgent as OrchestratorAgent
 from .specialized_agents import HealthAgent, ProductivityAgent
 from .registry import get_agent_registry
 from .communication import get_communication_protocol, start_communication_protocol

@@ -10,6 +10,7 @@ This orchestrator incorporates the 4 principles from Deep Agents:
 
 import logging
 import re
+import json
 from typing import Dict, Any, Optional, List, Union
 from datetime import datetime
 from enum import Enum
@@ -90,7 +91,9 @@ class EnhancedOrchestratorAgent(BaseAgent):
                 r'\b(task|todo|goal|work|project|deadline|priority|manage|organize)\b',
                 r'\b(efficient|focus|time management|workflow|deliverable|milestone)\b',
                 r'\b(productive|efficiency|performance|output|accomplish|complete)\b',
-                r'\b(plan|schedule|track|monitor|optimize|streamline)\b'
+                r'\b(plan|schedule|track|monitor|optimize|streamline)\b',
+                r'\b(leetcode|coding|problem|algorithm|programming|code)\b',  # Added for Leetcode
+                r'\b(today.*problem|give.*problem|get.*problem)\b'  # Problem requests
             ],
             AgentType.HEALTH: [
                 r'\b(health|wellness|exercise|fitness|habit|routine|workout|sleep)\b',
@@ -251,12 +254,15 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
 
     async def execute(self, state: Union[AgentState, str, Dict[str, Any]]) -> Dict[str, Any]:
         """Enhanced execute method with deep agent patterns."""
+        logger.info("=" * 80)
+        logger.info("[ENHANCED ORCHESTRATOR] execute() method called!")
+        logger.info("=" * 80)
         logger.debug("EnhancedOrchestrator.execute START")
         
         try:
             # Initialize LLM service if needed
             if not self.llm_service:
-                self.llm_service = get_llm_service()
+                self.llm_service = await get_llm_service()
             
             # Normalize state input
             normalized_state = self._normalize_state(state)
@@ -284,16 +290,28 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
                     await self._store_plan_in_context(strategic_plan, deep_state)
             
             # Execute based on complexity and plan
-            if complexity == TaskComplexity.SIMPLE:
+            # Even for SIMPLE tasks, delegate to specialist if high-confidence intent classification
+            target_agent = intent_result.get("agent_type", AgentType.GENERAL)
+            confidence = intent_result.get("confidence", 0.0)
+            
+            logger.info(f"[DELEGATION DEBUG] complexity={complexity.value}, confidence={confidence}, target_agent={target_agent}")
+            logger.info(f"[DELEGATION DEBUG] Condition check: SIMPLE={complexity == TaskComplexity.SIMPLE}, conf<0.8={confidence < 0.8}, is_GENERAL={target_agent == AgentType.GENERAL}")
+            
+            if complexity == TaskComplexity.SIMPLE and confidence < 0.8 and target_agent == AgentType.GENERAL:
+                # Only handle directly if low confidence or explicitly GENERAL
+                logger.info("[DELEGATION DEBUG] Taking _handle_simple_task path")
                 response = await self._handle_simple_task(user_input, context, deep_state)
-            elif complexity == TaskComplexity.MODERATE:
+            elif complexity in [TaskComplexity.SIMPLE, TaskComplexity.MODERATE]:
+                # Delegate to specialist for domain-specific tasks
+                logger.info(f"[DELEGATION DEBUG] Taking _delegate_to_specialist path with agent={target_agent}")
                 response = await self._delegate_to_specialist(
-                    intent_result.get("agent_type", AgentType.GENERAL),
+                    target_agent,
                     user_input,
                     context,
                     deep_state
                 )
             else:  # COMPLEX or ADVANCED
+                logger.info("[DELEGATION DEBUG] Taking _orchestrate_complex_workflow path")
                 response = await self._orchestrate_complex_workflow(
                     user_input,
                     strategic_plan,
@@ -397,7 +415,38 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
         context: Dict[str, Any], 
         complexity: TaskComplexity
     ) -> Dict[str, Any]:
-        """Enhanced intent classification with complexity awareness."""
+        """Enhanced intent classification with LLM support and complexity awareness."""
+        try:
+            # First, try pattern-based classification for speed
+            pattern_result = self._pattern_based_classification(user_input, complexity)
+            
+            # If pattern confidence is very high (>0.8), use it directly
+            if pattern_result["confidence"] > 0.8:
+                logger.info(f"High confidence pattern match: {pattern_result['agent_type'].value} ({pattern_result['confidence']:.2f})")
+                return pattern_result
+            
+            # For lower confidence or complex tasks, use LLM classification
+            llm_result = await self._llm_based_classification(user_input, context, complexity)
+            
+            # Combine results: prefer LLM if confidence is higher
+            if llm_result["confidence"] > pattern_result["confidence"]:
+                logger.info(f"Using LLM classification: {llm_result['agent_type'].value} ({llm_result['confidence']:.2f})")
+                return llm_result
+            else:
+                logger.info(f"Using pattern classification: {pattern_result['agent_type'].value} ({pattern_result['confidence']:.2f})")
+                return pattern_result
+                
+        except Exception as e:
+            logger.error(f"Error in intent classification: {e}", exc_info=True)
+            return {
+                "agent_type": AgentType.GENERAL, 
+                "confidence": 0.5, 
+                "reason": f"Classification error: {str(e)}",
+                "complexity_factor": complexity.value
+            }
+    
+    def _pattern_based_classification(self, user_input: str, complexity: TaskComplexity) -> Dict[str, Any]:
+        """Pattern-based intent classification using regex."""
         user_lower = user_input.lower()
         agent_scores = {}
         
@@ -405,49 +454,200 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
         for agent_type, patterns in self.intent_patterns.items():
             score = 0
             matched_patterns = []
+            matches = []
             
             for pattern in patterns:
-                matches = re.findall(pattern, user_lower)
-                if matches:
-                    score += len(matches)
+                try:
+                    regex = re.compile(pattern, flags=re.IGNORECASE)
+                except re.error:
+                    # Fallback to escaped pattern
+                    regex = re.compile(re.escape(pattern), flags=re.IGNORECASE)
+                
+                found = regex.findall(user_input)
+                if found:
+                    score += len(found)
                     matched_patterns.append(pattern)
+                    matches.extend(found)
             
             if score > 0:
                 agent_scores[agent_type] = {
                     "score": score,
                     "patterns": matched_patterns,
-                    "confidence": min(score / 5.0, 1.0)  # Normalize to 0-1
+                    "matches": matches,
+                    "confidence": min(0.2 + (score * 0.25), 0.99)  # Normalize to 0.2-0.99
                 }
         
-        # Determine best agent
+        # No pattern matches
         if not agent_scores:
             return {
                 "agent_type": AgentType.GENERAL,
-                "confidence": 0.1,
-                "reason": "No specific domain patterns matched",
-                "complexity_factor": complexity.value
+                "confidence": 0.3,
+                "reason": "No pattern matches found",
+                "complexity_factor": complexity.value,
+                "method": "pattern_based"
             }
         
-        best_agent = max(agent_scores.items(), key=lambda x: x[1]["score"])
-        agent_type, scores = best_agent
+        # Find best agent
+        best_agent = max(agent_scores.keys(), key=lambda k: agent_scores[k]["score"])
+        result = agent_scores[best_agent]
         
         # Adjust confidence based on complexity
         complexity_multiplier = {
             TaskComplexity.SIMPLE: 1.0,
-            TaskComplexity.MODERATE: 1.1,
-            TaskComplexity.COMPLEX: 1.2,
-            TaskComplexity.ADVANCED: 1.3
+            TaskComplexity.MODERATE: 1.05,
+            TaskComplexity.COMPLEX: 1.1,
+            TaskComplexity.ADVANCED: 1.15
         }
         
-        adjusted_confidence = min(scores["confidence"] * complexity_multiplier[complexity], 1.0)
+        adjusted_confidence = min(result["confidence"] * complexity_multiplier[complexity], 0.99)
         
         return {
-            "agent_type": agent_type,
+            "agent_type": best_agent,
             "confidence": adjusted_confidence,
-            "reason": f"Matched {len(scores['patterns'])} patterns with {scores['score']} total matches",
+            "reason": f"Pattern matches: {', '.join(map(str, result['matches'][:3]))}",
             "complexity_factor": complexity.value,
-            "all_scores": {str(k.value): v["confidence"] for k, v in agent_scores.items()}
+            "all_scores": {str(k.value): v["confidence"] for k, v in agent_scores.items()},
+            "method": "pattern_based"
         }
+    
+    async def _llm_based_classification(
+        self, 
+        user_input: str, 
+        context: Dict[str, Any],
+        complexity: TaskComplexity
+    ) -> Dict[str, Any]:
+        """LLM-based intent classification for complex or ambiguous requests."""
+        try:
+            llm_service = await get_llm_service()
+            
+            # Build classification prompt with agent context
+            classification_prompt = PromptLibrary.get_intent_classification_prompt(user_input)
+            
+            # Add available agent types
+            agent_types_info = "\n".join([
+                f"- **{agent.value.upper()}**: {self._get_agent_description(agent)}"
+                for agent in AgentType if agent != AgentType.ORCHESTRATOR
+            ])
+            
+            classification_prompt += f"""
+
+**Available Specialized Agents:**
+{agent_types_info}
+
+**Task Complexity Level:** {complexity.value}
+
+**Classification Instructions:**
+Analyze the user's request and determine which specialized agent should handle it.
+Consider:
+1. The primary intent and domain of the request
+2. The task complexity and required expertise
+3. Whether multiple agents might be needed (for complex tasks)
+4. User context and conversation history
+
+Return ONLY a JSON object in this exact format:
+{{"agent_type": "PRODUCTIVITY", "confidence": 0.86, "reason": "short explanation"}}
+
+The agent_type must be one of: PRODUCTIVITY, HEALTH, FINANCE, SCHEDULING, JOURNAL, GENERAL"""
+
+            # Add context if available
+            if context:
+                context_items = []
+                for k, v in context.items():
+                    if k not in ['conversation_history', 'state_manager']:  # Skip large objects
+                        context_items.append(f"- {k}: {v}")
+                if context_items:
+                    classification_prompt += f"\n\n**Additional Context:**\n" + "\n".join(context_items)
+
+            # Make LLM request
+            request = CompletionRequest(
+                messages=[
+                    ChatMessage(
+                        role="system", 
+                        content="You are an expert at classifying user intents for routing to specialized AI agents. You understand task complexity and can identify the most appropriate domain expert."
+                    ),
+                    ChatMessage(role="user", content=classification_prompt)
+                ],
+                max_tokens=200,
+                temperature=0.0  # Deterministic for consistency
+            )
+
+            response = await llm_service.chat_completion(request)
+            response_text = response.content.strip()
+
+            # Parse JSON response
+            try:
+                import json
+                # Extract JSON if wrapped in markdown or other text
+                json_start = response_text.find('{')
+                json_end = response_text.rfind('}') + 1
+                if json_start >= 0 and json_end > json_start:
+                    json_text = response_text[json_start:json_end]
+                    parsed = json.loads(json_text)
+                else:
+                    parsed = json.loads(response_text)
+                
+                agent_label = parsed.get("agent_type", "GENERAL").upper()
+                confidence = float(parsed.get("confidence", 0.5))
+                reason = parsed.get("reason", response_text)
+                
+                # Map label to AgentType enum
+                agent_type = next(
+                    (a for a in AgentType if a.value.upper() == agent_label or a.name == agent_label), 
+                    AgentType.GENERAL
+                )
+                
+                return {
+                    "agent_type": agent_type,
+                    "confidence": confidence,
+                    "reason": reason,
+                    "complexity_factor": complexity.value,
+                    "method": "llm_based"
+                }
+                
+            except (json.JSONDecodeError, ValueError) as parse_error:
+                logger.warning(f"Failed to parse LLM JSON response: {parse_error}. Response: {response_text}")
+                
+                # Fallback: scan for agent type keywords in response
+                for agent in AgentType:
+                    if agent.value.upper() in response_text.upper() or agent.name in response_text:
+                        return {
+                            "agent_type": agent,
+                            "confidence": 0.65,
+                            "reason": response_text[:100],
+                            "complexity_factor": complexity.value,
+                            "method": "llm_based_fallback"
+                        }
+                
+                # Ultimate fallback
+                return {
+                    "agent_type": AgentType.GENERAL,
+                    "confidence": 0.4,
+                    "reason": f"Could not parse LLM response: {response_text[:100]}",
+                    "complexity_factor": complexity.value,
+                    "method": "llm_based_error"
+                }
+                
+        except Exception as e:
+            logger.error(f"Error in LLM-based classification: {e}", exc_info=True)
+            return {
+                "agent_type": AgentType.GENERAL,
+                "confidence": 0.3,
+                "reason": f"LLM classification error: {str(e)}",
+                "complexity_factor": complexity.value,
+                "method": "llm_error"
+            }
+    
+    def _get_agent_description(self, agent_type: AgentType) -> str:
+        """Get description for each agent type."""
+        descriptions = {
+            AgentType.PRODUCTIVITY: "Task management, TODO lists, goals, Leetcode problems, coding practice, project tracking, time optimization",
+            AgentType.HEALTH: "Wellness tracking, exercise routines, nutrition, meal planning, sleep, fitness goals, habit formation",
+            AgentType.FINANCE: "Expense tracking, budgeting, financial planning, investment advice, money management",
+            AgentType.SCHEDULING: "Calendar management, appointments, time scheduling, meeting coordination, reminders",
+            AgentType.JOURNAL: "Daily reflections, mood tracking, gratitude journaling, personal growth, insights",
+            AgentType.GENERAL: "General questions, casual conversation, requests that don't fit specialized domains"
+        }
+        return descriptions.get(agent_type, "General purpose agent")
 
     async def _create_strategic_plan(
         self, 
@@ -687,6 +887,15 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
         except Exception as e:
             logger.warning(f"Failed to store plan in context: {e}")
 
+    async def _load_user_preferences(self, user_id: str) -> Dict[str, Any]:
+        """Load user preferences from knowledge base."""
+        try:
+            kb_result = await self.knowledge_base.get_user_preferences(user_id)
+            return kb_result if kb_result else {}
+        except Exception as e:
+            logger.warning(f"Failed to load user preferences: {e}")
+            return {}
+
     async def _handle_simple_task(
         self, 
         user_input: str, 
@@ -707,7 +916,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
                 temperature=0.7
             )
             
-            response = await self.llm_service.generate_completion(request)
+            response = await self.llm_service.chat_completion(request)
             return response.content
             
         except Exception as e:
@@ -719,49 +928,47 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
         agent_type: AgentType, 
         user_input: str, 
         context: Dict[str, Any], 
-        deep_state: DeepAgentState
+        deep_state: 'DeepAgentStateManager'  # This is actually a manager, not the state itself
     ) -> str:
-        """Delegate to specialized ReAct agent."""
+        """Delegate to specialized agent."""
         try:
-            # Get specialized ReAct agent
-            if agent_type == AgentType.PRODUCTIVITY:
-                agent = self.react_factory.create_productivity_agent()
-            elif agent_type == AgentType.HEALTH:
-                agent = self.react_factory.create_health_agent()
-            elif agent_type == AgentType.FINANCE:
-                agent = self.react_factory.create_finance_agent()
-            else:
-                # Fallback to direct handling
+            # Get the specialized agent from registry
+            registry = get_agent_registry()
+            agents = registry.get_agents_by_type(agent_type)
+            
+            if not agents:
+                logger.warning(f"No agent found for type {agent_type}, falling back to simple handling")
                 return await self._handle_simple_task(user_input, context, deep_state)
             
-            # Prepare enhanced prompt with context
-            enhanced_prompt = f"""You are being delegated this task by the Enhanced Orchestrator.
-
-**User Request:** {user_input}
-
-**Context:** {context}
-
-**Available Deep State Files:**
-{chr(10).join(f'- {filename}' for filename in deep_state.files.keys())}
-
-Please provide a comprehensive response using your specialized tools and capabilities. Store any valuable insights or results in files for future reference."""
+            # Use the first registered agent of this type
+            specialist_agent = agents[0]
+            logger.info(f"[DELEGATION DEBUG] Delegating to specialist: {specialist_agent.agent_id} ({agent_type.value})")
             
-            # Execute the specialized agent
-            agent_state = {
-                "user_input": enhanced_prompt,
-                "context": context,
-                "deep_state": deep_state.to_dict()
-            }
+            # Prepare state for delegation
+            delegation_state = AgentState(
+                user_input=user_input,
+                context=context,
+                conversation_id=deep_state.state.get("conversation_id", "default"),
+                agent=specialist_agent.agent_id,
+                messages=[],
+                next_agent=None,
+                final_response=None
+            )
             
-            result = await agent.execute(agent_state)
+            # Execute the specialist agent
+            result = await specialist_agent.execute(delegation_state)
+            logger.info(f"[DELEGATION DEBUG] Specialist returned result type: {type(result)}")
             
             # Extract response
-            if isinstance(result, dict) and "response" in result:
-                return result["response"]
-            elif isinstance(result, str):
-                return result
+            if isinstance(result, dict):
+                response = result.get("final_response") or result.get("response") or str(result)
+            elif isinstance(result, AgentState):
+                response = result.final_response or "Task completed by specialist."
             else:
-                return "The specialist completed the task successfully."
+                response = str(result)
+            
+            logger.info(f"[DELEGATION DEBUG] Extracted response preview: {response[:200] if isinstance(response, str) else str(response)[:200]}")
+            return response
                 
         except Exception as e:
             logger.error(f"Specialist delegation failed: {e}")
@@ -953,7 +1160,7 @@ Please create a comprehensive, well-structured response that:
                 temperature=0.7
             )
             
-            response = await self.llm_service.generate_completion(request)
+            response = await self.llm_service.chat_completion(request)
             return response.content
             
         except Exception as e:

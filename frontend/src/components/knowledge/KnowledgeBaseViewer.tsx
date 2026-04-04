@@ -25,7 +25,7 @@ import { cn } from '@/lib/utils'
 interface KnowledgeEntry {
   entry_id: string
   user_id: string
-  entry_type: 'preference' | 'interaction' | 'pattern' | 'insight'
+  entry_type: 'preference' | 'user_preference' | 'interaction' | 'pattern' | 'insight' | 'memory' | string
   entry_sub_type: string
   category: string
   title: string
@@ -141,14 +141,16 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
   })
 
   const categories = ['all', ...new Set(entries.map(e => e.category))]
-  const types = ['all', 'preference', 'interaction', 'pattern', 'insight']
+  const types = ['all', ...new Set(entries.map(e => e.entry_type))]
 
   const getEntryIcon = (type: string) => {
     switch (type) {
       case 'preference': return User
+      case 'user_preference': return User
       case 'interaction': return Brain
       case 'pattern': return TrendingUp
       case 'insight': return BarChart3
+      case 'memory': return Database
       default: return Database
     }
   }
@@ -156,9 +158,11 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
   const getEntryColor = (type: string) => {
     switch (type) {
       case 'preference': return 'from-blue-500 to-blue-600'
+      case 'user_preference': return 'from-blue-500 to-blue-600'
       case 'interaction': return 'from-green-500 to-green-600'
       case 'pattern': return 'from-purple-500 to-purple-600'
       case 'insight': return 'from-orange-500 to-orange-600'
+      case 'memory': return 'from-cyan-500 to-cyan-600'
       default: return 'from-gray-500 to-gray-600'
     }
   }
@@ -229,11 +233,12 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
                 <User className="w-5 h-5 text-white" />
               </div>
               <div>
-                <p className="text-2xl font-bold">{stats.entries_by_type.preference || 0}</p>
+                <p className="text-2xl font-bold">{(stats.entries_by_type.preference || 0) + (stats.entries_by_type.user_preference || 0)}</p>
                 <p className="text-sm text-muted-foreground">Preferences</p>
               </div>
             </div>
           </Card>
+
           
           <Card className="p-4">
             <div className="flex items-center gap-3">
@@ -366,11 +371,10 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
                             size="icon" 
                             className="h-8 w-8"
                             onClick={() => {
-                              if (entry.entry_type === 'preference' && onEditPreferences) {
+                              if ((entry.entry_type === 'preference' || entry.entry_type === 'user_preference') && onEditPreferences) {
                                 onEditPreferences()
                               } else {
-                                console.log('Edit entry:', entry.entry_id)
-                                alert(`Edit functionality for ${entry.entry_type} entries coming soon!`)
+                                alert(`Editing for ${entry.entry_type} entries is not available yet.`)
                               }
                             }}
                           >

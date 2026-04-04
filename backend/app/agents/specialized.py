@@ -317,16 +317,23 @@ class ProductivityAgent(BaseAgent):
     async def _handle_task_management(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
         """Handle task management requests with personalized context."""
         try:
-            from .prompts import PromptLibrary
+            # Use enhanced prompts for better responses
+            try:
+                from .enhanced_prompts import EnhancedPromptLibrary
+                system_prompt = EnhancedPromptLibrary.DEEP_AGENT_PROMPTS.get(
+                    AgentType.PRODUCTIVITY,
+                    EnhancedPromptLibrary.DEEP_AGENT_PROMPTS[AgentType.GENERAL]
+                )
+            except ImportError:
+                # Fallback to regular prompts
+                from .prompts import PromptLibrary
+                system_prompt = PromptLibrary.build_context_aware_prompt(
+                    agent_type=AgentType.PRODUCTIVITY,
+                    user_preferences=user_preferences or {},
+                    current_context={"task_type": "task_management"}
+                )
             
             task_context = self._build_productivity_context(context, "tasks")
-            
-            # Build context-aware system prompt
-            system_prompt = PromptLibrary.build_context_aware_prompt(
-                agent_type=AgentType.PRODUCTIVITY,
-                user_preferences=user_preferences or {},
-                current_context={"task_type": "task_management"}
-            )
             
             llm_service = await get_llm_service()
             if not llm_service:
@@ -377,6 +384,10 @@ Use emojis and format nicely with actionable task management advice.
             # Check if this is a leetcode-specific request (problems, today's problems, etc.)
             is_leetcode_request = any(keyword in user_input.lower() for keyword in ["problem", "leetcode", "coding", "algorithm"])
             
+            logger.info(f"[LEETCODE DEBUG] is_leetcode_request: {is_leetcode_request}")
+            logger.info(f"[LEETCODE DEBUG] user_preferences type: {type(user_preferences)}")
+            logger.info(f"[LEETCODE DEBUG] user_preferences: {user_preferences}")
+            
             # If user has goals and is asking for problems/specific help
             has_goals = False
             leetcode_data = None
@@ -385,41 +396,48 @@ Use emojis and format nicely with actionable task management advice.
                 existing_goals = productivity_prefs.get("goals", [])
                 has_goals = len(existing_goals) > 0
                 
+                logger.info(f"[LEETCODE DEBUG] has_goals: {has_goals}, goals: {existing_goals}")
+                
                 # If asking for problems, get specific leetcode problems
                 if is_leetcode_request and has_goals:
+                    logger.info(f"[LEETCODE DEBUG] Calling LeetcodeTools.get_todays_problems")
                     leetcode_data = LeetcodeTools.get_todays_problems(existing_goals, count=2)
+                    logger.info(f"[LEETCODE DEBUG] leetcode_data: {leetcode_data}")
                     
-                    # If we successfully got problems, format and return with personality
+                    # If we successfully got problems, format and return them DIRECTLY
                     if leetcode_data and not leetcode_data.get("error"):
-                        problems_formatted = LeetcodeTools.format_problems_for_response(leetcode_data)
+                        problems = leetcode_data.get("problems", [])
+                        milestone = leetcode_data.get("milestone", "Day 1")
+                        goal_title = leetcode_data.get("goal", "Leetcode")
                         
-                        # Build context-aware system prompt
-                        system_prompt = PromptLibrary.build_context_aware_prompt(
-                            agent_type=AgentType.PRODUCTIVITY,
-                            user_preferences=user_preferences,
-                            current_context={"task_type": "leetcode_problems"}
-                        )
+                        # Get mentor style for personality
+                        mentor_style = user_preferences.get("mentor", {}).get("style", "Direct")
                         
-                        user_prompt = f"""
-The user asked for leetcode problems. Here are today's problems based on their goal:
-
-{problems_formatted}
-
-Present these problems with your persona and communication style. Be specific, engaging, and reference their goal details.
-Keep it concise but add personality. Encourage them to tackle these problems.
-"""
+                        # Format response directly with actual problems (no LLM call needed!)
+                        if mentor_style == "Sarcastic Poet":
+                            intro = f"Ah, ready to tackle {milestone}? How delightfully ambitious! 🎯\n\n"
+                        elif mentor_style == "Friendly":
+                            intro = f"Hey there! Here are your {milestone} problems! Let's do this! 💪\n\n"
+                        else:
+                            intro = f"Here are your {milestone} problems:\n\n"
                         
-                        request = CompletionRequest(
-                            messages=[
-                                ChatMessage(role="system", content=system_prompt),
-                                ChatMessage(role="user", content=user_prompt)
-                            ],
-                            temperature=0.8,  # Higher for more creative/sarcastic responses
-                            max_tokens=800
-                        )
+                        response_parts = [intro]
+                        for i, problem in enumerate(problems, 1):
+                            response_parts.append(
+                                f"**{i}. {problem['name']}** ({problem['difficulty']})\n"
+                                f"   📍 {problem['url']}\n"
+                                f"   🏷️ Topics: {', '.join(problem['topics'])}\n"
+                                f"   💡 {problem['description']}\n"
+                            )
                         
-                        response = await llm_service.chat_completion(request)
-                        return response.content
+                        if mentor_style == "Sarcastic Poet":
+                            response_parts.append(
+                                f"\n{leetcode_data.get('progress_tip', '')} Or you could scroll social media... your choice. 😏"
+                            )
+                        else:
+                            response_parts.append(f"\n{leetcode_data.get('progress_tip', '')}")
+                        
+                        return "\n".join(response_parts)
             
             # Standard goal-setting response (non-leetcode or no problems found)
             # Build context-aware system prompt with user preferences

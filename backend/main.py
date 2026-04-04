@@ -4,9 +4,10 @@ import os
 import json
 import asyncio
 import logging
+import urllib.request
 from datetime import datetime
 from contextlib import asynccontextmanager
-from typing import Optional, Any
+from typing import Optional, Any, List
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -17,16 +18,19 @@ from app.langgraph.workflow import AgentGraphWorkflow
 from app.agents.registry import get_agent_registry
 from app.api.knowledge import router as knowledge_router
 from app.api.approval import router as approval_router
-from app.agents.factory import initialize_agents
+from app.agents.factory import initialize_agents, AgentFactory
 from app.agents.base import AgentType
 from app.llm import service as llm_service_module
 from app.llm.service import LLMService, get_llm_service
+from app.llm.base import LLMProviderType
 from app.llm.config import LLMConfig
+from app.llm.openai_provider import OpenAIProvider
+from app.llm.ollama_provider import OllamaProvider
 from app.utils.logging import get_api_category_logger
 from app.services.config_storage import get_config_storage
 from app.services.interaction_recorder import get_interaction_recorder
 from app.services.knowledge_base import get_knowledge_base_service
-from app.llm.service import get_llm_service
+from langgraph.graph import StateGraph, START, END
 
 # Load environment variables from .env file
 load_dotenv()
@@ -35,7 +39,7 @@ load_dotenv()
 logger = get_api_category_logger("main")
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_app: FastAPI):
     # Initialize agents (LLM service will be initialized on-demand)
     await initialize_agents()
     
@@ -44,7 +48,7 @@ async def lifespan(app: FastAPI):
     try:
         knowledge_service = get_knowledge_base_service()
         llm_service = get_llm_service()
-        recorder = get_interaction_recorder(knowledge_service, llm_service)
+        _ = get_interaction_recorder(knowledge_service, llm_service)
         logger.info("Successfully initialized interaction recorder")
     except Exception as e:
         logger.warning(f"Could not initialize interaction recorder: {e}")
@@ -68,10 +72,24 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+def parse_csv_env(name: str, default: str) -> List[str]:
+    raw = os.getenv(name, default)
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+cors_allowed_origins = parse_csv_env(
+    "CORS_ALLOWED_ORIGINS",
+    "http://localhost:3000,http://localhost:5173,http://localhost:8088"
+)
+cors_allowed_origin_regex = os.getenv(
+    "CORS_ALLOWED_ORIGIN_REGEX",
+    r"https://.*\.vercel\.app|https://.*\.netlify\.app"
+).strip() or None
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Frontend URL
+    allow_origins=cors_allowed_origins,
+    allow_origin_regex=cors_allowed_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -180,7 +198,7 @@ async def chat_endpoint(request: ChatRequest):
             timestamp=datetime.now()
         )
     except Exception as e:
-        logging.error(f"Orchestrator Error: {e}")
+        logging.error("Orchestrator Error: %s", e)
         return ChatResponse(
             response=f"I'm the orchestrator agent. I encountered an issue: {str(e)}.",
             agent="orchestrator",
@@ -244,8 +262,6 @@ class ProviderSwitchRequest(BaseModel):
 @app.post("/api/llm/switch-provider")
 async def switch_provider(request: ProviderSwitchRequest):
     try:
-        from app.llm.base import LLMProviderType
-        
         # Validate provider type
         if request.provider not in ['openai', 'ollama']:
             raise HTTPException(status_code=400, detail="Invalid provider type")
@@ -288,7 +304,6 @@ async def switch_provider(request: ProviderSwitchRequest):
         try:
             if provider_type == LLMProviderType.OLLAMA:
                 # Create Ollama provider directly
-                from app.llm.ollama_provider import OllamaProvider
                 provider = OllamaProvider(
                     endpoint=config.ollama_endpoint,
                     model=config.ollama_model,
@@ -310,7 +325,6 @@ async def switch_provider(request: ProviderSwitchRequest):
                     }
                 
                 # Create OpenAI provider directly
-                from app.llm.openai_provider import OpenAIProvider
                 provider = OpenAIProvider(
                     api_key=config.openai_api_key,
                     model=config.openai_model,
@@ -343,7 +357,7 @@ async def switch_provider(request: ProviderSwitchRequest):
             
     except Exception as e:
         print(f"Provider switch error: {e}")
-        raise HTTPException(status_code=500, detail=f"Provider switch failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Provider switch failed: {str(e)}") from e
 
 class ConnectionTestRequest(BaseModel):
     provider: str
@@ -353,8 +367,6 @@ class ConnectionTestRequest(BaseModel):
 async def get_llm_status():
     """Get current LLM provider status."""
     try:
-        from app.llm import service as llm_service_module
-        
         # Get current service if available
         current_service = llm_service_module._llm_service
         
@@ -388,11 +400,13 @@ async def get_llm_status():
         
         # Always check Ollama availability
         try:
-            import requests
-            response = requests.get("http://localhost:11434/api/tags", timeout=2)
-            if response.status_code == 200:
+            with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2) as response:
+                if response.status != 200:
+                    return status
+
                 status["providers"]["ollama"]["healthy"] = True
-                tags_data = response.json()
+                response_payload = response.read().decode("utf-8")
+                tags_data = json.loads(response_payload)
                 if tags_data.get("models"):
                     status["providers"]["ollama"]["model"] = tags_data["models"][0]["name"]
         except Exception:
@@ -413,8 +427,6 @@ async def get_llm_status():
 @app.post("/api/llm/test-connection")
 async def test_connection(request: ConnectionTestRequest):
     try:
-        from app.llm.base import LLMProviderType
-        
         if request.provider not in ['openai', 'ollama']:
             raise HTTPException(status_code=400, detail="Invalid provider type")
         
@@ -433,8 +445,6 @@ async def test_connection(request: ConnectionTestRequest):
                         "error": "OpenAI API key is required for testing"
                     }
                 
-                from app.llm.openai_provider import OpenAIProvider
-                
                 # Use provided model or default
                 model = request.config.get('model', 'gpt-3.5-turbo') if request.config else 'gpt-3.5-turbo'
                 
@@ -447,22 +457,21 @@ async def test_connection(request: ConnectionTestRequest):
                 
                 # Initialize and test the provider
                 await test_provider.initialize()
-                health_check = await test_provider.health_check()
+                provider_health = await test_provider.health_check()
                 
                 response_time = (datetime.now() - start_time).total_seconds() * 1000
                 
                 return {
-                    "healthy": health_check.is_healthy,
+                    "healthy": provider_health.is_healthy,
                     "responseTime": int(response_time),
-                    "model": health_check.model,
-                    "error": health_check.error if not health_check.is_healthy else None
+                    "model": provider_health.model,
+                    "error": provider_health.error if not provider_health.is_healthy else None
                 }
                 
             elif provider_type == LLMProviderType.OLLAMA:
                 # Use provided endpoint or default
                 endpoint = request.config.get('endpoint', 'http://localhost:11434') if request.config else 'http://localhost:11434'
-                
-                from app.llm.ollama_provider import OllamaProvider
+
                 test_provider = OllamaProvider(
                     endpoint=endpoint,
                     model="llama3.2:3b",  # Use default model for testing
@@ -472,15 +481,15 @@ async def test_connection(request: ConnectionTestRequest):
                 
                 # Initialize and test the provider
                 await test_provider.initialize()
-                health_check = await test_provider.health_check()
+                provider_health = await test_provider.health_check()
                 
                 response_time = (datetime.now() - start_time).total_seconds() * 1000
                 
                 return {
-                    "healthy": health_check.is_healthy,
+                    "healthy": provider_health.is_healthy,
                     "responseTime": int(response_time),
-                    "model": health_check.model,
-                    "error": health_check.error if not health_check.is_healthy else None
+                    "model": provider_health.model,
+                    "error": provider_health.error if not provider_health.is_healthy else None
                 }
                 
         except Exception as e:
@@ -507,8 +516,6 @@ class ConfigUpdateRequest(BaseModel):
 async def get_config():
     """Get current stored configuration."""
     try:
-        from app.services.config_storage import get_config_storage
-        
         config_storage = get_config_storage()
         
         return {
@@ -518,14 +525,12 @@ async def get_config():
         }
     except Exception as e:
         logger.error(f"Error getting configuration: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get configuration: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get configuration: {str(e)}") from e
 
 @app.post("/api/config")
 async def update_config(request: ConfigUpdateRequest):
     """Update stored configuration."""
     try:
-        from app.services.config_storage import get_config_storage
-        
         config_storage = get_config_storage()
         
         # Update configurations if provided
@@ -544,7 +549,7 @@ async def update_config(request: ConfigUpdateRequest):
         }
     except Exception as e:
         logger.error(f"Error updating configuration: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to update configuration: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update configuration: {str(e)}") from e
 
 # Global workflow instance
 _workflow = None
@@ -591,7 +596,6 @@ def get_graph_for_dev():
         # If no agents, try to initialize them
         if not agents:
             logger.info("No agents found, initializing agent ecosystem for LangGraph dev")
-            import asyncio
             
             # Create a new event loop if none exists (for LangGraph dev context)
             try:
@@ -601,7 +605,6 @@ def get_graph_for_dev():
                 asyncio.set_event_loop(loop)
             
             # Initialize agents synchronously for LangGraph dev
-            from app.agents.factory import AgentFactory
             factory = AgentFactory()
             
             # Run initialization in the event loop
@@ -610,8 +613,7 @@ def get_graph_for_dev():
                 logger.warning("Event loop already running, attempting direct agent creation")
                 try:
                     # Try to create agents directly without async
-                    from app.agents.base import AgentType
-                    from app.agents.orchestrator import OrchestratorAgent
+                    from app.agents.enhanced_orchestrator import EnhancedOrchestratorAgent as OrchestratorAgent
                     from app.agents.specialized import HealthAgent, ProductivityAgent
                     
                     # Create and register agents directly
@@ -651,7 +653,6 @@ def get_graph_for_dev():
         else:
             logger.warning("Still no agents found after initialization attempt, creating placeholder graph")
             # Fallback: create a simple placeholder graph
-            from langgraph.graph import StateGraph, START, END
             simple_graph = StateGraph(dict)
             simple_graph.add_node("placeholder", lambda x: {"response": "Agents not yet loaded"})
             simple_graph.add_edge(START, "placeholder")
@@ -664,7 +665,6 @@ def get_graph_for_dev():
     except Exception as e:
         logger.warning(f"Error creating graph for dev: {e}")
         # Fallback: create a simple placeholder graph
-        from langgraph.graph import StateGraph, START, END
         simple_graph = StateGraph(dict)
         simple_graph.add_node("error_placeholder", lambda x: {"response": f"Graph creation error: {str(e)}"})
         simple_graph.add_edge(START, "error_placeholder")
@@ -673,10 +673,6 @@ def get_graph_for_dev():
         # Cache the error fallback graph
         _dev_graph_cache = simple_graph.compile()
         return _dev_graph_cache
-        simple_graph.add_node("error", lambda x: {"response": f"Error: {str(e)}"})
-        simple_graph.add_edge(START, "error")
-        simple_graph.add_edge("error", END)
-        return simple_graph.compile()
 
 # Export the graph factory function for langgraph dev
 graph = get_graph_for_dev

@@ -155,7 +155,7 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({ onComplete, clas
       };
 
       // Send to backend
-      const response = await fetch('http://localhost:8000/api/knowledge/onboarding', {
+      const response = await fetch('/api/knowledge/onboarding', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

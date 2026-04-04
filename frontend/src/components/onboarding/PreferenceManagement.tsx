@@ -35,7 +35,7 @@ export const PreferenceManagement: React.FC<PreferenceManagementProps> = ({ onCl
     setIsLoading(true);
     try {
       // Try to load from backend first
-      const response = await fetch('http://localhost:8000/api/knowledge/preferences');
+      const response = await fetch('/api/knowledge/preferences');
       if (response.ok) {
         const data = await response.json();
         setPreferences(data);
@@ -132,7 +132,7 @@ export const PreferenceManagement: React.FC<PreferenceManagementProps> = ({ onCl
 
     // Try to save to backend
     try {
-      await fetch('http://localhost:8000/api/knowledge/preferences', {
+      await fetch('/api/knowledge/preferences', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(prefs),

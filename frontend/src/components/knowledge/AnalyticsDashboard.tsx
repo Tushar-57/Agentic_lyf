@@ -19,10 +19,8 @@ import {
 } from 'recharts'
 import {
   TrendingUp,
-  TrendingDown,
   Activity,
   Brain,
-  Calendar,
   Target,
   Zap,
   Heart,
@@ -76,85 +74,16 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   const loadAnalyticsData = async () => {
     setIsLoading(true)
     try {
-      // In a real implementation, this would fetch from the backend
-      // For now, we'll use demo data
-      await new Promise(resolve => setTimeout(resolve, 1000)) // Simulate API call
-      
-      setAnalyticsData({
-        interactions: {
-          daily: [
-            { date: '2024-01-01', count: 12, agent: 'orchestrator' },
-            { date: '2024-01-02', count: 8, agent: 'productivity' },
-            { date: '2024-01-03', count: 15, agent: 'health' },
-            { date: '2024-01-04', count: 6, agent: 'finance' },
-            { date: '2024-01-05', count: 11, agent: 'journal' },
-            { date: '2024-01-06', count: 9, agent: 'orchestrator' },
-            { date: '2024-01-07', count: 14, agent: 'productivity' }
-          ],
-          weekly: [
-            { week: 'Week 1', count: 45 },
-            { week: 'Week 2', count: 52 },
-            { week: 'Week 3', count: 38 },
-            { week: 'Week 4', count: 61 }
-          ],
-          by_agent: [
-            { agent: 'Orchestrator', count: 45, color: '#3b82f6' },
-            { agent: 'Productivity', count: 32, color: '#f59e0b' },
-            { agent: 'Health', count: 28, color: '#10b981' },
-            { agent: 'Finance', count: 18, color: '#06b6d4' },
-            { agent: 'Journal', count: 22, color: '#8b5cf6' },
-            { agent: 'Scheduling', count: 15, color: '#ec4899' }
-          ]
-        },
-        patterns: {
-          most_active_hours: [
-            { hour: 6, interactions: 2 },
-            { hour: 7, interactions: 5 },
-            { hour: 8, interactions: 12 },
-            { hour: 9, interactions: 18 },
-            { hour: 10, interactions: 15 },
-            { hour: 11, interactions: 22 },
-            { hour: 12, interactions: 8 },
-            { hour: 13, interactions: 6 },
-            { hour: 14, interactions: 14 },
-            { hour: 15, interactions: 19 },
-            { hour: 16, interactions: 16 },
-            { hour: 17, interactions: 12 },
-            { hour: 18, interactions: 9 },
-            { hour: 19, interactions: 7 },
-            { hour: 20, interactions: 11 },
-            { hour: 21, interactions: 15 },
-            { hour: 22, interactions: 4 },
-            { hour: 23, interactions: 2 }
-          ],
-          preference_changes: [
-            { date: '2024-01-01', category: 'productivity', changes: 3 },
-            { date: '2024-01-02', category: 'health', changes: 1 },
-            { date: '2024-01-03', category: 'finance', changes: 2 },
-            { date: '2024-01-04', category: 'journal', changes: 1 },
-            { date: '2024-01-05', category: 'productivity', changes: 2 }
-          ],
-          knowledge_growth: [
-            { date: '2024-01-01', total_entries: 10, new_entries: 3 },
-            { date: '2024-01-02', total_entries: 13, new_entries: 3 },
-            { date: '2024-01-03', total_entries: 18, new_entries: 5 },
-            { date: '2024-01-04', total_entries: 21, new_entries: 3 },
-            { date: '2024-01-05', total_entries: 26, new_entries: 5 },
-            { date: '2024-01-06', total_entries: 29, new_entries: 3 },
-            { date: '2024-01-07', total_entries: 34, new_entries: 5 }
-          ]
-        },
-        insights: {
-          total_interactions: 160,
-          most_used_agent: 'Orchestrator',
-          avg_daily_interactions: 22.8,
-          knowledge_base_size: 34,
-          preference_stability: 0.85,
-          learning_velocity: 4.2
-        }
-      })
+      const response = await fetch(`/api/knowledge/analytics?range=${selectedTimeRange}`)
+      if (!response.ok) {
+        throw new Error(`Analytics request failed with status ${response.status}`)
+      }
+
+      const data = await response.json()
+      setAnalyticsData(data)
     } catch (error) {
       console.error('Failed to load analytics data:', error)
+      setAnalyticsData(null)
     } finally {
       setIsLoading(false)
     }

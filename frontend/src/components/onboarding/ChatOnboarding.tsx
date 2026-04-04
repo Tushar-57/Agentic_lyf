@@ -69,7 +69,7 @@ const ChatOnboarding: React.FC<ChatOnboardingProps> = ({ onComplete }) => {
   useEffect(() => {
     const checkProfile = async () => {
       try {
-        const response = await fetch('http://localhost:8000/api/knowledge/onboarding/profile');
+        const response = await fetch('/api/knowledge/onboarding/profile');
         if (response.ok) {
           const data = await response.json();
           // Check if profile has essential data
@@ -240,7 +240,7 @@ const ChatOnboarding: React.FC<ChatOnboardingProps> = ({ onComplete }) => {
     // Send to backend
     try {
       console.log('Sending payload:', JSON.stringify(onboardingData, null, 2));
-      const response = await fetch('http://localhost:8000/api/knowledge/onboarding', {
+      const response = await fetch('/api/knowledge/onboarding', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -388,7 +388,7 @@ const ChatOnboarding: React.FC<ChatOnboardingProps> = ({ onComplete }) => {
   const handleProfileSave = async (profile: any) => {
     // Refresh the profile after saving
     try {
-      const response = await fetch('http://localhost:8000/api/knowledge/onboarding/profile');
+      const response = await fetch('/api/knowledge/onboarding/profile');
       if (response.ok) {
         const data = await response.json();
         setExistingProfile(data);

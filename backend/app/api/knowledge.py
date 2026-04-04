@@ -3,6 +3,8 @@ API endpoints for knowledge base operations.
 """
 
 import logging
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -66,7 +68,7 @@ async def create_entry(request: CreateEntryRequest):
         entry = await kb_service.create_entry(
             entry_type=request.entry_type,
             category=request.category,
-            entry_sub_type=KnowledgeEntrySubType,
+            entry_sub_type=request.entry_sub_type,
             title=request.title,
             content=request.content,
             metadata=request.metadata,
@@ -333,6 +335,215 @@ class OnboardingData(BaseModel):
     preferences: List[str]
     mentor: Dict[str, Any]
     planner: Dict[str, Any]
+
+
+def _resolve_date_range(time_range: str) -> int:
+    """Resolve time range token to number of days."""
+    range_map = {
+        "7d": 7,
+        "30d": 30,
+        "90d": 90,
+    }
+    return range_map.get(time_range, 30)
+
+
+def _format_iso_date(dt: datetime) -> str:
+    """Format datetime as ISO date string (YYYY-MM-DD)."""
+    return dt.date().isoformat()
+
+
+def _week_bucket_label(dt: datetime) -> str:
+    """Build a stable weekly bucket label."""
+    iso_year, iso_week, _ = dt.isocalendar()
+    return f"{iso_year}-W{iso_week:02d}"
+
+
+@router.get("/analytics")
+async def get_knowledge_analytics(
+    time_range: str = Query("30d", alias="range", regex="^(7d|30d|90d)$", description="Analytics range")
+):
+    """Return live analytics data computed from persisted knowledge entries."""
+    try:
+        kb_service = get_knowledge_base_service()
+        all_entries = await kb_service.get_all_entries()
+
+        days = _resolve_date_range(time_range)
+        now = datetime.now(timezone.utc)
+        start = now - timedelta(days=days - 1)
+
+        # Normalize datetimes and sort once for deterministic analytics output.
+        entries_with_ts = []
+        for entry in all_entries:
+            entry_ts = entry.created_at
+            if entry_ts.tzinfo is None:
+                entry_ts = entry_ts.replace(tzinfo=timezone.utc)
+            entries_with_ts.append((entry, entry_ts))
+
+        entries_with_ts.sort(key=lambda item: item[1])
+
+        in_range_entries = [(entry, ts) for entry, ts in entries_with_ts if ts >= start]
+        interaction_entries = [
+            (entry, ts)
+            for entry, ts in in_range_entries
+            if entry.entry_type == KnowledgeEntryType.INTERACTION
+        ]
+
+        # Daily interaction counts with dominant agent for the day.
+        daily_counts: Dict[str, int] = defaultdict(int)
+        daily_agent_counts: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        hourly_counts: Dict[int, int] = defaultdict(int)
+        agent_counts: Dict[str, int] = defaultdict(int)
+
+        for entry, ts in interaction_entries:
+            day_key = _format_iso_date(ts)
+            agent_name = (
+                (entry.metadata or {}).get("agent_type")
+                or entry.category
+                or "unknown"
+            )
+            normalized_agent = str(agent_name).strip().lower() or "unknown"
+            daily_counts[day_key] += 1
+            daily_agent_counts[day_key][normalized_agent] += 1
+            hourly_counts[ts.hour] += 1
+            agent_counts[normalized_agent] += 1
+
+        daily_interactions = []
+        knowledge_growth = []
+        preference_changes = []
+
+        total_up_to_day = 0
+        cursor = start
+        end_date = now.date()
+
+        # Pre-compute counts by day for all entries and preference-like entries.
+        entries_by_day: Dict[str, int] = defaultdict(int)
+        pref_by_day: Dict[str, int] = defaultdict(int)
+        pref_category_by_day: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
+
+        for entry, ts in entries_with_ts:
+            day_key = _format_iso_date(ts)
+            entries_by_day[day_key] += 1
+
+            if entry.entry_type in {KnowledgeEntryType.PREFERENCE, KnowledgeEntryType.USER_PREFERENCE}:
+                pref_by_day[day_key] += 1
+                pref_category_by_day[day_key][entry.category] += 1
+
+        # Compute cumulative total through the day before the window start.
+        for _, ts in entries_with_ts:
+            if ts.date() < start.date():
+                total_up_to_day += 1
+
+        while cursor.date() <= end_date:
+            day_key = cursor.date().isoformat()
+
+            dominant_agent = "none"
+            if daily_agent_counts.get(day_key):
+                dominant_agent = max(
+                    daily_agent_counts[day_key].items(),
+                    key=lambda item: item[1],
+                )[0]
+
+            daily_interactions.append({
+                "date": day_key,
+                "count": daily_counts.get(day_key, 0),
+                "agent": dominant_agent,
+            })
+
+            new_entries_today = entries_by_day.get(day_key, 0)
+            total_up_to_day += new_entries_today
+            knowledge_growth.append({
+                "date": day_key,
+                "total_entries": total_up_to_day,
+                "new_entries": new_entries_today,
+            })
+
+            top_pref_category = "none"
+            if pref_category_by_day.get(day_key):
+                top_pref_category = max(
+                    pref_category_by_day[day_key].items(),
+                    key=lambda item: item[1],
+                )[0]
+
+            preference_changes.append({
+                "date": day_key,
+                "category": top_pref_category,
+                "changes": pref_by_day.get(day_key, 0),
+            })
+
+            cursor += timedelta(days=1)
+
+        weekly_map: Dict[str, int] = defaultdict(int)
+        for item in daily_interactions:
+            dt = datetime.fromisoformat(item["date"])
+            weekly_map[_week_bucket_label(dt)] += item["count"]
+
+        weekly_interactions = [
+            {"week": week_label, "count": count}
+            for week_label, count in sorted(weekly_map.items())
+        ]
+
+        agent_palette = [
+            "#3b82f6",
+            "#f59e0b",
+            "#10b981",
+            "#06b6d4",
+            "#8b5cf6",
+            "#ec4899",
+            "#ef4444",
+            "#22c55e",
+        ]
+
+        sorted_agent_counts = sorted(agent_counts.items(), key=lambda item: item[1], reverse=True)
+        by_agent = [
+            {
+                "agent": agent.replace("_", " ").title(),
+                "count": count,
+                "color": agent_palette[idx % len(agent_palette)],
+            }
+            for idx, (agent, count) in enumerate(sorted_agent_counts)
+        ]
+
+        most_used_agent = by_agent[0]["agent"] if by_agent else "N/A"
+        total_interactions = len(interaction_entries)
+        avg_daily_interactions = total_interactions / max(days, 1)
+
+        total_pref_changes = sum(item["changes"] for item in preference_changes)
+        change_frequency = total_pref_changes / max(days, 1)
+        preference_stability = max(0.0, min(1.0, 1.0 - min(change_frequency / 2.0, 1.0)))
+
+        new_entries_in_range = len(in_range_entries)
+        learning_velocity = new_entries_in_range / max(days, 1)
+
+        most_active_hours = [
+            {
+                "hour": hour,
+                "interactions": hourly_counts.get(hour, 0),
+            }
+            for hour in range(24)
+        ]
+
+        return {
+            "interactions": {
+                "daily": daily_interactions,
+                "weekly": weekly_interactions,
+                "by_agent": by_agent,
+            },
+            "patterns": {
+                "most_active_hours": most_active_hours,
+                "preference_changes": preference_changes,
+                "knowledge_growth": knowledge_growth,
+            },
+            "insights": {
+                "total_interactions": total_interactions,
+                "most_used_agent": most_used_agent,
+                "avg_daily_interactions": round(avg_daily_interactions, 2),
+                "knowledge_base_size": len(all_entries),
+                "preference_stability": round(preference_stability, 2),
+                "learning_velocity": round(learning_velocity, 2),
+            },
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get analytics data: {str(e)}")
 
 
 @router.post("/onboarding")

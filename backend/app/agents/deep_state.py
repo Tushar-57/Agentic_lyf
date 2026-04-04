@@ -6,7 +6,8 @@ State management for Deep Agents with file-based context offloading,
 TODO management, and isolated agent contexts.
 """
 
-from typing import Dict, List, Any, Optional, TypedDict, Union
+from typing import Dict, List, Any, Optional, Union
+from typing_extensions import TypedDict
 from datetime import datetime
 import uuid
 from enum import Enum
@@ -195,6 +196,15 @@ class DeepAgentStateManager:
     
     def __init__(self, initial_state: Optional[DeepAgentState] = None):
         self.state = initial_state or self._create_empty_state()
+        self._conversation_managers: Dict[str, 'DeepAgentStateManager'] = {}
+    
+    def get_or_create_state(self, conversation_id: str) -> 'DeepAgentStateManager':
+        """Get or create state manager for a specific conversation."""
+        if conversation_id not in self._conversation_managers:
+            state = self._create_empty_state()
+            state["conversation_id"] = conversation_id
+            self._conversation_managers[conversation_id] = DeepAgentStateManager(state)
+        return self._conversation_managers[conversation_id]
     
     def _create_empty_state(self) -> DeepAgentState:
         """Create an empty state structure."""
@@ -211,6 +221,18 @@ class DeepAgentStateManager:
             context={},
             metadata={}
         )
+    
+    # Message operations
+    def add_message(self, role: str, content: str) -> None:
+        """Add a message to the state."""
+        from langchain_core.messages import HumanMessage, AIMessage
+        
+        if role == "user":
+            message = HumanMessage(content=content)
+        else:
+            message = AIMessage(content=content)
+        
+        self.state["messages"].append(message)
     
     # File operations
     def store_file(self, filename: str, content: str) -> None:
@@ -333,6 +355,28 @@ class DeepAgentStateManager:
     def get_state(self) -> DeepAgentState:
         """Get the current state."""
         return self.state
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert state to dictionary for serialization."""
+        return {
+            "messages": [msg.content if hasattr(msg, 'content') else str(msg) for msg in self.state["messages"]],
+            "files": self.state["files"],
+            "todos": self.state["todos"],
+            "current_agent": self.state["current_agent"],
+            "agent_contexts": self.state["agent_contexts"],
+            "approval_requests": self.state["approval_requests"],
+            "user_preferences": self.state["user_preferences"],
+            "session_id": self.state["session_id"],
+            "conversation_id": self.state["conversation_id"],
+            "context": self.state["context"],
+            "metadata": self.state["metadata"]
+        }
+    
+    def update_state(self, conversation_id: str, state_manager: 'DeepAgentStateManager') -> None:
+        """Update state for a conversation (no-op since managers are isolated)."""
+        # This is a no-op because each conversation already has its own manager instance
+        # The state is automatically persisted in the conversation-specific manager
+        pass
     
     def update_context(self, key: str, value: Any) -> None:
         """Update context data."""

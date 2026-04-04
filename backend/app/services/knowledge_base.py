@@ -1,9 +1,11 @@
 """
 Knowledge base service providing CRUD operations and RAG functionality.
 """
+import hashlib
 import json
 import uuid
 import logging
+import re
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
@@ -29,6 +31,36 @@ class KnowledgeBaseService:
     def __init__(self):
         self.vector_store = get_vector_store()
         self._user_preferences: Optional[UserPreferences] = None
+
+    def _generate_fallback_embedding(self, text: str) -> List[float]:
+        """
+        Build a deterministic lexical embedding when provider embeddings are unavailable.
+
+        This keeps retrieval and visualization usable instead of collapsing all vectors to zeros.
+        """
+        dimension = self.vector_store.dimension
+        vector = [0.0] * dimension
+
+        tokens = re.findall(r"[a-zA-Z0-9_]+", text.lower())
+        if not tokens:
+            tokens = ["empty"]
+
+        for token in tokens:
+            digest = hashlib.sha256(token.encode("utf-8")).digest()
+            for offset in range(0, len(digest), 4):
+                chunk = digest[offset:offset + 4]
+                if len(chunk) < 4:
+                    continue
+                value = int.from_bytes(chunk, byteorder="big", signed=False)
+                idx = value % dimension
+                sign = 1.0 if (value & 1) == 0 else -1.0
+                vector[idx] += sign
+
+        norm = sum(value * value for value in vector) ** 0.5
+        if norm == 0:
+            return vector
+
+        return [value / norm for value in vector]
     
     async def _generate_embedding(self, text: str) -> List[float]:
         """Generate embedding for text using the configured LLM provider."""
@@ -36,9 +68,8 @@ class KnowledgeBaseService:
             # Check if LLM service is already initialized before trying to get it
             from ..llm import service as llm_service_module
             if not llm_service_module._llm_service or not llm_service_module._llm_service._initialized:
-                logger.warning("LLM service not initialized, using dummy embedding")
-                # Return a dummy embedding to allow functionality to continue
-                return [0.0] * 1536  # Standard embedding dimension for compatibility
+                logger.warning("LLM service not initialized, using deterministic fallback embedding")
+                return self._generate_fallback_embedding(text)
             
             llm_service = llm_service_module._llm_service
             
@@ -47,12 +78,10 @@ class KnowledgeBaseService:
             return response.embedding
         except ImportError as e:
             logger.warning(f"Missing dependencies for embedding generation: {e}")
-            # Return a dummy embedding for graceful degradation
-            return [0.0] * 1536
+            return self._generate_fallback_embedding(text)
         except Exception as e:
             logger.warning(f"Embedding generation failed: {e}")
-            # Return a dummy embedding for graceful degradation
-            return [0.0] * 1536
+            return self._generate_fallback_embedding(text)
 
     async def search_knowledge(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Search for relevant knowledge entries based on a query."""

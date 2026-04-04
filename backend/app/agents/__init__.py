@@ -13,10 +13,15 @@ This module contains:
 from .base import BaseAgent, AgentType, AgentCapability, AgentStatus, AgentMessage, AgentState
 from .registry import get_agent_registry, reset_agent_registry
 from .factory import AgentFactory
-from .orchestrator import OrchestratorAgent, create_orchestrator_agent
+from .enhanced_orchestrator import EnhancedOrchestratorAgent as OrchestratorAgent
 from .specialized_agents import HealthAgent, ProductivityAgent, FinanceAgent, SchedulingAgent, JournalAgent
 from .prompts import get_agent_prompt, PromptLibrary
 from .communication import get_communication_protocol, start_communication_protocol, MessageType
+
+# Create orchestrator factory function
+def create_orchestrator_agent() -> OrchestratorAgent:
+    """Factory function to create an enhanced orchestrator agent."""
+    return OrchestratorAgent()
 
 __all__ = [
     # Core classes

@@ -64,3 +64,5 @@ temp/
 *.tmp
 *.bak
 *.backup
+.vercel
+.env*.local

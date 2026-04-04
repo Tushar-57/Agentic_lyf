@@ -37,7 +37,7 @@ export const ApprovalInterface = ({ onApprovalChange }: ApprovalInterfaceProps) 
 
   const fetchPendingInteractions = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/approval/pending')
+      const response = await fetch('/api/approval/pending')
       if (response.ok) {
         const data = await response.json()
         setPendingInteractions(data)
@@ -57,7 +57,7 @@ export const ApprovalInterface = ({ onApprovalChange }: ApprovalInterfaceProps) 
   const handleApproval = async (interactionId: string, approved: boolean) => {
     setLoading(true)
     try {
-      const response = await fetch('http://localhost:8000/api/approval/approve', {
+      const response = await fetch('/api/approval/approve', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

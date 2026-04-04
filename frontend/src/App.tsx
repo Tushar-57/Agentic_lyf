@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { motion } from 'framer-motion'
-import { Brain, Menu } from 'lucide-react'
+import { BarChart3, Brain, Database, Menu, MessageSquare, Sparkles, User } from 'lucide-react'
 import { Toaster } from 'sonner'
 import { ChatInterface } from '@/components/chat/ChatInterface'
 import { Sidebar } from '@/components/layout/Sidebar'
@@ -93,6 +93,20 @@ function App() {
   // Deep Agent System State
   const [deepAgentState, setDeepAgentState] = useState<DeepAgentState | null>(null)
   const [showDeepAgentPanel, setShowDeepAgentPanel] = useState(false)
+  const isEmbedMode = useMemo(() => {
+    if (typeof window === 'undefined') {
+      return false
+    }
+    return new URLSearchParams(window.location.search).get('embed') === '1'
+  }, [])
+
+  const mobileViews = [
+    { id: 'chat', label: 'Chat', icon: MessageSquare },
+    { id: 'onboarding', label: 'Setup', icon: Sparkles },
+    { id: 'knowledge', label: 'Knowledge', icon: Database },
+    { id: 'analytics', label: 'Analytics', icon: BarChart3 },
+    { id: 'profile', label: 'Profile', icon: User },
+  ]
 
   // Theme management
   useEffect(() => {
@@ -478,19 +492,21 @@ function App() {
       )}
 
       {/* Sidebar */}
-      <Sidebar
-        collapsed={sidebarCollapsed}
-        onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
-        currentAgent={currentAgent}
-        onAgentChange={handleAgentChange}
-        currentView={currentView}
-        onViewChange={setCurrentView}
-        isDarkMode={isDarkMode}
-        onToggleTheme={toggleTheme}
-        isMobile={isMobile}
-        mobileOpen={mobileSidebarOpen}
-        onMobileClose={() => setMobileSidebarOpen(false)}
-      />
+      {!isEmbedMode && (
+        <Sidebar
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+          currentAgent={currentAgent}
+          onAgentChange={handleAgentChange}
+          currentView={currentView}
+          onViewChange={setCurrentView}
+          isDarkMode={isDarkMode}
+          onToggleTheme={toggleTheme}
+          isMobile={isMobile}
+          mobileOpen={mobileSidebarOpen}
+          onMobileClose={() => setMobileSidebarOpen(false)}
+        />
+      )}
 
       {/* Main Content */}
       <motion.div
@@ -500,9 +516,12 @@ function App() {
           width: '100%'
         }}
         transition={{ duration: 0.3, ease: "easeInOut" }}
-        className="flex-1 flex flex-col min-w-0"
+        className={cn(
+          "flex-1 flex flex-col min-w-0",
+          isMobile && !isEmbedMode && "pb-16"
+        )}
       >
-        {isMobile && (
+        {isMobile && !isEmbedMode && (
           <div className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border bg-card/95 px-4 backdrop-blur-lg lg:hidden">
             <Button
               variant="ghost"
@@ -540,7 +559,8 @@ function App() {
               <Button
                 onClick={() => setShowDeepAgentPanel(!showDeepAgentPanel)}
                 className={cn(
-                  "fixed bottom-4 right-4 h-11 w-11 p-0 rounded-full shadow-lg z-30 transition-all sm:bottom-20 sm:right-6 sm:h-12 sm:w-12",
+                  "fixed right-4 h-11 w-11 p-0 rounded-full shadow-lg z-30 transition-all sm:right-6 sm:h-12 sm:w-12",
+                  isMobile && !isEmbedMode ? "bottom-20" : "bottom-4 sm:bottom-20",
                   "bg-blue-600 hover:bg-blue-700 text-white",
                   showDeepAgentPanel && !isMobile ? "right-[25rem]" : "right-4 sm:right-6"
                 )}
@@ -568,7 +588,9 @@ function App() {
                 className={cn(
                   "bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60",
                   isMobile
-                    ? "fixed inset-x-0 bottom-0 top-14 z-40 w-full border-t"
+                    ? isEmbedMode
+                      ? "fixed inset-0 z-40 w-full border-t"
+                      : "fixed inset-x-0 bottom-16 top-14 z-40 w-full border-t"
                     : "w-96 border-l"
                 )}
               >
@@ -637,6 +659,28 @@ function App() {
           </div>
         )}
       </motion.div>
+
+      {isMobile && !isEmbedMode && (
+        <nav className="fixed bottom-0 left-0 right-0 z-30 grid grid-cols-5 border-t border-border bg-card/95 px-1 py-1 backdrop-blur lg:hidden">
+          {mobileViews.map((view) => {
+            const isActive = currentView === view.id
+            return (
+              <button
+                key={view.id}
+                type="button"
+                onClick={() => setCurrentView(view.id)}
+                className={cn(
+                  "flex flex-col items-center justify-center rounded-md py-2 text-[11px] font-medium transition",
+                  isActive ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"
+                )}
+              >
+                <view.icon className="mb-1 h-4 w-4" />
+                {view.label}
+              </button>
+            )
+          })}
+        </nav>
+      )}
 
       {/* Settings Panel */}
       <SettingsPanel
