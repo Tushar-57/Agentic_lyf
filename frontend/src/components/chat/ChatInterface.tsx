@@ -332,7 +332,7 @@ const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLas
 
       {/* Message Content */}
       <div className={cn(
-        "flex flex-col max-w-[80%]",
+        "flex flex-col max-w-[92%] sm:max-w-[80%]",
         isUser ? "items-end" : "items-start"
       )}>
         {/* Agent Name */}
@@ -473,7 +473,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   useEffect(() => {
     const loadProfile = async () => {
       try {
-        const response = await fetch('http://localhost:8000/api/knowledge/onboarding/profile');
+        const response = await fetch('/api/knowledge/onboarding/profile');
         if (response.ok) {
           const data = await response.json();
           setUserProfile(data);
@@ -514,7 +514,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   return (
     <div className={cn("flex flex-col h-full bg-background", className)}>
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b bg-card/50 backdrop-blur-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b bg-card/50 p-3 backdrop-blur-sm sm:items-center sm:p-4">
         <div className="flex items-center gap-3">
           <div className={cn(
             "w-10 h-10 rounded-full flex items-center justify-center overflow-hidden",
@@ -527,13 +527,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             )}
           </div>
           <div>
-            <h2 className="font-semibold">AI Agent Ecosystem</h2>
-            <p className="text-sm text-muted-foreground capitalize">
+            <h2 className="font-semibold text-sm sm:text-base">AI Agent Ecosystem</h2>
+            <p className="text-xs sm:text-sm text-muted-foreground capitalize">
               {currentAgent} Agent Active
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           {/* Communication Style Indicator */}
           {communicationStyle && communicationStyle !== 'Direct' && (
             <div className="flex items-center gap-2 px-2 py-1 rounded-full bg-purple-100 dark:bg-purple-900/30">
@@ -549,7 +549,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               {currentProvider}
             </span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="hidden sm:flex items-center gap-2">
             <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
             <span className="text-xs text-muted-foreground">Online</span>
           </div>

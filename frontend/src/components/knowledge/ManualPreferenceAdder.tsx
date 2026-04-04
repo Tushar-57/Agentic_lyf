@@ -260,10 +260,10 @@ export const ManualPreferenceAdder: React.FC<ManualPreferenceAdderProps> = ({
         initial={{ scale: 0.95, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
         exit={{ scale: 0.95, opacity: 0 }}
-        className="bg-background rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden"
+        className="max-h-[90vh] w-full max-w-2xl overflow-hidden rounded-lg bg-background shadow-xl"
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-border">
+        <div className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:items-center sm:justify-between sm:p-6">
           <div>
             <h2 className="text-2xl font-bold flex items-center gap-2">
               <Plus className="w-6 h-6" />
@@ -288,7 +288,7 @@ export const ManualPreferenceAdder: React.FC<ManualPreferenceAdderProps> = ({
               </div>
             </div>
           ) : (
-            <form onSubmit={handleSubmit(onSubmit)} className="p-6 space-y-6">
+            <form onSubmit={handleSubmit(onSubmit)} className="space-y-6 p-4 sm:p-6">
               <Card className="p-6">
                 <h3 className="text-lg font-semibold mb-4">Preference Details</h3>
                 

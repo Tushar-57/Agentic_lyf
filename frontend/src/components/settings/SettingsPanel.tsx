@@ -66,7 +66,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
   const loadStoredConfig = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/config', {
+      const response = await fetch('/api/config', {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
@@ -101,7 +101,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       const payload: any = {}
       payload[configType] = configData
 
-      const response = await fetch('http://localhost:8000/api/config', {
+      const response = await fetch('/api/config', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -152,7 +152,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     }
 
     // Call backend API to switch provider
-    const response = await fetch('http://localhost:8000/api/llm/switch-provider', {
+    const response = await fetch('/api/llm/switch-provider', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -217,7 +217,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       requestBody.config = { endpoint: ollamaEndpoint }
     }
     
-    const response = await fetch(`http://localhost:8000/api/llm/test-connection`, {
+    const response = await fetch(`/api/llm/test-connection`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -294,10 +294,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
             animate={{ x: 0 }}
             exit={{ x: '100%' }}
             transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-            className="fixed right-0 top-0 h-full w-96 bg-background border-l border-border shadow-2xl z-50 overflow-y-auto"
+            className="fixed right-0 top-0 z-50 h-full w-full max-w-md overflow-y-auto border-l border-border bg-background shadow-2xl"
           >
             {/* Header */}
-            <div className="flex items-center justify-between p-6 border-b border-border">
+            <div className="flex items-center justify-between border-b border-border p-4 sm:p-6">
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
                   <Settings className="w-4 h-4 text-white" />
@@ -313,7 +313,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
             </div>
 
             {/* Content */}
-            <div className="p-6 space-y-6">
+            <div className="space-y-6 p-4 sm:p-6">
               {/* LLM Provider Selection */}
               <Card>
                 <CardHeader>

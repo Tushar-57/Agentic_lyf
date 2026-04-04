@@ -819,7 +819,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className={`fixed inset-0 bg-black/95 flex z-50 ${isFullscreen ? 'p-0' : 'p-4'}`}
+            className={`fixed inset-0 bg-black/95 flex z-50 ${isFullscreen ? 'p-0' : 'p-2 sm:p-4'}`}
         >
             {/* Main View Area */}
             <div className="flex-1 relative">
@@ -881,9 +881,9 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                     </Canvas>
                 ) : (
                     // List View
-                    <div className="flex h-full bg-gray-900">
+                    <div className="flex h-full flex-col bg-gray-900 lg:flex-row">
                         {/* Left Panel - List of Embeddings */}
-                        <div className="w-1/2 border-r border-gray-700 overflow-y-auto">
+                        <div className="w-full border-b border-gray-700 overflow-y-auto lg:w-1/2 lg:border-b-0 lg:border-r">
                             <div className="p-4">
                                 <h3 className="text-white font-semibold mb-4">Knowledge Embeddings ({filteredPoints.length})</h3>
                                 <div className="space-y-2">
@@ -930,7 +930,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                         </div>
 
                         {/* Right Panel - Details */}
-                        <div className="w-1/2 overflow-y-auto">
+                        <div className="w-full overflow-y-auto lg:w-1/2">
                             <div className="p-4">
                                 {selectedPoint && selectedDetails ? (
                                     <div className="text-white">
@@ -1044,7 +1044,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                 </div>
 
                 {/* Graph/List Toggle - Top Right */}
-                <div className="absolute top-4 right-4 flex gap-2 mb-4">
+                <div className="absolute top-2 right-2 flex gap-2 mb-4 sm:top-4 sm:right-4">
                     <div className="bg-black/80 rounded-lg p-1 border border-gray-700">
                         <Button
                             variant="ghost"
@@ -1067,7 +1067,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
 
                 {/* Legend Panel - Only show in graph mode */}
                 {viewMode === 'graph' && (
-                    <div className="absolute top-16 right-4 text-white text-sm bg-black/80 rounded-lg p-4 min-w-[200px] border border-gray-700">
+                    <div className="absolute right-2 top-16 w-[min(18rem,calc(100vw-1rem))] text-white text-sm bg-black/80 rounded-lg p-3 sm:p-4 sm:right-4 sm:w-auto sm:min-w-[200px] border border-gray-700">
                         <div className="flex items-center gap-2 mb-3">
                             <Info className="w-4 h-4" />
                             <span className="font-semibold">Legend</span>

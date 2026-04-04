@@ -48,27 +48,27 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
   return (
     <div className={cn("h-full flex flex-col", className)}>
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
-        <TabsList className="grid w-full grid-cols-4">
-          <TabsTrigger value="viewer" className="gap-2">
+        <TabsList className="flex w-full overflow-x-auto">
+          <TabsTrigger value="viewer" className="gap-2 shrink-0">
             <Eye className="w-4 h-4" />
             Knowledge Base
           </TabsTrigger>
-          <TabsTrigger value="analytics" className="gap-2">
+          <TabsTrigger value="analytics" className="gap-2 shrink-0">
             <BarChart3 className="w-4 h-4" />
             Analytics
           </TabsTrigger>
-          <TabsTrigger value="visualization" className="gap-2">
+          <TabsTrigger value="visualization" className="gap-2 shrink-0">
             <Box className="w-4 h-4" />
             Visualization
           </TabsTrigger>
-          <TabsTrigger value="settings" className="gap-2">
+          <TabsTrigger value="settings" className="gap-2 shrink-0">
             <Settings className="w-4 h-4" />
             Settings
           </TabsTrigger>
         </TabsList>
 
         <div className="flex-1 overflow-hidden">
-          <TabsContent value="viewer" className="h-full overflow-y-auto p-6 max-h-[calc(100vh-200px)]">
+          <TabsContent value="viewer" className="h-full max-h-[calc(100dvh-220px)] overflow-y-auto p-4 sm:p-6 md:max-h-[calc(100vh-200px)]">
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -81,7 +81,7 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
             </motion.div>
           </TabsContent>
 
-          <TabsContent value="analytics" className="h-full overflow-y-auto p-6 max-h-[calc(100vh-200px)]">
+          <TabsContent value="analytics" className="h-full max-h-[calc(100dvh-220px)] overflow-y-auto p-4 sm:p-6 md:max-h-[calc(100vh-200px)]">
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -91,7 +91,7 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
             </motion.div>
           </TabsContent>
 
-          <TabsContent value="visualization" className="h-full overflow-y-auto p-6 max-h-[calc(100vh-200px)]">
+          <TabsContent value="visualization" className="h-full max-h-[calc(100dvh-220px)] overflow-y-auto p-4 sm:p-6 md:max-h-[calc(100vh-200px)]">
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -140,7 +140,7 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
             </motion.div>
           </TabsContent>
 
-          <TabsContent value="settings" className="h-full overflow-y-auto p-6 max-h-[calc(100vh-200px)]">
+          <TabsContent value="settings" className="h-full max-h-[calc(100dvh-220px)] overflow-y-auto p-4 sm:p-6 md:max-h-[calc(100vh-200px)]">
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}

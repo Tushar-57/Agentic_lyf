@@ -17,7 +17,8 @@ import {
   MessageSquare,
   User,
   Database,
-  Sparkles
+  Sparkles,
+  X
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -33,6 +34,9 @@ interface SidebarProps {
   onToggleTheme?: () => void
   currentView?: string
   onViewChange?: (view: string) => void
+  isMobile?: boolean
+  mobileOpen?: boolean
+  onMobileClose?: () => void
 }
 
 const agents = [
@@ -134,17 +138,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isDarkMode = false,
   onToggleTheme,
   currentView = 'chat',
-  onViewChange
+  onViewChange,
+  isMobile = false,
+  mobileOpen = false,
+  onMobileClose
 }) => {
   const [hoveredAgent, setHoveredAgent] = useState<string | null>(null)
+  const isCollapsed = isMobile ? false : collapsed
 
   return (
     <motion.div
       initial={false}
-      animate={{ width: collapsed ? 80 : 280 }}
+      animate={isMobile ? { x: mobileOpen ? 0 : -300, width: 280 } : { width: isCollapsed ? 80 : 280 }}
       transition={{ duration: 0.3, ease: "easeInOut" }}
       className={cn(
         "h-full bg-card border-r border-border flex flex-col relative",
+        isMobile && "fixed inset-y-0 left-0 z-50 shadow-2xl",
         className
       )}
     >
@@ -152,7 +161,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="p-4 border-b border-border">
         <div className="flex items-center justify-between">
           <AnimatePresence mode="wait">
-            {!collapsed && (
+            {!isCollapsed && (
               <motion.div
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
@@ -174,10 +183,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <Button
             variant="ghost"
             size="icon"
-            onClick={onToggleCollapse}
+            onClick={() => {
+              if (isMobile) {
+                onMobileClose?.()
+                return
+              }
+              onToggleCollapse?.()
+            }}
             className="h-8 w-8"
           >
-            {collapsed ? (
+            {isMobile ? (
+              <X className="w-4 h-4" />
+            ) : isCollapsed ? (
               <ChevronRight className="w-4 h-4" />
             ) : (
               <ChevronLeft className="w-4 h-4" />
@@ -189,7 +206,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Navigation */}
       <div className="p-4 border-b border-border">
         <AnimatePresence mode="wait">
-          {!collapsed && (
+          {!isCollapsed && (
             <motion.h2
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -206,16 +223,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <Button
               key={item.id}
               variant="ghost"
-              onClick={() => onViewChange?.(item.id)}
+              onClick={() => {
+                onViewChange?.(item.id)
+                if (isMobile) {
+                  onMobileClose?.()
+                }
+              }}
               className={cn(
                 "w-full justify-start h-9",
-                collapsed && "justify-center px-0",
+                isCollapsed && "justify-center px-0",
                 currentView === item.id && "bg-accent text-accent-foreground"
               )}
             >
               <item.icon className="w-4 h-4" />
               <AnimatePresence mode="wait">
-                {!collapsed && (
+                {!isCollapsed && (
                   <motion.span
                     initial={{ opacity: 0, x: -10 }}
                     animate={{ opacity: 1, x: 0 }}
@@ -235,7 +257,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Agents */}
       <div className="flex-1 p-4 overflow-y-auto custom-scrollbar">
         <AnimatePresence mode="wait">
-          {!collapsed && (
+          {!isCollapsed && (
             <motion.h2
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -264,15 +286,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     "p-3 cursor-pointer transition-all duration-200 border",
                     isActive && "border-primary bg-primary/5",
                     !isActive && "hover:bg-accent/50",
-                    collapsed && "p-2"
+                    isCollapsed && "p-2"
                   )}
-                  onClick={() => onAgentChange?.(agent.id)}
+                  onClick={() => {
+                    onAgentChange?.(agent.id)
+                    if (isMobile) {
+                      onMobileClose?.()
+                    }
+                  }}
                   onMouseEnter={() => setHoveredAgent(agent.id)}
                   onMouseLeave={() => setHoveredAgent(null)}
                 >
                   <div className={cn(
                     "flex items-center gap-3",
-                    collapsed && "justify-center"
+                    isCollapsed && "justify-center"
                   )}>
                     <div className={cn(
                       "w-8 h-8 rounded-lg flex items-center justify-center bg-gradient-to-br",
@@ -283,7 +310,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     </div>
                     
                     <AnimatePresence mode="wait">
-                      {!collapsed && (
+                      {!isCollapsed && (
                         <motion.div
                           initial={{ opacity: 0, x: -10 }}
                           animate={{ opacity: 1, x: 0 }}
@@ -318,7 +345,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="p-4 border-t border-border">
         <div className={cn(
           "flex items-center gap-2",
-          collapsed && "justify-center"
+          isCollapsed && "justify-center"
         )}>
           <Button
             variant="ghost"
@@ -334,7 +361,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </Button>
           
           <AnimatePresence mode="wait">
-            {!collapsed && (
+            {!isCollapsed && (
               <>
                 <Button
                   variant="ghost"

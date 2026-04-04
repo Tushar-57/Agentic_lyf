@@ -236,7 +236,7 @@ export const DeepAgentStatus: React.FC<DeepAgentStatusProps> = ({
   // Fetch approval stats from the new system
   const fetchApprovalStats = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/approval/stats')
+      const response = await fetch('/api/approval/stats')
       if (response.ok) {
         const data = await response.json()
         setPendingApprovalCount(data.pending_interactions || 0)
@@ -306,7 +306,7 @@ export const DeepAgentStatus: React.FC<DeepAgentStatusProps> = ({
 
         {/* Quick Status */}
         {/* Quick Status */}
-        <div className="grid grid-cols-4 gap-2 text-center">
+        <div className="grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
           <div className="p-2 rounded bg-blue-50 dark:bg-blue-900/20">
             <div className="text-lg font-bold text-blue-600">{Object.keys(agentState?.files || {}).length}</div>
             <div className="text-xs text-blue-600">Files</div>
@@ -326,12 +326,12 @@ export const DeepAgentStatus: React.FC<DeepAgentStatusProps> = ({
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex gap-1 p-1 bg-gray-100 dark:bg-gray-800 rounded-lg">
+        <div className="flex gap-1 overflow-x-auto rounded-lg bg-gray-100 p-1 dark:bg-gray-800">
           {[
             { id: 'overview', label: 'Overview', icon: Eye },
             { id: 'planning', label: 'Planning', icon: Brain },
             { id: 'files', label: 'Files', icon: FileText },
-            { id: 'todos', label: 'TODOs', icon: CheckCircle },
+            { id: 'todos', label: 'Tasks', icon: CheckCircle },
             { id: 'human', label: 'Human', icon: User, hasNotification: hasHumanInteraction },
             { id: 'approval', label: 'Approval', icon: Bell, hasNotification: pendingApprovalCount > 0 }
           ].map(tab => (
@@ -341,7 +341,7 @@ export const DeepAgentStatus: React.FC<DeepAgentStatusProps> = ({
               size="sm"
               onClick={() => setActiveTab(tab.id as any)}
               className={cn(
-                "relative flex-1 text-xs",
+                "relative min-w-[5.75rem] shrink-0 text-xs sm:min-w-0 sm:flex-1",
                 activeTab === tab.id && "bg-white dark:bg-gray-700 shadow-sm"
               )}
             >
@@ -450,7 +450,7 @@ export const DeepAgentStatus: React.FC<DeepAgentStatusProps> = ({
             <div className="space-y-3">
               {activeTodos.length > 0 && (
                 <div>
-                  <h4 className="font-medium text-sm mb-2">Active TODOs</h4>
+                  <h4 className="font-medium text-sm mb-2">Active Tasks</h4>
                   <div className="space-y-2">
                     {activeTodos.map(todo => (
                       <TodoCard key={todo.id} todo={todo} />
@@ -478,7 +478,7 @@ export const DeepAgentStatus: React.FC<DeepAgentStatusProps> = ({
               {activeTodos.length === 0 && completedTodos.length === 0 && (
                 <div className="text-center text-gray-500 py-4">
                   <CheckCircle className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                  <p className="text-sm">No TODOs created</p>
+                  <p className="text-sm">No tasks yet</p>
                 </div>
               )}
             </div>

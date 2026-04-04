@@ -201,7 +201,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   return (
     <div className={cn("space-y-6", className)}>
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-2xl font-bold">Analytics Dashboard</h2>
           <p className="text-muted-foreground">
@@ -209,7 +209,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
           </p>
         </div>
         
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {(['7d', '30d', '90d'] as const).map((range) => (
             <button
               key={range}
@@ -280,20 +280,20 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
 
       {/* Charts */}
       <Tabs defaultValue="interactions" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-4">
-          <TabsTrigger value="interactions" className="gap-2">
+        <TabsList className="flex w-full overflow-x-auto">
+          <TabsTrigger value="interactions" className="gap-2 shrink-0">
             <BarChart3 className="w-4 h-4" />
             Interactions
           </TabsTrigger>
-          <TabsTrigger value="agents" className="gap-2">
+          <TabsTrigger value="agents" className="gap-2 shrink-0">
             <PieChartIcon className="w-4 h-4" />
             Agent Usage
           </TabsTrigger>
-          <TabsTrigger value="patterns" className="gap-2">
+          <TabsTrigger value="patterns" className="gap-2 shrink-0">
             <LineChartIcon className="w-4 h-4" />
             Patterns
           </TabsTrigger>
-          <TabsTrigger value="growth" className="gap-2">
+          <TabsTrigger value="growth" className="gap-2 shrink-0">
             <TrendingUp className="w-4 h-4" />
             Growth
           </TabsTrigger>

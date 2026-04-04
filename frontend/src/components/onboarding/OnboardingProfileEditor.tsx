@@ -115,7 +115,7 @@ export const OnboardingProfileEditor: React.FC<OnboardingProfileEditorProps> = (
   const loadProfile = async () => {
     setIsLoading(true)
     try {
-      const response = await fetch('http://localhost:8000/api/knowledge/onboarding/profile')
+      const response = await fetch('/api/knowledge/onboarding/profile')
       if (response.ok) {
         const data = await response.json()
         setProfile({
@@ -138,7 +138,7 @@ export const OnboardingProfileEditor: React.FC<OnboardingProfileEditorProps> = (
   const handleSaveProfile = async () => {
     setIsSaving(true)
     try {
-      const response = await fetch('http://localhost:8000/api/knowledge/onboarding', {
+      const response = await fetch('/api/knowledge/onboarding', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -255,7 +255,7 @@ export const OnboardingProfileEditor: React.FC<OnboardingProfileEditorProps> = (
         className="w-full max-w-4xl max-h-[90vh] overflow-hidden bg-background rounded-lg shadow-xl"
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b">
+        <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between sm:p-6">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
               <User className="w-5 h-5 text-white" />
@@ -278,24 +278,24 @@ export const OnboardingProfileEditor: React.FC<OnboardingProfileEditorProps> = (
             </div>
           ) : (
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-              <TabsList className="w-full justify-start border-b rounded-none h-auto p-0 bg-transparent">
-                <TabsTrigger value="profile" className="gap-2">
+              <TabsList className="w-full justify-start border-b rounded-none h-auto p-0 bg-transparent overflow-x-auto">
+                <TabsTrigger value="profile" className="gap-2 shrink-0">
                   <User className="w-4 h-4" />
                   Profile
                 </TabsTrigger>
-                <TabsTrigger value="goals" className="gap-2">
+                <TabsTrigger value="goals" className="gap-2 shrink-0">
                   <Target className="w-4 h-4" />
                   Goals
                 </TabsTrigger>
-                <TabsTrigger value="preferences" className="gap-2">
+                <TabsTrigger value="preferences" className="gap-2 shrink-0">
                   <Award className="w-4 h-4" />
                   Priorities
                 </TabsTrigger>
-                <TabsTrigger value="mentor" className="gap-2">
+                <TabsTrigger value="mentor" className="gap-2 shrink-0">
                   <Sparkles className="w-4 h-4" />
                   Mentor
                 </TabsTrigger>
-                <TabsTrigger value="schedule" className="gap-2">
+                <TabsTrigger value="schedule" className="gap-2 shrink-0">
                   <Calendar className="w-4 h-4" />
                   Schedule
                 </TabsTrigger>
@@ -368,7 +368,7 @@ export const OnboardingProfileEditor: React.FC<OnboardingProfileEditorProps> = (
                             </Button>
                           </div>
 
-                          <div className="grid grid-cols-2 gap-3">
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                             <div className="space-y-2">
                               <Label>Category</Label>
                               <Select
@@ -529,7 +529,7 @@ export const OnboardingProfileEditor: React.FC<OnboardingProfileEditorProps> = (
 
                   <div className="space-y-2">
                     <Label>Avatar</Label>
-                    <div className="grid grid-cols-9 gap-2">
+                    <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 md:grid-cols-9">
                       {AVAILABLE_AVATARS.map((avatar) => (
                         <button
                           key={avatar}
@@ -556,7 +556,7 @@ export const OnboardingProfileEditor: React.FC<OnboardingProfileEditorProps> = (
               {/* Schedule Tab */}
               <TabsContent value="schedule" className="p-6 space-y-4">
                 <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div className="space-y-2">
                       <Label>Work Start Time</Label>
                       <Input
@@ -587,7 +587,7 @@ export const OnboardingProfileEditor: React.FC<OnboardingProfileEditorProps> = (
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div className="space-y-2">
                       <Label>DND Start Time</Label>
                       <Input
@@ -650,7 +650,7 @@ export const OnboardingProfileEditor: React.FC<OnboardingProfileEditorProps> = (
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-3 p-6 border-t bg-muted/50">
+        <div className="flex flex-col-reverse gap-3 border-t bg-muted/50 p-4 sm:flex-row sm:items-center sm:justify-end sm:p-6">
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>

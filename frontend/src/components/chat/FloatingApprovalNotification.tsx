@@ -15,7 +15,7 @@ export const FloatingApprovalNotification = ({ onOpenApprovalPanel }: FloatingAp
 
   const fetchPendingCount = async () => {
     try {
-      const response = await fetch('http://localhost:8000/api/approval/stats')
+      const response = await fetch('/api/approval/stats')
       if (response.ok) {
         const data = await response.json()
         const count = data.pending_interactions || 0
@@ -42,7 +42,7 @@ export const FloatingApprovalNotification = ({ onOpenApprovalPanel }: FloatingAp
         initial={{ opacity: 0, y: 50, scale: 0.9 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         exit={{ opacity: 0, y: 50, scale: 0.9 }}
-        className="fixed bottom-20 right-4 z-50"
+        className="fixed bottom-4 right-3 z-50 max-w-[calc(100vw-1rem)] sm:bottom-20 sm:right-4"
       >
         <Card className="border-2 border-yellow-400 bg-yellow-50 dark:border-yellow-600 dark:bg-yellow-950 shadow-lg">
           <CardContent className="p-4">

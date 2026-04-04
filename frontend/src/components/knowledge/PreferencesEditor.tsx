@@ -210,10 +210,10 @@ export const PreferencesEditor: React.FC<PreferencesEditorProps> = ({
         initial={{ scale: 0.95, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
         exit={{ scale: 0.95, opacity: 0 }}
-        className="bg-background rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden"
+        className="max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-lg bg-background shadow-xl"
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-border">
+        <div className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:items-center sm:justify-between sm:p-6">
           <div>
             <h2 className="text-2xl font-bold">Edit Preferences</h2>
             <p className="text-muted-foreground">
@@ -237,28 +237,28 @@ export const PreferencesEditor: React.FC<PreferencesEditorProps> = ({
           ) : (
             <form onSubmit={handleSubmit(onSubmit)} className="p-6">
               <Tabs value={activeTab} onValueChange={setActiveTab}>
-                <TabsList className="grid w-full grid-cols-6">
-                  <TabsTrigger value="productivity" className="gap-2">
+                <TabsList className="flex w-full overflow-x-auto">
+                  <TabsTrigger value="productivity" className="gap-2 shrink-0">
                     <Zap className="w-4 h-4" />
                     <span className="hidden sm:inline">Productivity</span>
                   </TabsTrigger>
-                  <TabsTrigger value="health" className="gap-2">
+                  <TabsTrigger value="health" className="gap-2 shrink-0">
                     <Heart className="w-4 h-4" />
                     <span className="hidden sm:inline">Health</span>
                   </TabsTrigger>
-                  <TabsTrigger value="finance" className="gap-2">
+                  <TabsTrigger value="finance" className="gap-2 shrink-0">
                     <DollarSign className="w-4 h-4" />
                     <span className="hidden sm:inline">Finance</span>
                   </TabsTrigger>
-                  <TabsTrigger value="journal" className="gap-2">
+                  <TabsTrigger value="journal" className="gap-2 shrink-0">
                     <BookOpen className="w-4 h-4" />
                     <span className="hidden sm:inline">Journal</span>
                   </TabsTrigger>
-                  <TabsTrigger value="llm_provider" className="gap-2">
+                  <TabsTrigger value="llm_provider" className="gap-2 shrink-0">
                     <Brain className="w-4 h-4" />
                     <span className="hidden sm:inline">AI</span>
                   </TabsTrigger>
-                  <TabsTrigger value="general" className="gap-2">
+                  <TabsTrigger value="general" className="gap-2 shrink-0">
                     <Settings className="w-4 h-4" />
                     <span className="hidden sm:inline">General</span>
                   </TabsTrigger>

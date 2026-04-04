@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Brain } from 'lucide-react'
+import { Brain, Menu } from 'lucide-react'
 import { Toaster } from 'sonner'
 import { ChatInterface } from '@/components/chat/ChatInterface'
 import { Sidebar } from '@/components/layout/Sidebar'
@@ -70,6 +70,8 @@ interface DeepAgentState {
 
 function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [isMobile, setIsMobile] = useState(false)
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [currentAgent, setCurrentAgent] = useState('orchestrator')
   const [currentView, setCurrentView] = useState('chat')
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -104,6 +106,31 @@ function App() {
     }
   }, [isDarkMode])
 
+  useEffect(() => {
+    const handleResize = () => {
+      const mobile = window.innerWidth < 1024
+      setIsMobile(mobile)
+      if (!mobile) {
+        setMobileSidebarOpen(false)
+      }
+    }
+
+    handleResize()
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  useEffect(() => {
+    if (mobileSidebarOpen) {
+      document.body.style.overflow = 'hidden'
+      return () => {
+        document.body.style.overflow = ''
+      }
+    }
+
+    document.body.style.overflow = ''
+  }, [mobileSidebarOpen])
+
   // Settings panel event listener
   useEffect(() => {
     const handleOpenSettings = () => setSettingsOpen(true)
@@ -115,7 +142,7 @@ function App() {
   useEffect(() => {
     const loadProviderStatus = async (retryCount = 0) => {
       try {
-        const response = await fetch('http://localhost:8000/api/llm/status', {  // Fixed endpoint
+        const response = await fetch('/api/llm/status', {  // Fixed endpoint
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
@@ -153,23 +180,12 @@ function App() {
           return
         }
         
-        // Final fallback - check if Ollama is available locally
+        // Final fallback in deployed environments: do not probe loopback from browser.
         console.log('📱 Using fallback provider status detection')
-        fetch('http://localhost:11434/api/tags')
-          .then(response => response.json())
-          .then(() => {
-            setProviderStatus({
-              openai: { healthy: false, model: 'gpt-3.5-turbo', responseTime: 0 },
-              ollama: { healthy: true, model: 'llama3.2:3b', responseTime: 450 }
-            })
-            setCurrentProvider('ollama')
-          })
-          .catch(() => {
-            setProviderStatus({
-              openai: { healthy: false, model: 'gpt-3.5-turbo', responseTime: 0 },
-              ollama: { healthy: false, model: 'llama3.2:3b', responseTime: 0 }
-            })
-          })
+        setProviderStatus({
+          openai: { healthy: false, model: 'gpt-3.5-turbo', responseTime: 0 },
+          ollama: { healthy: false, model: 'llama3.2:3b', responseTime: 0 }
+        })
       }
     }
     
@@ -450,9 +466,17 @@ function App() {
 
   return (
     <div className={cn(
-      "h-screen flex bg-background text-foreground transition-colors duration-300",
+      "flex min-h-screen bg-background text-foreground transition-colors duration-300",
       isDarkMode && "dark"
     )}>
+      {isMobile && mobileSidebarOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50"
+          onClick={() => setMobileSidebarOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
       {/* Sidebar */}
       <Sidebar
         collapsed={sidebarCollapsed}
@@ -463,6 +487,9 @@ function App() {
         onViewChange={setCurrentView}
         isDarkMode={isDarkMode}
         onToggleTheme={toggleTheme}
+        isMobile={isMobile}
+        mobileOpen={mobileSidebarOpen}
+        onMobileClose={() => setMobileSidebarOpen(false)}
       />
 
       {/* Main Content */}
@@ -475,13 +502,28 @@ function App() {
         transition={{ duration: 0.3, ease: "easeInOut" }}
         className="flex-1 flex flex-col min-w-0"
       >
+        {isMobile && (
+          <div className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border bg-card/95 px-4 backdrop-blur-lg lg:hidden">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setMobileSidebarOpen(true)}
+              aria-label="Open navigation menu"
+            >
+              <Menu className="h-5 w-5" />
+            </Button>
+            <div className="text-sm font-semibold">AI Ecosystem</div>
+            <div className="w-9" aria-hidden="true" />
+          </div>
+        )}
+
         {/* Main Content */}
         {currentView === 'chat' && (
           <div className="flex-1 flex relative">
             {/* Chat Interface */}
             <div className={cn(
               "flex-1 transition-all duration-300",
-              showDeepAgentPanel ? "mr-96" : ""
+              showDeepAgentPanel && !isMobile ? "mr-96" : ""
             )}>
               <ChatInterface
                 messages={messages}
@@ -498,9 +540,9 @@ function App() {
               <Button
                 onClick={() => setShowDeepAgentPanel(!showDeepAgentPanel)}
                 className={cn(
-                  "fixed bottom-20 right-6 h-12 w-12 p-0 rounded-full shadow-lg z-10 transition-all",
+                  "fixed bottom-4 right-4 h-11 w-11 p-0 rounded-full shadow-lg z-30 transition-all sm:bottom-20 sm:right-6 sm:h-12 sm:w-12",
                   "bg-blue-600 hover:bg-blue-700 text-white",
-                  showDeepAgentPanel ? "right-[25rem]" : "right-6"
+                  showDeepAgentPanel && !isMobile ? "right-[25rem]" : "right-4 sm:right-6"
                 )}
                 title="Toggle Deep Agent Panel"
               >
@@ -519,11 +561,16 @@ function App() {
             {/* Deep Agent Status Panel */}
             {showDeepAgentPanel && (
               <motion.div
-                initial={{ x: 384, opacity: 0 }}
-                animate={{ x: 0, opacity: 1 }}
-                exit={{ x: 384, opacity: 0 }}
+                initial={isMobile ? { y: 80, opacity: 0 } : { x: 384, opacity: 0 }}
+                animate={isMobile ? { y: 0, opacity: 1 } : { x: 0, opacity: 1 }}
+                exit={isMobile ? { y: 80, opacity: 0 } : { x: 384, opacity: 0 }}
                 transition={{ duration: 0.3, ease: "easeInOut" }}
-                className="w-96 border-l bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60"
+                className={cn(
+                  "bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60",
+                  isMobile
+                    ? "fixed inset-x-0 bottom-0 top-14 z-40 w-full border-t"
+                    : "w-96 border-l"
+                )}
               >
                 <div className="p-4 border-b flex items-center justify-between">
                   <h3 className="font-semibold text-lg">Deep Agent System</h3>
@@ -536,7 +583,7 @@ function App() {
                     ✕
                   </Button>
                 </div>
-                <div className="h-[calc(100vh-8rem)] overflow-y-auto">
+                <div className="h-[calc(100dvh-8rem)] overflow-y-auto md:h-[calc(100vh-8rem)]">
                   <DeepAgentStatus
                     agentState={deepAgentState}
                     onApprovalResponse={handleApprovalResponse}
@@ -567,7 +614,7 @@ function App() {
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center">
               <h2 className="text-2xl font-bold mb-2">Analytics</h2>
-              <p className="text-muted-foreground">Analytics view coming soon...</p>
+              <p className="text-muted-foreground">Analytics dashboard is being prepared. Please check back shortly.</p>
             </div>
           </div>
         )}
@@ -576,7 +623,7 @@ function App() {
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center">
               <h2 className="text-2xl font-bold mb-2">Activity</h2>
-              <p className="text-muted-foreground">Activity view coming soon...</p>
+              <p className="text-muted-foreground">Your recent activity feed will appear here soon.</p>
             </div>
           </div>
         )}
@@ -585,7 +632,7 @@ function App() {
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center">
               <h2 className="text-2xl font-bold mb-2">Profile</h2>
-              <p className="text-muted-foreground">Profile view coming soon...</p>
+              <p className="text-muted-foreground">Profile management tools are on the way.</p>
             </div>
           </div>
         )}
