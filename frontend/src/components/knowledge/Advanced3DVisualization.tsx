@@ -32,6 +32,7 @@ import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Slider } from '@/components/ui/slider'
+import { readEmbeddingsCache, writeEmbeddingsCache } from '@/lib/embeddingsCache'
 import { toast } from 'sonner'
 
 // Color scheme helper function
@@ -891,23 +892,34 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
             .slice(0, 5)
     }, [filteredPoints])
 
+    const applyEmbeddingsPayload = (data: EmbeddingPoint[]) => {
+        setPoints(data)
+        const uniqueCategories = [...new Set(data.map((point) => point.category))] as string[]
+        const uniqueTypes = [...new Set(data.map((point) => point.entry_type))] as string[]
+        setCategories(uniqueCategories)
+        setTypes(uniqueTypes)
+    }
+
     const loadEmbeddingsData = async () => {
         setIsLoading(true)
+        const cachedData = readEmbeddingsCache()
+        const hasCachedData = Array.isArray(cachedData) && cachedData.length > 0
+
+        if (hasCachedData) {
+            applyEmbeddingsPayload(cachedData as EmbeddingPoint[])
+            setIsLoading(false)
+        }
+
         try {
             const response = await fetch('/api/knowledge/embeddings/visualization')
             if (response.ok) {
-                const data = await response.json()
-                setPoints(data)
-
-                // Extract unique categories and types
-                const uniqueCategories = [...new Set(data.map((p: EmbeddingPoint) => p.category))] as string[]
-                const uniqueTypes = [...new Set(data.map((p: EmbeddingPoint) => p.entry_type))] as string[]
-                setCategories(uniqueCategories)
-                setTypes(uniqueTypes)
+                const data = (await response.json()) as EmbeddingPoint[]
+                applyEmbeddingsPayload(data)
+                writeEmbeddingsCache(data)
 
                 if (data.length === 0) {
                     toast.info('No embeddings available yet. Add some knowledge entries first!')
-                } else {
+                } else if (!hasCachedData) {
                     toast.success(`Loaded ${data.length} embeddings for 3D visualization`)
                 }
             } else {
@@ -915,9 +927,13 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
             }
         } catch (error) {
             console.error('Failed to load embeddings:', error)
-            toast.error('Failed to load embeddings data')
+            if (!hasCachedData) {
+                toast.error('Failed to load embeddings data')
+            }
         } finally {
-            setIsLoading(false)
+            if (!hasCachedData) {
+                setIsLoading(false)
+            }
         }
     }
 

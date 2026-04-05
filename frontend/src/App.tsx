@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { motion } from 'framer-motion'
-import { BarChart3, Brain, Database, Menu, MessageSquare, Sparkles, User } from 'lucide-react'
+import { ArrowLeft, BarChart3, Brain, Database, Menu, MessageSquare, Sparkles, User } from 'lucide-react'
 import { Toaster } from 'sonner'
 import { ChatInterface } from '@/components/chat/ChatInterface'
 import { Sidebar } from '@/components/layout/Sidebar'
@@ -11,6 +11,7 @@ import ProfileWorkspace from '@/components/profile/ProfileWorkspace'
 import { DeepAgentStatus } from '@/components/chat/DeepAgentStatus'
 import { FloatingApprovalNotification } from '@/components/chat/FloatingApprovalNotification'
 import { Button } from '@/components/ui/button'
+import { prefetchEmbeddingsVisualization } from '@/lib/embeddingsCache'
 import { cn } from '@/lib/utils'
 import './globals.css'
 
@@ -99,6 +100,53 @@ function App() {
       return false
     }
     return new URLSearchParams(window.location.search).get('embed') === '1'
+  }, [])
+
+  const integrationContext = useMemo(() => {
+    if (typeof window === 'undefined') {
+      return { isAlterEgo: false, returnUrl: null as string | null }
+    }
+
+    const params = new URLSearchParams(window.location.search)
+    const source = params.get('from')?.toLowerCase()
+    const rawReturnUrl = params.get('return_url')
+
+    const referrerOrigin = (() => {
+      try {
+        return document.referrer ? new URL(document.referrer).origin : null
+      } catch {
+        return null
+      }
+    })()
+
+    const envOrigins = ((import.meta.env.VITE_ALLOWED_RETURN_ORIGINS as string | undefined) || '')
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter((origin) => origin.length > 0)
+
+    const allowedOrigins = new Set<string>([window.location.origin, ...envOrigins])
+    if (referrerOrigin) {
+      allowedOrigins.add(referrerOrigin)
+    }
+
+    let returnUrl: string | null = null
+    if (rawReturnUrl) {
+      try {
+        const parsed = new URL(rawReturnUrl, window.location.origin)
+        if (allowedOrigins.has(parsed.origin)) {
+          returnUrl = parsed.toString()
+        }
+      } catch {
+        returnUrl = null
+      }
+    }
+
+    const isAlterEgo = source === 'alterego' || !!returnUrl || (referrerOrigin?.includes('alterego') ?? false)
+
+    return {
+      isAlterEgo,
+      returnUrl,
+    }
   }, [])
 
   const mobileViews = [
@@ -207,6 +255,36 @@ function App() {
     // Add a small delay to ensure backend is ready
     setTimeout(() => loadProviderStatus(), 500)
   }, [])
+
+  useEffect(() => {
+    if (!integrationContext.isAlterEgo) {
+      return
+    }
+
+    const prefetchCoachData = async () => {
+      await Promise.allSettled([
+        fetch('/api/knowledge/onboarding/profile').catch(() => null),
+        fetch('/api/knowledge/stats').catch(() => null),
+        prefetchEmbeddingsVisualization(),
+      ])
+    }
+
+    void prefetchCoachData()
+  }, [integrationContext.isAlterEgo])
+
+  const handleReturnToAlterEgo = () => {
+    if (integrationContext.returnUrl) {
+      window.location.assign(integrationContext.returnUrl)
+      return
+    }
+
+    if (typeof document !== 'undefined' && document.referrer) {
+      window.location.assign(document.referrer)
+      return
+    }
+
+    window.history.back()
+  }
 
   const toggleTheme = () => {
     setIsDarkMode(!isDarkMode)
@@ -532,8 +610,27 @@ function App() {
             >
               <Menu className="h-5 w-5" />
             </Button>
-            <div className="text-sm font-semibold">AI Ecosystem</div>
+            <div className="text-sm font-semibold">
+              {integrationContext.isAlterEgo ? 'AlterEgo Coach' : 'AI Ecosystem'}
+            </div>
             <div className="w-9" aria-hidden="true" />
+          </div>
+        )}
+
+        {integrationContext.isAlterEgo && (
+          <div className="border-b border-border/70 bg-blue-50/80 px-3 py-2 dark:bg-blue-950/30 sm:px-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">
+                  Connected Workspace
+                </p>
+                <p className="text-sm text-blue-900 dark:text-blue-100">AlterEgo Coach Bridge Active</p>
+              </div>
+              <Button variant="outline" size="sm" className="gap-2" onClick={handleReturnToAlterEgo}>
+                <ArrowLeft className="h-4 w-4" />
+                Back to AlterEgo
+              </Button>
+            </div>
           </div>
         )}
 
