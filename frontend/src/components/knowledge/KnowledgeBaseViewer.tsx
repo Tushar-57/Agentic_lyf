@@ -7,9 +7,11 @@ import {
   Edit3, 
   Trash2, 
   Plus, 
-  Eye, 
+  ChevronDown,
+  ChevronUp,
   Tag,
   Calendar,
+  Clock,
   User,
   Brain,
   TrendingUp,
@@ -119,6 +121,289 @@ const resolveEntryType = (entry: KnowledgeEntry, resolvedCategory: string): stri
   return String(entry.entry_type || 'memory').toLowerCase()
 }
 
+type HighlightItem = {
+  label: string
+  value: string
+  icon?: React.ComponentType<{ className?: string }>
+}
+
+type EntryPresentation = {
+  summary: string
+  highlights: HighlightItem[]
+  contentRows: Array<{ label: string; value: string }>
+  metadataRows: Array<{ label: string; value: string }>
+}
+
+const isRecord = (value: unknown): value is Record<string, any> => {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+const tryParseJson = (value: string): unknown => {
+  const trimmed = value.trim()
+  if (!trimmed || !/^[\[{]/.test(trimmed)) {
+    return null
+  }
+
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    return null
+  }
+}
+
+const formatDurationMinutes = (value: unknown): string | null => {
+  const numericValue = Number(value)
+  if (!Number.isFinite(numericValue) || numericValue <= 0) {
+    return null
+  }
+
+  const hours = Math.floor(numericValue / 60)
+  const minutes = Math.round(numericValue % 60)
+
+  if (hours > 0 && minutes > 0) {
+    return `${hours}h ${minutes}m`
+  }
+
+  if (hours > 0) {
+    return `${hours}h`
+  }
+
+  return `${minutes}m`
+}
+
+const formatValue = (value: unknown): string => {
+  if (value === null || value === undefined || value === '') {
+    return 'Not provided'
+  }
+
+  if (typeof value === 'string') {
+    return value
+      .replace(/[_-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+
+  if (Array.isArray(value)) {
+    const compactArray = value.slice(0, 5).map((item) => formatValue(item))
+    const suffix = value.length > 5 ? ` +${value.length - 5} more` : ''
+    return `${compactArray.join(', ')}${suffix}`
+  }
+
+  if (isRecord(value)) {
+    try {
+      return JSON.stringify(value)
+    } catch {
+      return '[Object]'
+    }
+  }
+
+  return String(value)
+}
+
+const toKeyValueRows = (
+  record: Record<string, any>,
+  preferredKeys: string[],
+  limit: number,
+): Array<{ label: string; value: string }> => {
+  if (!isRecord(record)) {
+    return []
+  }
+
+  const seenKeys = new Set<string>()
+  const rows: Array<{ label: string; value: string }> = []
+
+  const addRow = (key: string, value: unknown) => {
+    if (rows.length >= limit || seenKeys.has(key)) {
+      return
+    }
+
+    const formattedValue = formatValue(value)
+    if (!formattedValue || formattedValue === 'Not provided') {
+      return
+    }
+
+    rows.push({
+      label: toDisplayLabel(key),
+      value: formattedValue.length > 140 ? `${formattedValue.slice(0, 137)}...` : formattedValue,
+    })
+    seenKeys.add(key)
+  }
+
+  preferredKeys.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(record, key)) {
+      addRow(key, record[key])
+    }
+  })
+
+  Object.entries(record).forEach(([key, value]) => {
+    if (rows.length >= limit || seenKeys.has(key)) {
+      return
+    }
+
+    if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+      const nested = Object.keys(value as Record<string, unknown>)
+      if (nested.length === 0) {
+        return
+      }
+    }
+
+    addRow(key, value)
+  })
+
+  return rows
+}
+
+const pickFirstValue = (
+  records: Array<Record<string, any>>,
+  keys: string[],
+): unknown => {
+  for (const key of keys) {
+    for (const record of records) {
+      if (!isRecord(record)) {
+        continue
+      }
+
+      const value = record[key]
+      if (value !== undefined && value !== null && value !== '') {
+        return value
+      }
+    }
+  }
+
+  return null
+}
+
+const deriveSummary = (
+  entry: DisplayKnowledgeEntry,
+  contentRecord: Record<string, any>,
+): string => {
+  const summaryKeys = [
+    'summary',
+    'description',
+    'insight',
+    'notes',
+    'note',
+    'details',
+    'activity',
+    'task',
+    'message',
+    'observation',
+  ]
+
+  const summaryValue = pickFirstValue([contentRecord, entry.metadata || {}], summaryKeys)
+  if (typeof summaryValue === 'string' && summaryValue.trim().length > 0) {
+    return summaryValue.trim().replace(/\s+/g, ' ')
+  }
+
+  const contentAsText = typeof entry.content === 'string' ? entry.content.trim() : ''
+  if (contentAsText) {
+    const parsed = tryParseJson(contentAsText)
+    if (!parsed) {
+      return contentAsText.replace(/\s+/g, ' ')
+    }
+  }
+
+  if (entry.displayType === 'time_entry') {
+    return 'Tracked work activity captured from AlterEgo Time Tracker and indexed for coaching context.'
+  }
+
+  return `Knowledge entry captured for ${entry.displayCategoryLabel.toLowerCase()} context.`
+}
+
+const buildPresentation = (entry: DisplayKnowledgeEntry): EntryPresentation => {
+  const parsedContent =
+    typeof entry.content === 'string'
+      ? tryParseJson(entry.content)
+      : entry.content
+
+  const contentRecord = isRecord(parsedContent)
+    ? parsedContent
+    : isRecord(entry.content)
+      ? entry.content
+      : {}
+
+  const metadataRecord = isRecord(entry.metadata) ? entry.metadata : {}
+  const contextRecord = isRecord(metadataRecord.context) ? metadataRecord.context : {}
+
+  const summary = deriveSummary(entry, contentRecord)
+
+  const recordSources = [contentRecord, contextRecord, metadataRecord]
+  const durationRaw = pickFirstValue(recordSources, ['duration_minutes', 'duration', 'minutes_spent', 'minutes'])
+  const duration = formatDurationMinutes(durationRaw) || null
+  const project = pickFirstValue(recordSources, ['project_name', 'project', 'workspace', 'client'])
+  const task = pickFirstValue(recordSources, ['task_name', 'task', 'activity', 'title'])
+  const source = pickFirstValue(recordSources, ['source', 'origin'])
+  const sourceAction = pickFirstValue(recordSources, ['source_action', 'action'])
+  const confidence = pickFirstValue(recordSources, ['confidence', 'similarity'])
+
+  const highlights: HighlightItem[] = []
+
+  if (entry.displayType === 'time_entry') {
+    if (project) {
+      highlights.push({ label: 'Project', value: formatValue(project), icon: Tag })
+    }
+    if (task) {
+      highlights.push({ label: 'Activity', value: formatValue(task), icon: Brain })
+    }
+    if (duration) {
+      highlights.push({ label: 'Duration', value: duration, icon: Clock })
+    }
+  } else {
+    if (task) {
+      highlights.push({ label: 'Focus', value: formatValue(task), icon: Brain })
+    }
+  }
+
+  if (source) {
+    highlights.push({ label: 'Source', value: formatValue(source), icon: Database })
+  }
+
+  if (sourceAction) {
+    highlights.push({ label: 'Action', value: formatValue(sourceAction), icon: TrendingUp })
+  }
+
+  if (confidence !== null && confidence !== undefined && confidence !== '') {
+    const numericConfidence = Number(confidence)
+    const confidenceValue = Number.isFinite(numericConfidence)
+      ? `${Math.round(numericConfidence * (numericConfidence <= 1 ? 100 : 1))}%`
+      : formatValue(confidence)
+    highlights.push({ label: 'Confidence', value: confidenceValue, icon: BarChart3 })
+  }
+
+  const contentRows = toKeyValueRows(
+    contentRecord,
+    [
+      'project_name',
+      'task_name',
+      'duration_minutes',
+      'start_time',
+      'end_time',
+      'date',
+      'summary',
+      'notes',
+      'status',
+    ],
+    8,
+  )
+
+  const metadataRows = toKeyValueRows(
+    { ...metadataRecord, ...contextRecord },
+    ['source', 'source_action', 'time_entry_id', 'agent', 'confidence'],
+    8,
+  )
+
+  return {
+    summary: summary.length > 220 ? `${summary.slice(0, 217)}...` : summary,
+    highlights,
+    contentRows,
+    metadataRows,
+  }
+}
+
 export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
   className,
   onEditPreferences,
@@ -134,6 +419,7 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null)
+  const [expandedEntries, setExpandedEntries] = useState<Record<string, boolean>>({})
 
   // Load data on component mount
   useEffect(() => {
@@ -269,6 +555,13 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
       case 'memory': return 'from-slate-600 to-slate-500'
       default: return 'from-slate-500 to-slate-400'
     }
+  }
+
+  const toggleExpandedEntry = (entryId: string) => {
+    setExpandedEntries((prev) => ({
+      ...prev,
+      [entryId]: !prev[entryId],
+    }))
   }
 
   if (isLoading) {
@@ -483,6 +776,8 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
           {filteredEntries.map((entry, index) => {
             const Icon = getEntryIcon(entry.displayType)
             const colorClass = getEntryColor(entry.displayType)
+            const presentation = buildPresentation(entry)
+            const isExpanded = Boolean(expandedEntries[entry.entry_id])
             
             return (
               <motion.div
@@ -524,39 +819,86 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
                         <div className="flex gap-1 flex-shrink-0">
                           <Button 
                             variant="ghost" 
-                            size="icon" 
-                            className="h-8 w-8"
-                            onClick={() => {
-                              // Show entry details in a modal or expand inline
-                              console.log('View entry:', entry.entry_id)
-                              alert(`Entry Details:\n\nTitle: ${entry.title}\nContent: ${entry.content}\nTags: ${entry.tags.join(', ')}`)
-                            }}
+                            size="sm"
+                            className="h-8 px-2"
+                            onClick={() => toggleExpandedEntry(entry.entry_id)}
                           >
-                            <Eye className="w-4 h-4" />
+                            <span className="mr-1 text-xs">{isExpanded ? 'Hide' : 'Details'}</span>
+                            {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                           </Button>
-                          <Button 
-                            variant="ghost" 
-                            size="icon" 
-                            className="h-8 w-8"
-                            onClick={() => {
-                              if ((entry.displayType === 'preference' || entry.displayType === 'user_preference') && onEditPreferences) {
-                                onEditPreferences()
-                              } else {
-                                alert(`Editing for ${entry.displayTypeLabel} entries is not available yet.`)
-                              }
-                            }}
-                          >
-                            <Edit3 className="w-4 h-4" />
-                          </Button>
+                          {(entry.displayType === 'preference' || entry.displayType === 'user_preference') && onEditPreferences && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8"
+                              onClick={onEditPreferences}
+                            >
+                              <Edit3 className="w-4 h-4" />
+                            </Button>
+                          )}
                         </div>
                       </div>
                       
-                      <p className="text-muted-foreground mb-3 break-words whitespace-pre-wrap">
-                        {entry.content.length > 300 
-                          ? `${entry.content.substring(0, 300)}...` 
-                          : entry.content
-                        }
+                      <p className="text-muted-foreground mb-3 break-words whitespace-pre-wrap text-sm leading-relaxed">
+                        {presentation.summary}
                       </p>
+
+                      {presentation.highlights.length > 0 && (
+                        <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          {presentation.highlights.slice(0, 4).map((item, itemIndex) => {
+                            const HighlightIcon = item.icon || Tag
+
+                            return (
+                              <div
+                                key={`${entry.entry_id}-highlight-${itemIndex}`}
+                                className="flex items-start gap-2 rounded-lg border border-border/60 bg-muted/30 px-2 py-1.5"
+                              >
+                                <HighlightIcon className="mt-0.5 h-3.5 w-3.5 text-muted-foreground" />
+                                <div className="min-w-0">
+                                  <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{item.label}</p>
+                                  <p className="truncate text-xs font-medium text-foreground">{item.value}</p>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+
+                      {isExpanded && (
+                        <div className="mb-3 space-y-3 rounded-xl border border-border/60 bg-muted/20 p-3">
+                          {presentation.contentRows.length > 0 && (
+                            <div>
+                              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                Entry Details
+                              </p>
+                              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                {presentation.contentRows.map((row, rowIndex) => (
+                                  <div key={`${entry.entry_id}-content-row-${rowIndex}`} className="rounded-md bg-background/70 px-2 py-1.5">
+                                    <p className="text-[11px] text-muted-foreground">{row.label}</p>
+                                    <p className="text-xs font-medium break-words">{row.value}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {presentation.metadataRows.length > 0 && (
+                            <div>
+                              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                Metadata
+                              </p>
+                              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                {presentation.metadataRows.map((row, rowIndex) => (
+                                  <div key={`${entry.entry_id}-metadata-row-${rowIndex}`} className="rounded-md bg-background/70 px-2 py-1.5">
+                                    <p className="text-[11px] text-muted-foreground">{row.label}</p>
+                                    <p className="text-xs font-medium break-words">{row.value}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
                       
                       {entry.tags.length > 0 && (
                         <div className="flex flex-wrap gap-1">

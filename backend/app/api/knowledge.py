@@ -4,7 +4,7 @@ API endpoints for knowledge base operations.
 
 import logging
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -335,6 +335,13 @@ class OnboardingData(BaseModel):
     preferences: List[str]
     mentor: Dict[str, Any]
     planner: Dict[str, Any]
+    preferredTone: Optional[str] = None
+
+
+class DailyCheckupRequest(BaseModel):
+    """Request model for morning/evening checkup APIs."""
+    date: Optional[str] = None
+    note: Optional[str] = None
 
 
 def _resolve_date_range(time_range: str) -> int:
@@ -379,6 +386,314 @@ def _normalize_entry_category(entry: KnowledgeEntry) -> str:
     return category if category else "uncategorized"
 
 
+def _ensure_timezone(value: datetime) -> datetime:
+    """Normalize datetimes to timezone-aware UTC values."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _entry_context(entry: KnowledgeEntry) -> Dict[str, Any]:
+    metadata = entry.metadata or {}
+    context = metadata.get("context")
+    if isinstance(context, dict):
+        return context
+    return {}
+
+
+def _parse_context_datetime(raw_value: Any) -> Optional[datetime]:
+    """Parse datetime values stored in context payloads."""
+    if raw_value is None:
+        return None
+
+    if isinstance(raw_value, datetime):
+        return _ensure_timezone(raw_value)
+
+    if not isinstance(raw_value, str):
+        return None
+
+    candidate = raw_value.strip()
+    if not candidate:
+        return None
+
+    normalized_candidate = candidate[:-1] + "+00:00" if candidate.endswith("Z") else candidate
+
+    try:
+        parsed = datetime.fromisoformat(normalized_candidate)
+    except ValueError:
+        return None
+
+    return _ensure_timezone(parsed)
+
+
+def _resolve_entry_event_timestamp(entry: KnowledgeEntry, fallback_ts: Optional[datetime] = None) -> datetime:
+    """Resolve the semantic timestamp for analytics and checkups."""
+    base_timestamp = _ensure_timezone(fallback_ts or entry.created_at)
+
+    if _normalize_entry_category(entry) != "time_entry":
+        return base_timestamp
+
+    context = _entry_context(entry)
+    for key in ("start_time", "end_time", "timestamp"):
+        parsed = _parse_context_datetime(context.get(key))
+        if parsed:
+            return parsed
+
+    return base_timestamp
+
+
+def _safe_float(raw_value: Any, default: float = 0.0) -> float:
+    try:
+        return float(raw_value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(raw_value: Any, default: int = 0) -> int:
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_requested_date(date_token: Optional[str]) -> date:
+    """Parse YYYY-MM-DD dates from API payloads."""
+    if not date_token:
+        return datetime.now(timezone.utc).date()
+
+    try:
+        return date.fromisoformat(date_token)
+    except ValueError as parse_error:
+        raise HTTPException(status_code=400, detail="Invalid date format. Expected YYYY-MM-DD") from parse_error
+
+
+def _format_minutes(total_minutes: float) -> str:
+    normalized_minutes = max(0, int(round(total_minutes)))
+    hours = normalized_minutes // 60
+    minutes = normalized_minutes % 60
+    if hours > 0:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
+def _normalized_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _normalized_string_list(raw_value: Any) -> List[str]:
+    if not isinstance(raw_value, list):
+        return []
+
+    normalized: List[str] = []
+    for item in raw_value:
+        item_text = _normalized_text(item)
+        if item_text:
+            normalized.append(item_text)
+    return normalized
+
+
+def _extract_communication_profile(all_entries: List[KnowledgeEntry]) -> Dict[str, Any]:
+    latest_profile_entry: Optional[KnowledgeEntry] = None
+    for entry in all_entries:
+        if (
+            entry.entry_type == KnowledgeEntryType.USER_PREFERENCE
+            and entry.entry_sub_type == KnowledgeEntrySubType.USER_PROFILE
+        ):
+            if (
+                latest_profile_entry is None
+                or _ensure_timezone(entry.updated_at) > _ensure_timezone(latest_profile_entry.updated_at)
+            ):
+                latest_profile_entry = entry
+
+    if latest_profile_entry is None:
+        return {
+            "role": "",
+            "preferred_tone": "",
+            "mentor_name": "",
+            "mentor_archetype": "",
+            "mentor_style": "",
+            "preferences": [],
+        }
+
+    metadata = latest_profile_entry.metadata if isinstance(latest_profile_entry.metadata, dict) else {}
+    mentor = metadata.get("mentor") if isinstance(metadata.get("mentor"), dict) else {}
+
+    return {
+        "role": _normalized_text(metadata.get("role")),
+        "preferred_tone": _normalized_text(
+            metadata.get("preferredTone")
+            or metadata.get("preferred_tone")
+            or mentor.get("tone")
+        ),
+        "mentor_name": _normalized_text(mentor.get("name")),
+        "mentor_archetype": _normalized_text(mentor.get("archetype")),
+        "mentor_style": _normalized_text(mentor.get("style")),
+        "preferences": _normalized_string_list(metadata.get("preferences")),
+    }
+
+
+def _build_style_directive(profile: Dict[str, Any], checkup_type: str) -> str:
+    fragments: List[str] = [f"This is a {checkup_type} checkup response."]
+
+    mentor_name = _normalized_text(profile.get("mentor_name"))
+    role = _normalized_text(profile.get("role"))
+    preferred_tone = _normalized_text(profile.get("preferred_tone"))
+    mentor_archetype = _normalized_text(profile.get("mentor_archetype"))
+    mentor_style = _normalized_text(profile.get("mentor_style"))
+    priorities = _normalized_string_list(profile.get("preferences"))
+
+    if mentor_name:
+        fragments.append(f"Coach identity: {mentor_name}.")
+    if role:
+        fragments.append(f"User context role: {role}.")
+    if preferred_tone:
+        fragments.append(f"Required tone: {preferred_tone}.")
+    if mentor_archetype:
+        fragments.append(f"Mentor archetype to mirror: {mentor_archetype}.")
+    if mentor_style:
+        fragments.append(f"Delivery style to mirror: {mentor_style}.")
+    if priorities:
+        fragments.append(f"Priorities to respect: {', '.join(priorities[:4])}.")
+
+    fragments.append("Stay practical, concrete, and avoid generic coaching language.")
+    return " ".join(fragments)
+
+
+def _build_fallback_checkup_message(lines: List[str], profile: Dict[str, Any], checkup_type: str) -> str:
+    mentor_name = _normalized_text(profile.get("mentor_name")) or "Coach"
+    tone = _normalized_text(profile.get("preferred_tone")).lower()
+    mentor_archetype = _normalized_text(profile.get("mentor_archetype"))
+    mentor_style = _normalized_text(profile.get("mentor_style"))
+
+    if "direct" in tone or "blunt" in tone or "concise" in tone:
+        opener = f"{mentor_name} ({checkup_type.title()}): Straight plan."
+        closer = "Choose the first action and execute it now."
+    elif "warm" in tone or "friendly" in tone or "empathetic" in tone or "supportive" in tone:
+        opener = f"{mentor_name} ({checkup_type.title()}): You are making progress."
+        closer = "Pick one next step now and keep your momentum."
+    elif "formal" in tone or "professional" in tone:
+        opener = f"{mentor_name} ({checkup_type.title()}): Structured guidance."
+        closer = "Confirm the first priority and time-block it immediately."
+    else:
+        opener = f"{mentor_name} ({checkup_type.title()}):"
+        closer = "Commit to the first action before your next context switch."
+
+    style_cues = ", ".join([cue for cue in [mentor_archetype, mentor_style] if cue])
+    parts = [opener]
+    if style_cues:
+        parts.append(f"Style cues: {style_cues}")
+    parts.extend([f"- {line}" for line in lines])
+    parts.append(closer)
+    return "\n".join(parts)
+
+
+def _public_style_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "preferred_tone": _normalized_text(profile.get("preferred_tone")) or None,
+        "mentor_name": _normalized_text(profile.get("mentor_name")) or None,
+        "mentor_archetype": _normalized_text(profile.get("mentor_archetype")) or None,
+        "mentor_style": _normalized_text(profile.get("mentor_style")) or None,
+        "priorities": _normalized_string_list(profile.get("preferences"))[:5],
+    }
+
+
+async def _generate_checkup_message(
+    prompt: str,
+    max_tokens: int = 280,
+    style_directive: Optional[str] = None,
+) -> Optional[str]:
+    """Generate optional LLM-enhanced coaching text, if provider is initialized."""
+    try:
+        from app.llm import service as llm_service_module
+        from app.llm.base import CompletionRequest, ChatMessage
+
+        llm_service = llm_service_module._llm_service
+        if not llm_service or not llm_service._initialized:
+            return None
+
+        system_content = (
+            "You are a concise accountability coach. Keep responses practical, specific, "
+            "and under 140 words. Use short bullet points when useful."
+        )
+        if style_directive:
+            system_content += f" Align the voice with this communication profile: {style_directive}"
+
+        request = CompletionRequest(
+            messages=[
+                ChatMessage(
+                    role="system",
+                    content=system_content,
+                ),
+                ChatMessage(role="user", content=prompt),
+            ],
+            temperature=0.35,
+            max_tokens=max_tokens,
+        )
+
+        response = await llm_service.chat_completion(request)
+        content = (response.content or "").strip()
+        return content or None
+    except Exception as llm_error:
+        logger.warning("Daily checkup LLM generation failed, using fallback text: %s", llm_error)
+        return None
+
+
+async def _upsert_checkup_insight(
+    kb_service,
+    checkup_type: str,
+    checkup_date: date,
+    title: str,
+    content: str,
+    metadata: Dict[str, Any],
+    tags: List[str],
+) -> None:
+    """Persist a single daily checkup insight entry with date/type upsert semantics."""
+    existing_entries = await kb_service.get_all_entries(
+        category="daily_checkup",
+        entry_type=KnowledgeEntryType.INSIGHT,
+    )
+
+    checkup_date_iso = checkup_date.isoformat()
+    target_entry = None
+    for entry in existing_entries:
+        entry_metadata = entry.metadata or {}
+        if (
+            str(entry_metadata.get("checkup_type", "")).strip().lower() == checkup_type
+            and str(entry_metadata.get("checkup_date", "")).strip() == checkup_date_iso
+        ):
+            target_entry = entry
+            break
+
+    merged_metadata = dict(metadata or {})
+    merged_metadata["checkup_type"] = checkup_type
+    merged_metadata["checkup_date"] = checkup_date_iso
+
+    normalized_tags = sorted(set([*tags, "daily_checkup", checkup_type]))
+
+    if target_entry:
+        updated_entry = await kb_service.update_entry(
+            entry_id=target_entry.entry_id,
+            title=title,
+            content=content,
+            metadata=merged_metadata,
+            tags=normalized_tags,
+        )
+        if updated_entry:
+            return
+
+    await kb_service.create_entry(
+        entry_type=KnowledgeEntryType.INSIGHT,
+        entry_sub_type=KnowledgeEntrySubType.MISC_INSIGHT,
+        category="daily_checkup",
+        title=title,
+        content=content,
+        metadata=merged_metadata,
+        tags=normalized_tags,
+    )
+
+
 @router.get("/analytics")
 async def get_knowledge_analytics(
     time_range: str = Query("30d", alias="range", regex="^(7d|30d|90d)$", description="Analytics range")
@@ -395,9 +710,7 @@ async def get_knowledge_analytics(
         # Normalize datetimes and sort once for deterministic analytics output.
         entries_with_ts = []
         for entry in all_entries:
-            entry_ts = entry.created_at
-            if entry_ts.tzinfo is None:
-                entry_ts = entry_ts.replace(tzinfo=timezone.utc)
+            entry_ts = _resolve_entry_event_timestamp(entry)
             entries_with_ts.append((entry, entry_ts))
 
         entries_with_ts.sort(key=lambda item: item[1])
@@ -445,10 +758,16 @@ async def get_knowledge_analytics(
                 context = metadata.get("context") if isinstance(metadata.get("context"), dict) else {}
 
                 duration_minutes = context.get("duration_minutes")
-                if isinstance(duration_minutes, (int, float)):
-                    time_entry_total_minutes += float(duration_minutes)
+                if duration_minutes is not None:
+                    time_entry_total_minutes += max(0.0, _safe_float(duration_minutes, default=0.0))
 
-                if bool(context.get("billable", False)):
+                raw_billable = context.get("billable", False)
+                if isinstance(raw_billable, bool):
+                    is_billable = raw_billable
+                else:
+                    is_billable = str(raw_billable).strip().lower() in {"1", "true", "yes"}
+
+                if is_billable:
                     time_entry_billable_count += 1
 
         daily_interactions = []
@@ -634,6 +953,327 @@ async def get_knowledge_analytics(
         raise HTTPException(status_code=500, detail=f"Failed to get analytics data: {str(e)}")
 
 
+@router.post("/checkups/morning")
+async def run_morning_checkup(request: DailyCheckupRequest):
+    """Generate a morning planning checkup using persisted knowledge and time-entry context."""
+    try:
+        kb_service = get_knowledge_base_service()
+        checkup_date = _parse_requested_date(request.date)
+        note = (request.note or "").strip()
+
+        all_entries = await kb_service.get_all_entries()
+        time_entries: List[Dict[str, Any]] = []
+
+        for entry in all_entries:
+            if _normalize_entry_category(entry) != "time_entry":
+                continue
+
+            event_ts = _resolve_entry_event_timestamp(entry)
+            event_date = event_ts.date()
+            if event_date > checkup_date:
+                continue
+
+            context = _entry_context(entry)
+            duration_minutes = _safe_float(context.get("duration_minutes"), default=0.0)
+            if duration_minutes <= 0 and context.get("duration_seconds") is not None:
+                duration_minutes = _safe_float(context.get("duration_seconds"), default=0.0) / 60.0
+
+            time_entries.append({
+                "event_date": event_date,
+                "event_ts": event_ts,
+                "project_name": str(context.get("project_name") or "").strip() or "Unassigned",
+                "description": str(context.get("description") or entry.title or "Untitled task").strip(),
+                "duration_minutes": max(0.0, duration_minutes),
+                "focus_score": _safe_float(context.get("focus_score"), default=0.0),
+            })
+
+        lookback_start = checkup_date - timedelta(days=6)
+        week_entries = [item for item in time_entries if lookback_start <= item["event_date"] <= checkup_date]
+        today_entries = [item for item in time_entries if item["event_date"] == checkup_date]
+
+        total_week_minutes = sum(item["duration_minutes"] for item in week_entries)
+        avg_daily_minutes = total_week_minutes / 7.0
+
+        project_minutes: Dict[str, float] = defaultdict(float)
+        for item in week_entries:
+            project_minutes[item["project_name"]] += item["duration_minutes"]
+
+        top_projects = [
+            project
+            for project, _ in sorted(project_minutes.items(), key=lambda pair: pair[1], reverse=True)[:3]
+        ]
+
+        valid_focus_scores = [item["focus_score"] for item in week_entries if item["focus_score"] > 0]
+        avg_focus_score = round(sum(valid_focus_scores) / len(valid_focus_scores), 2) if valid_focus_scores else None
+
+        preferences = await kb_service.get_user_preferences()
+        priorities = preferences.general.get("priorities", []) if isinstance(preferences.general, dict) else []
+        priorities = priorities if isinstance(priorities, list) else []
+        communication_profile = _extract_communication_profile(all_entries)
+        style_directive = _build_style_directive(communication_profile, "morning")
+
+        work_hours = (
+            (preferences.general.get("work_hours") if isinstance(preferences.general, dict) else None)
+            or (preferences.productivity.get("work_hours") if isinstance(preferences.productivity, dict) else None)
+            or "09:00-17:00"
+        )
+        check_in_time = (
+            preferences.journal.get("check_in_time")
+            if isinstance(preferences.journal, dict)
+            else "09:00"
+        ) or "09:00"
+
+        priority_focus = str(priorities[0]).strip() if priorities else ""
+        project_focus = top_projects[0] if top_projects else ""
+        focus_target = note or priority_focus or project_focus or "Most important task"
+
+        fallback_lines = [
+            f"Primary focus: {focus_target}",
+            f"Anchor check-in time: {check_in_time}",
+            f"Suggested work window: {work_hours}",
+            f"Last 7-day average logged work: {_format_minutes(avg_daily_minutes)}",
+        ]
+        if top_projects:
+            fallback_lines.append(f"Keep momentum on: {', '.join(top_projects)}")
+        if avg_focus_score is not None:
+            fallback_lines.append(f"Recent focus baseline: {avg_focus_score}/10")
+
+        llm_prompt = (
+            f"Date: {checkup_date.isoformat()}\n"
+            f"Intent note: {note or 'none'}\n"
+            f"Communication profile: {style_directive}\n"
+            f"Focus target: {focus_target}\n"
+            f"Work hours: {work_hours}\n"
+            f"Check-in time: {check_in_time}\n"
+            f"Last 7 days logged minutes: {round(total_week_minutes, 1)}\n"
+            f"Average daily logged minutes: {round(avg_daily_minutes, 1)}\n"
+            f"Top projects: {', '.join(top_projects) if top_projects else 'none'}\n"
+            f"Today existing entries: {len(today_entries)}\n"
+            "Create a practical morning checkup with: 1) one focus sentence, "
+            "2) three action bullets, 3) one accountability question."
+        )
+
+        llm_message = await _generate_checkup_message(llm_prompt, style_directive=style_directive)
+        coach_message = llm_message or _build_fallback_checkup_message(fallback_lines, communication_profile, "morning")
+
+        response_payload = {
+            "date": checkup_date.isoformat(),
+            "checkup_type": "morning",
+            "intent_note": note or None,
+            "focus_target": focus_target,
+            "recommended_projects": top_projects,
+            "stats": {
+                "today_entries": len(today_entries),
+                "last_7_days_entries": len(week_entries),
+                "last_7_days_minutes": round(total_week_minutes, 1),
+                "avg_daily_minutes": round(avg_daily_minutes, 1),
+                "avg_focus_score": avg_focus_score,
+            },
+            "style_profile": _public_style_profile(communication_profile),
+            "coach_message": coach_message,
+            "generated_with": "llm" if llm_message else "fallback",
+        }
+
+        insight_content = (
+            f"Morning checkup for {checkup_date.isoformat()}\n"
+            f"Focus: {focus_target}\n"
+            f"Work Hours: {work_hours}\n"
+            f"Check-in: {check_in_time}\n\n"
+            f"Coach Guidance:\n{coach_message}"
+        )
+
+        await _upsert_checkup_insight(
+            kb_service=kb_service,
+            checkup_type="morning",
+            checkup_date=checkup_date,
+            title=f"Morning Checkup - {checkup_date.isoformat()}",
+            content=insight_content,
+            metadata=response_payload,
+            tags=["planning", "time_entry"],
+        )
+
+        return response_payload
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate morning checkup: {str(e)}")
+
+
+@router.post("/checkups/evening")
+async def run_evening_checkup(request: DailyCheckupRequest):
+    """Generate an evening reflection checkup based on a single day of logged context."""
+    try:
+        kb_service = get_knowledge_base_service()
+        checkup_date = _parse_requested_date(request.date)
+        note = (request.note or "").strip()
+
+        all_entries = await kb_service.get_all_entries()
+        today_entries: List[Dict[str, Any]] = []
+
+        for entry in all_entries:
+            if _normalize_entry_category(entry) != "time_entry":
+                continue
+
+            event_ts = _resolve_entry_event_timestamp(entry)
+            if event_ts.date() != checkup_date:
+                continue
+
+            context = _entry_context(entry)
+
+            duration_minutes = _safe_float(context.get("duration_minutes"), default=0.0)
+            if duration_minutes <= 0 and context.get("duration_seconds") is not None:
+                duration_minutes = _safe_float(context.get("duration_seconds"), default=0.0) / 60.0
+
+            raw_billable = context.get("billable", False)
+            if isinstance(raw_billable, bool):
+                is_billable = raw_billable
+            else:
+                is_billable = str(raw_billable).strip().lower() in {"1", "true", "yes"}
+
+            blocker_text = str(context.get("blockers") or "").strip()
+
+            today_entries.append({
+                "event_ts": event_ts,
+                "project_name": str(context.get("project_name") or "").strip() or "Unassigned",
+                "description": str(context.get("description") or entry.title or "Untitled task").strip(),
+                "duration_minutes": max(0.0, duration_minutes),
+                "billable": is_billable,
+                "focus_score": _safe_float(context.get("focus_score"), default=0.0),
+                "energy_score": _safe_float(context.get("energy_score"), default=0.0),
+                "blockers": blocker_text,
+            })
+
+        today_entries.sort(key=lambda item: item["event_ts"])
+
+        total_minutes = sum(item["duration_minutes"] for item in today_entries)
+        billable_minutes = sum(item["duration_minutes"] for item in today_entries if item["billable"])
+
+        project_minutes: Dict[str, float] = defaultdict(float)
+        for item in today_entries:
+            project_minutes[item["project_name"]] += item["duration_minutes"]
+
+        top_projects = [
+            project
+            for project, _ in sorted(project_minutes.items(), key=lambda pair: pair[1], reverse=True)[:3]
+        ]
+
+        focus_scores = [item["focus_score"] for item in today_entries if item["focus_score"] > 0]
+        energy_scores = [item["energy_score"] for item in today_entries if item["energy_score"] > 0]
+        avg_focus = round(sum(focus_scores) / len(focus_scores), 2) if focus_scores else None
+        avg_energy = round(sum(energy_scores) / len(energy_scores), 2) if energy_scores else None
+
+        blockers = sorted({item["blockers"] for item in today_entries if item["blockers"]})
+        longest_tasks = sorted(today_entries, key=lambda item: item["duration_minutes"], reverse=True)[:3]
+
+        wins: List[str] = []
+        if total_minutes >= 180:
+            wins.append(f"You protected {_format_minutes(total_minutes)} of focused work today.")
+        if avg_focus is not None and avg_focus >= 4:
+            wins.append(f"Focus quality was strong at {avg_focus}/10.")
+        if top_projects:
+            wins.append(f"You made measurable progress in {', '.join(top_projects[:2])}.")
+        if not wins and today_entries:
+            wins.append("You maintained momentum by logging and reflecting on your work.")
+
+        tomorrow_focus = []
+        if longest_tasks:
+            tomorrow_focus.append(f"Continue momentum on: {longest_tasks[0]['description']}")
+        if blockers:
+            tomorrow_focus.append(f"Address blocker first: {blockers[0]}")
+        if not tomorrow_focus:
+            tomorrow_focus.append("Define your top 1 task before starting tomorrow.")
+
+        fallback_lines = [
+            f"Total logged today: {_format_minutes(total_minutes)}",
+            f"Billable portion: {_format_minutes(billable_minutes)}",
+            f"Sessions captured: {len(today_entries)}",
+        ]
+        if avg_focus is not None:
+            fallback_lines.append(f"Average focus: {avg_focus}/10")
+        if avg_energy is not None:
+            fallback_lines.append(f"Average energy: {avg_energy}/10")
+        fallback_lines.extend([f"Tomorrow: {item}" for item in tomorrow_focus])
+
+        communication_profile = _extract_communication_profile(all_entries)
+        style_directive = _build_style_directive(communication_profile, "evening")
+
+        llm_prompt = (
+            f"Date: {checkup_date.isoformat()}\n"
+            f"Reflection note: {note or 'none'}\n"
+            f"Communication profile: {style_directive}\n"
+            f"Total minutes: {round(total_minutes, 1)}\n"
+            f"Billable minutes: {round(billable_minutes, 1)}\n"
+            f"Sessions: {len(today_entries)}\n"
+            f"Top projects: {', '.join(top_projects) if top_projects else 'none'}\n"
+            f"Avg focus: {avg_focus if avg_focus is not None else 'n/a'}\n"
+            f"Avg energy: {avg_energy if avg_energy is not None else 'n/a'}\n"
+            f"Blockers: {', '.join(blockers) if blockers else 'none'}\n"
+            "Provide an evening checkup with: 1) one recap sentence, "
+            "2) two wins, 3) two concrete tomorrow actions."
+        )
+
+        llm_message = await _generate_checkup_message(llm_prompt, style_directive=style_directive)
+        coach_message = llm_message or _build_fallback_checkup_message(fallback_lines, communication_profile, "evening")
+
+        timeline = [
+            {
+                "time": item["event_ts"].isoformat(),
+                "project": item["project_name"],
+                "description": item["description"],
+                "duration_minutes": round(item["duration_minutes"], 1),
+                "billable": item["billable"],
+            }
+            for item in today_entries
+        ]
+
+        response_payload = {
+            "date": checkup_date.isoformat(),
+            "checkup_type": "evening",
+            "reflection_note": note or None,
+            "stats": {
+                "total_minutes": round(total_minutes, 1),
+                "billable_minutes": round(billable_minutes, 1),
+                "sessions": len(today_entries),
+                "avg_focus": avg_focus,
+                "avg_energy": avg_energy,
+                "top_projects": top_projects,
+            },
+            "wins": wins,
+            "blockers": blockers,
+            "tomorrow_focus": tomorrow_focus,
+            "timeline": timeline,
+            "style_profile": _public_style_profile(communication_profile),
+            "coach_message": coach_message,
+            "generated_with": "llm" if llm_message else "fallback",
+        }
+
+        insight_content = (
+            f"Evening checkup for {checkup_date.isoformat()}\n"
+            f"Total Logged: {_format_minutes(total_minutes)}\n"
+            f"Billable: {_format_minutes(billable_minutes)}\n"
+            f"Sessions: {len(today_entries)}\n\n"
+            "Wins:\n" + "\n".join(f"- {item}" for item in wins) + "\n\n"
+            "Tomorrow Focus:\n" + "\n".join(f"- {item}" for item in tomorrow_focus) + "\n\n"
+            f"Coach Reflection:\n{coach_message}"
+        )
+
+        await _upsert_checkup_insight(
+            kb_service=kb_service,
+            checkup_type="evening",
+            checkup_date=checkup_date,
+            title=f"Evening Checkup - {checkup_date.isoformat()}",
+            content=insight_content,
+            metadata=response_payload,
+            tags=["reflection", "time_entry"],
+        )
+
+        return response_payload
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate evening checkup: {str(e)}")
+
+
 @router.post("/onboarding")
 async def save_onboarding_data(data: OnboardingData):
     """Save user onboarding data to knowledge base."""
@@ -648,7 +1288,7 @@ async def save_onboarding_data(data: OnboardingData):
             try:
                 await kb_service.delete_entry(entry.entry_id)
             except Exception as e:
-                logger.warning(f"Failed to delete entry {entry.entry_id}: {str(e)}")
+                logger.warning("Failed to delete entry %s: %s", entry.entry_id, e)
         
         # Now save new user profile
         profile_entry = await kb_service.create_entry(
@@ -661,6 +1301,7 @@ async def save_onboarding_data(data: OnboardingData):
                 "role": data.role,
                 "preferences": data.preferences,
                 "mentor": data.mentor,
+                "preferredTone": data.preferredTone,
                 "onboarding_completed": True
             },
             tags=["profile", "onboarding", data.role.lower()]
@@ -735,6 +1376,7 @@ async def get_onboarding_profile():
             "mentor": {},
             "planner": {},
             "preferences": [],
+            "preferredTone": None,
             "coachAvatar": None,
             "schedule": None
         }
@@ -745,6 +1387,7 @@ async def get_onboarding_profile():
                 profile_data["role"] = metadata.get("role")
                 profile_data["preferences"] = metadata.get("preferences", [])
                 profile_data["mentor"] = metadata.get("mentor", {})
+                profile_data["preferredTone"] = metadata.get("preferredTone") or metadata.get("preferred_tone")
                 profile_data["coachAvatar"] = metadata.get("mentor", {}).get("avatar")
                 # Convert preferences to Answer format
                 for pref in metadata.get("preferences", []):

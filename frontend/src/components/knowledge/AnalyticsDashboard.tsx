@@ -35,6 +35,7 @@ import {
 import { Card } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 interface AnalyticsData {
@@ -64,6 +65,20 @@ interface AnalyticsData {
   }
 }
 
+interface DailyCheckupResponse {
+  date: string
+  checkup_type: 'morning' | 'evening'
+  coach_message: string
+  generated_with: 'llm' | 'fallback' | string
+  focus_target?: string
+  intent_note?: string | null
+  reflection_note?: string | null
+  wins?: string[]
+  blockers?: string[]
+  tomorrow_focus?: string[]
+  stats?: Record<string, unknown>
+}
+
 interface AnalyticsDashboardProps {
   className?: string
 }
@@ -74,6 +89,12 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [selectedTimeRange, setSelectedTimeRange] = useState<'7d' | '30d' | '90d'>('30d')
+  const [morningNote, setMorningNote] = useState('')
+  const [eveningNote, setEveningNote] = useState('')
+  const [checkupLoading, setCheckupLoading] = useState<'morning' | 'evening' | null>(null)
+  const [checkupError, setCheckupError] = useState<string | null>(null)
+  const [morningCheckup, setMorningCheckup] = useState<DailyCheckupResponse | null>(null)
+  const [eveningCheckup, setEveningCheckup] = useState<DailyCheckupResponse | null>(null)
 
   useEffect(() => {
     loadAnalyticsData()
@@ -121,6 +142,40 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       setAnalyticsData(null)
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  const runDailyCheckup = async (checkupType: 'morning' | 'evening') => {
+    setCheckupError(null)
+    setCheckupLoading(checkupType)
+
+    try {
+      const note = checkupType === 'morning' ? morningNote.trim() : eveningNote.trim()
+      const response = await fetch(`/api/knowledge/checkups/${checkupType}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ note: note || undefined }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Checkup failed with status ${response.status}`)
+      }
+
+      const payload = (await response.json()) as DailyCheckupResponse
+      if (checkupType === 'morning') {
+        setMorningCheckup(payload)
+      } else {
+        setEveningCheckup(payload)
+      }
+
+      loadAnalyticsData()
+    } catch (error) {
+      console.error(`Failed to run ${checkupType} checkup:`, error)
+      setCheckupError('Unable to run checkup right now. Please try again.')
+    } finally {
+      setCheckupLoading(null)
     }
   }
 
@@ -190,6 +245,96 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
           ))}
         </div>
       </div>
+
+      <Card className="p-5">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-semibold">Daily AI Checkups</h3>
+            <p className="text-sm text-muted-foreground">
+              Run a morning intention plan and an evening reflection from your real time-entry context.
+            </p>
+          </div>
+          <Badge variant="outline">Morning + Evening</Badge>
+        </div>
+
+        {checkupError && (
+          <div className="mb-4 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {checkupError}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <div className="space-y-3 rounded-xl border p-4">
+            <div>
+              <h4 className="font-medium">Morning Intent</h4>
+              <p className="text-xs text-muted-foreground">Tell AI what matters most today.</p>
+            </div>
+            <textarea
+              value={morningNote}
+              onChange={(event) => setMorningNote(event.target.value)}
+              placeholder="Example: Deep focus on API refactor and 2 important bug fixes."
+              className="min-h-[88px] w-full rounded-md border bg-background px-3 py-2 text-sm"
+            />
+            <Button
+              onClick={() => runDailyCheckup('morning')}
+              disabled={checkupLoading === 'morning'}
+              className="w-full"
+            >
+              {checkupLoading === 'morning' ? 'Running Morning Checkup...' : 'Run Morning Checkup'}
+            </Button>
+
+            {morningCheckup && (
+              <div className="space-y-2 rounded-md bg-secondary/40 p-3 text-sm">
+                <div className="flex items-center justify-between">
+                  <p className="font-medium">Focus: {morningCheckup.focus_target || 'N/A'}</p>
+                  <Badge variant="secondary">{morningCheckup.generated_with}</Badge>
+                </div>
+                <p className="whitespace-pre-wrap text-muted-foreground">{morningCheckup.coach_message}</p>
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-3 rounded-xl border p-4">
+            <div>
+              <h4 className="font-medium">Evening Reflection</h4>
+              <p className="text-xs text-muted-foreground">Close the day with a grounded review.</p>
+            </div>
+            <textarea
+              value={eveningNote}
+              onChange={(event) => setEveningNote(event.target.value)}
+              placeholder="Example: Felt productive but context switching hurt focus."
+              className="min-h-[88px] w-full rounded-md border bg-background px-3 py-2 text-sm"
+            />
+            <Button
+              onClick={() => runDailyCheckup('evening')}
+              disabled={checkupLoading === 'evening'}
+              className="w-full"
+            >
+              {checkupLoading === 'evening' ? 'Running Evening Checkup...' : 'Run Evening Checkup'}
+            </Button>
+
+            {eveningCheckup && (
+              <div className="space-y-2 rounded-md bg-secondary/40 p-3 text-sm">
+                <div className="flex items-center justify-between">
+                  <p className="font-medium">{eveningCheckup.date}</p>
+                  <Badge variant="secondary">{eveningCheckup.generated_with}</Badge>
+                </div>
+                <p className="whitespace-pre-wrap text-muted-foreground">{eveningCheckup.coach_message}</p>
+                {!!eveningCheckup.tomorrow_focus?.length && (
+                  <div>
+                    <p className="font-medium">Tomorrow Focus</p>
+                    <ul className="list-disc pl-5 text-muted-foreground">
+                      {eveningCheckup.tomorrow_focus.map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </Card>
 
       {/* Key Metrics */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
