@@ -99,7 +99,7 @@ const navigationItems = [
   },
   {
     id: 'onboarding',
-    name: 'Setup Profile',
+    name: 'Onboarding',
     icon: Sparkles,
     path: '/onboarding'
   },

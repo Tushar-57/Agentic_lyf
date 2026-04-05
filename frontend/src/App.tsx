@@ -7,6 +7,7 @@ import { Sidebar } from '@/components/layout/Sidebar'
 import { SettingsPanel } from '@/components/settings/SettingsPanel'
 import { KnowledgeManagement } from '@/components/knowledge/KnowledgeManagement'
 import ChatOnboarding from '@/components/onboarding/ChatOnboarding'
+import ProfileWorkspace from '@/components/profile/ProfileWorkspace'
 import { DeepAgentStatus } from '@/components/chat/DeepAgentStatus'
 import { FloatingApprovalNotification } from '@/components/chat/FloatingApprovalNotification'
 import { Button } from '@/components/ui/button'
@@ -102,7 +103,7 @@ function App() {
 
   const mobileViews = [
     { id: 'chat', label: 'Chat', icon: MessageSquare },
-    { id: 'onboarding', label: 'Setup', icon: Sparkles },
+    { id: 'onboarding', label: 'Onboarding', icon: Sparkles },
     { id: 'knowledge', label: 'Knowledge', icon: Database },
     { id: 'analytics', label: 'Analytics', icon: BarChart3 },
     { id: 'profile', label: 'Profile', icon: User },
@@ -651,12 +652,10 @@ function App() {
         )}
         
         {currentView === 'profile' && (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="text-center">
-              <h2 className="text-2xl font-bold mb-2">Profile</h2>
-              <p className="text-muted-foreground">Profile management tools are on the way.</p>
-            </div>
-          </div>
+          <ProfileWorkspace
+            onStartOnboarding={() => setCurrentView('onboarding')}
+            onContinueToChat={() => setCurrentView('chat')}
+          />
         )}
       </motion.div>
 
