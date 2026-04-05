@@ -115,6 +115,14 @@ class AgentGraphWorkflow:
             reasoning = state.get("reasoning", {})
             context = state.get("context", {})
             conversation_id = state.get("conversation_id", "")
+
+            # If orchestrator returned an error object, keep it readable and skip formatter calls.
+            if isinstance(raw_response, dict):
+                response_status = str(raw_response.get("status", "")).strip().lower()
+                if response_status == "error":
+                    state["response"] = self._normalize_response_text(raw_response.get("response", raw_response))
+                    state["formatting_applied"] = False
+                    return state
             
             # Don't format if response is already well-formatted or if it's an error
             if not raw_response_text or "i apologize" in raw_response_text.lower():
@@ -304,6 +312,31 @@ Now enhance the following response:"""
         # Normalize common alternate keys to a single response/reasoning
         response = result.get("response") or result.get("final_response") or result.get("final") or result.get("next_agent")
         reasoning = result.get("reasoning") or result.get("reason") or result.get("orchestrator_output")
+
+        if isinstance(response, dict):
+            nested_response = (
+                response.get("response")
+                or response.get("content")
+                or response.get("message")
+                or response.get("text")
+            )
+
+            if not reasoning and isinstance(response.get("reasoning"), dict):
+                reasoning = response.get("reasoning")
+
+            if nested_response is not None:
+                response = nested_response
+            else:
+                try:
+                    response = json.dumps(response)
+                except Exception:
+                    response = str(response)
+
+        if isinstance(response, (list, tuple)):
+            response = "\n".join(str(item) for item in response)
+
+        if response is not None and not isinstance(response, str):
+            response = str(response)
 
         # If it looks like the original state (no response produced), warn and return None
         if not response and isinstance(result, dict) and {"user_input", "conversation_id"}.issubset(set(result.keys())):

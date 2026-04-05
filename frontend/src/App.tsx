@@ -660,7 +660,7 @@ function App() {
     <div
       ref={appShellRef}
       className={cn(
-      "relative flex min-h-[100svh] overflow-x-hidden bg-background text-foreground transition-colors duration-300",
+      "relative flex min-h-[100svh] w-full overflow-x-hidden bg-background text-foreground transition-colors duration-300",
       isDarkMode && "dark"
       )}
     >
@@ -706,7 +706,7 @@ function App() {
         }}
         transition={{ duration: 0.3, ease: "easeInOut" }}
         className={cn(
-          "relative z-10 flex min-h-0 min-w-0 flex-1 flex-col",
+          "relative z-10 flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-x-hidden",
           isMobile && !isEmbedMode && "pb-[calc(5.2rem+env(safe-area-inset-bottom))]"
         )}
       >
@@ -763,7 +763,7 @@ function App() {
           <div
             data-app-scroll-region="true"
             className={cn(
-              "relative mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 px-2 pt-2 sm:px-4",
+              "relative mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 overflow-x-hidden px-2 pt-2 sm:px-4",
               isMobile && !isEmbedMode ? mobileContentInsetClass : "pb-2 sm:pb-4"
             )}
           >
