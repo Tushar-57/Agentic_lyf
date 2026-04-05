@@ -1,5 +1,4 @@
 const AGENTIC_LOCAL_ORIGIN_PATTERNS = [
-  '',
   'http://127.0.0.1:8000',
 ];
 
