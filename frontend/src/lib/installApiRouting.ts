@@ -1,4 +1,4 @@
-import { getAgenticBridgeToken } from '@/lib/agenticBridgeSession'
+import { getAgenticBridgeToken, getAgenticBridgeUserKey } from '@/lib/agenticBridgeSession'
 
 const AGENTIC_LOCAL_ORIGIN_PATTERNS = [
   'http://127.0.0.1:8000',
@@ -125,9 +125,14 @@ function isAgenticApiUrl(url: string): boolean {
 function buildRequestInit(rewrittenUrl: string, init?: RequestInit, fallbackHeaders?: HeadersInit): RequestInit {
   const headers = new Headers(init?.headers ?? fallbackHeaders ?? undefined)
   const bridgeToken = getAgenticBridgeToken()
+  const bridgeUserKey = getAgenticBridgeUserKey()
 
   if (bridgeToken && isAgenticApiUrl(rewrittenUrl)) {
     headers.set('X-Agentic-Bridge-Token', bridgeToken)
+  }
+
+  if (bridgeUserKey && isAgenticApiUrl(rewrittenUrl) && !headers.has('X-Agentic-User-Id')) {
+    headers.set('X-Agentic-User-Id', bridgeUserKey)
   }
 
   return {

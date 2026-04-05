@@ -490,14 +490,31 @@ class ConnectionTestRequest(BaseModel):
 async def get_llm_status():
     """Get current LLM provider status."""
     try:
+        effective_config = LLMConfig.from_env(dict(os.environ))
+
         # Get current service if available
         current_service = llm_service_module._llm_service
         
         status = {
             "current_provider": None,
+            "configured_provider": str(effective_config.provider),
+            "configured_fallback_provider": str(effective_config.fallback_provider) if effective_config.fallback_provider else None,
             "providers": {
-                "openai": {"healthy": False, "model": None, "responseTime": None},
-                "ollama": {"healthy": False, "model": None, "responseTime": None}
+                "openai": {
+                    "healthy": False,
+                    "configured": bool(effective_config.openai_api_key),
+                    "model": effective_config.openai_model,
+                    "responseTime": None,
+                    "error": None,
+                },
+                "ollama": {
+                    "healthy": False,
+                    "configured": bool(effective_config.ollama_endpoint),
+                    "model": effective_config.ollama_model,
+                    "endpoint": effective_config.ollama_endpoint,
+                    "responseTime": None,
+                    "error": None,
+                }
             }
         }
         
@@ -505,35 +522,36 @@ async def get_llm_status():
             current_provider_type = current_service.get_current_provider()
             if current_provider_type:
                 status["current_provider"] = str(current_provider_type).split('.')[-1].lower()
-                
-                # Check provider health
-                try:
-                    provider = current_service.factory._current_provider
-                    if provider:
-                        # Mark current provider as healthy if it exists
-                        provider_name = str(current_provider_type).split('.')[-1].lower()
-                        status["providers"][provider_name]["healthy"] = True
-                        
-                        # Get model info
-                        if hasattr(provider, 'model'):
-                            status["providers"][provider_name]["model"] = provider.model
-                            
-                except Exception as e:
-                    logger.error(f"Error checking provider health: {e}")
-        
-        # Always check Ollama availability
-        try:
-            with urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2) as response:
-                if response.status != 200:
-                    return status
 
-                status["providers"]["ollama"]["healthy"] = True
-                response_payload = response.read().decode("utf-8")
-                tags_data = json.loads(response_payload)
-                if tags_data.get("models"):
-                    status["providers"]["ollama"]["model"] = tags_data["models"][0]["name"]
-        except Exception:
-            pass  # Ollama not available
+            try:
+                health_map = await current_service.health_check()
+                for provider_type, health in health_map.items():
+                    provider_name = str(provider_type).split('.')[-1].lower()
+                    if provider_name not in status["providers"]:
+                        continue
+
+                    status["providers"][provider_name]["healthy"] = bool(health.is_healthy)
+                    status["providers"][provider_name]["error"] = health.error
+                    if health.model:
+                        status["providers"][provider_name]["model"] = health.model
+                    if health.response_time_ms is not None:
+                        status["providers"][provider_name]["responseTime"] = int(health.response_time_ms)
+            except Exception as e:
+                logger.error(f"Error checking provider health: {e}")
+
+        # Probe configured Ollama endpoint when health map is unavailable.
+        if not status["providers"]["ollama"]["healthy"]:
+            ollama_probe_url = f"{effective_config.ollama_endpoint.rstrip('/')}/api/tags"
+            try:
+                with urllib.request.urlopen(ollama_probe_url, timeout=2) as response:
+                    if response.status == 200:
+                        status["providers"]["ollama"]["healthy"] = True
+                        response_payload = response.read().decode("utf-8")
+                        tags_data = json.loads(response_payload)
+                        if tags_data.get("models"):
+                            status["providers"]["ollama"]["model"] = tags_data["models"][0]["name"]
+            except Exception as probe_error:
+                status["providers"]["ollama"]["error"] = str(probe_error)
             
         return status
         
@@ -541,9 +559,11 @@ async def get_llm_status():
         logger.error(f"Error getting LLM status: {e}")
         return {
             "current_provider": None,
+            "configured_provider": None,
+            "configured_fallback_provider": None,
             "providers": {
-                "openai": {"healthy": False, "model": None, "responseTime": None},
-                "ollama": {"healthy": False, "model": None, "responseTime": None}
+                "openai": {"healthy": False, "configured": False, "model": None, "responseTime": None, "error": str(e)},
+                "ollama": {"healthy": False, "configured": False, "model": None, "endpoint": None, "responseTime": None, "error": str(e)}
             }
         }
 

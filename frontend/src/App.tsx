@@ -701,12 +701,11 @@ function App() {
       <motion.div
         initial={false}
         animate={{ 
-          marginLeft: 0,
-          width: '100%'
+          marginLeft: 0
         }}
         transition={{ duration: 0.3, ease: "easeInOut" }}
         className={cn(
-          "relative z-10 flex min-h-0 min-w-0 w-full flex-1 flex-col overflow-x-hidden",
+          "relative z-10 flex min-h-0 min-w-0 max-w-full flex-1 flex-col overflow-x-hidden",
           isMobile && !isEmbedMode && "pb-[calc(5.2rem+env(safe-area-inset-bottom))]"
         )}
       >

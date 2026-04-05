@@ -527,6 +527,20 @@ class KnowledgeBaseService:
             sub_type = KnowledgeEntrySubType.MISC_INTERACTION
 
         return normalized_agent, sub_type, ["interaction", "history", normalized_agent]
+
+    async def _find_interaction_by_sync_event_key(self, sync_event_key: str) -> Optional[KnowledgeEntry]:
+        """Find an existing interaction entry by external sync key."""
+        if not sync_event_key:
+            return None
+
+        existing_entries = await self.get_all_entries(entry_type=KnowledgeEntryType.INTERACTION)
+        for entry in existing_entries:
+            metadata = entry.metadata or {}
+            context = metadata.get("context") if isinstance(metadata.get("context"), dict) else {}
+            if str(context.get("sync_event_key", "")).strip() == sync_event_key:
+                return entry
+
+        return None
     
     async def update_user_preferences(self, preferences: UserPreferences) -> bool:
         """
@@ -704,13 +718,35 @@ class KnowledgeBaseService:
             The created interaction entry
         """
         try:
+            context_payload = context or {}
             category, entry_sub_type, tags = self._infer_interaction_category_and_sub_type(
                 agent_type=agent_type,
-                context=context,
+                context=context_payload,
             )
 
             title_source = category.replace("_", " ").title()
             interaction_content = f"User: {user_input}\nAgent ({agent_type}): {agent_response}"
+
+            sync_event_key = str(context_payload.get("sync_event_key", "")).strip()
+            if sync_event_key:
+                existing_entry = await self._find_interaction_by_sync_event_key(sync_event_key)
+                if existing_entry:
+                    updated_entry = await self.update_entry(
+                        entry_id=existing_entry.entry_id,
+                        title=f"Interaction with {title_source}",
+                        content=interaction_content,
+                        metadata={
+                            "agent_type": agent_type,
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "context": context_payload,
+                            "user_input_length": len(user_input),
+                            "response_length": len(agent_response),
+                        },
+                        tags=tags,
+                    )
+                    if updated_entry:
+                        return updated_entry
+
             return await self.create_entry(
                 entry_type=KnowledgeEntryType.INTERACTION,
                 entry_sub_type=entry_sub_type,
@@ -720,7 +756,7 @@ class KnowledgeBaseService:
                 metadata={
                     "agent_type": agent_type,
                     "timestamp": datetime.utcnow().isoformat(),
-                    "context": context or {},
+                    "context": context_payload,
                     "user_input_length": len(user_input),
                     "response_length": len(agent_response)
                 },

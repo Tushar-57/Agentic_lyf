@@ -3,9 +3,34 @@ LLM provider configuration management.
 """
 
 from typing import Optional, Dict, Any
-from pydantic import BaseModel, Field
-from enum import Enum
+from pydantic import BaseModel
 from app.llm.base import LLMProviderType
+
+
+def _parse_provider(value: Optional[str]) -> Optional[LLMProviderType]:
+    """Safely parse a provider value from env or stored config."""
+    if not value:
+        return None
+
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+
+    if normalized in {LLMProviderType.OPENAI.value, "openai"}:
+        return LLMProviderType.OPENAI
+
+    if normalized in {LLMProviderType.OLLAMA.value, "ollama"}:
+        return LLMProviderType.OLLAMA
+
+    return None
+
+
+def _has_openai_config(api_key: Optional[str], model: Optional[str]) -> bool:
+    return bool((api_key or "").strip() and (model or "").strip())
+
+
+def _has_ollama_config(endpoint: Optional[str], model: Optional[str]) -> bool:
+    return bool((endpoint or "").strip() and (model or "").strip())
 
 
 class LLMConfig(BaseModel):
@@ -72,38 +97,70 @@ class LLMConfig(BaseModel):
         from app.services.config_storage import get_config_storage
         
         config_storage = get_config_storage()
-        openai_config = config_storage.get_openai_config()
-        ollama_config = config_storage.get_ollama_config()
+        openai_config = config_storage.get_openai_config() or {}
+        ollama_config = config_storage.get_ollama_config() or {}
 
-        provider_preference = config_storage.get_provider_preference()
-        configured_provider = env_vars.get("LLM_PROVIDER") or provider_preference or "ollama"
+        provider_preference = config_storage.get_provider_preference() or ""
+        requested_provider = _parse_provider(env_vars.get("LLM_PROVIDER"))
+        preferred_provider = _parse_provider(provider_preference)
 
-        configured_fallback = env_vars.get("LLM_FALLBACK_PROVIDER")
-        if configured_fallback:
-            fallback_provider = LLMProviderType(configured_fallback)
+        openai_api_key = (env_vars.get("OPENAI_API_KEY") or openai_config.get("api_key") or "").strip() or None
+        openai_model = (env_vars.get("OPENAI_MODEL") or openai_config.get("model") or "gpt-3.5-turbo").strip()
+        openai_base_url = (env_vars.get("OPENAI_BASE_URL") or openai_config.get("base_url") or None)
+
+        ollama_endpoint = (
+            env_vars.get("OLLAMA_ENDPOINT")
+            or env_vars.get("OLLAMA_BASE_URL")
+            or ollama_config.get("endpoint")
+            or ollama_config.get("base_url")
+            or "http://localhost:11434"
+        )
+        ollama_endpoint = str(ollama_endpoint).strip()
+        ollama_model = (
+            env_vars.get("OLLAMA_MODEL")
+            or ollama_config.get("model")
+            or "llama3.2:3b"
+        )
+        ollama_model = str(ollama_model).strip()
+
+        # Provider resolution precedence:
+        # 1) explicit env override (LLM_PROVIDER)
+        # 2) stored provider preference if that provider is actually configured
+        # 3) auto-select OpenAI when OPENAI_API_KEY is present (hosted default)
+        # 4) fallback to Ollama
+        if requested_provider:
+            configured_provider = requested_provider
+        elif preferred_provider == LLMProviderType.OPENAI and _has_openai_config(openai_api_key, openai_model):
+            configured_provider = LLMProviderType.OPENAI
+        elif preferred_provider == LLMProviderType.OLLAMA and _has_ollama_config(ollama_endpoint, ollama_model):
+            configured_provider = LLMProviderType.OLLAMA
+        elif _has_openai_config(openai_api_key, openai_model):
+            configured_provider = LLMProviderType.OPENAI
+        else:
+            configured_provider = LLMProviderType.OLLAMA
+
+        configured_fallback = _parse_provider(env_vars.get("LLM_FALLBACK_PROVIDER"))
+        if configured_fallback and configured_fallback != configured_provider:
+            fallback_provider = configured_fallback
         else:
             fallback_provider = (
                 LLMProviderType.OPENAI
-                if configured_provider == LLMProviderType.OLLAMA.value
+                if configured_provider == LLMProviderType.OLLAMA
                 else LLMProviderType.OLLAMA
             )
 
-        openai_api_key = env_vars.get("OPENAI_API_KEY") or openai_config.get("api_key")
-        openai_model = env_vars.get("OPENAI_MODEL") or openai_config.get("model") or "gpt-3.5-turbo"
-        ollama_endpoint = env_vars.get("OLLAMA_ENDPOINT") or ollama_config.get("endpoint") or "http://localhost:11434"
-        
         return cls(
-            provider=LLMProviderType(configured_provider),
+            provider=configured_provider,
             fallback_enabled=env_vars.get("LLM_FALLBACK_ENABLED", "true").lower() == "true",
             fallback_provider=fallback_provider,
             
             # Allow deployment env vars to override persisted config.
             openai_api_key=openai_api_key,
             openai_model=openai_model,
-            openai_base_url=env_vars.get("OPENAI_BASE_URL"),
+            openai_base_url=openai_base_url,
             
             ollama_endpoint=ollama_endpoint,
-            ollama_model=env_vars.get("OLLAMA_MODEL", "llama3.2:3b"),
+            ollama_model=ollama_model,
             
             max_tokens=int(env_vars.get("LLM_MAX_TOKENS", "4000")),
             temperature=float(env_vars.get("LLM_TEMPERATURE", "0.7")),
