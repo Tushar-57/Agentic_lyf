@@ -402,6 +402,34 @@ async def switch_provider(request: ProviderSwitchRequest):
                         "current_provider": "none",
                         "message": "OpenAI API key is required to use OpenAI provider"
                     }
+
+                openai_base_url = config.openai_base_url or "https://api.openai.com/v1"
+                openai_base_url = openai_base_url.rstrip('/')
+                models_url = openai_base_url if openai_base_url.endswith('/models') else f"{openai_base_url}/models"
+
+                connectivity_request = urllib.request.Request(
+                    models_url,
+                    headers={
+                        'Authorization': f'Bearer {config.openai_api_key}',
+                        'Content-Type': 'application/json'
+                    },
+                    method='GET'
+                )
+
+                try:
+                    with urllib.request.urlopen(connectivity_request, timeout=8) as response:
+                        if response.status >= 400:
+                            return {
+                                "success": False,
+                                "current_provider": "none",
+                                "message": f"OpenAI connectivity check failed with status {response.status}"
+                            }
+                except Exception as connectivity_error:
+                    return {
+                        "success": False,
+                        "current_provider": "none",
+                        "message": f"OpenAI connectivity check failed: {str(connectivity_error)}"
+                    }
                 
                 # Create OpenAI provider directly
                 provider = OpenAIProvider(
