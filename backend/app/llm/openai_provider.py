@@ -3,7 +3,9 @@ OpenAI LLM provider implementation using LangChain.
 """
 
 import asyncio
+import os
 import time
+import urllib.request
 from typing import List, AsyncGenerator, Optional
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
@@ -37,10 +39,27 @@ class OpenAIProvider(BaseLLMProvider):
         self.base_url = base_url
         self.max_tokens = max_tokens
         self.temperature = temperature
+        self.health_check_mode = os.getenv("OPENAI_HEALTH_CHECK_MODE", "config_only").strip().lower()
+        self.health_check_timeout_seconds = float(os.getenv("OPENAI_HEALTH_CHECK_TIMEOUT", "8"))
         
         # LangChain components
         self._chat_model: Optional[ChatOpenAI] = None
         self._embeddings_model: Optional[OpenAIEmbeddings] = None
+
+    def _build_models_url(self) -> str:
+        base = (self.base_url or "https://api.openai.com/v1").rstrip("/")
+        return base if base.endswith("/models") else f"{base}/models"
+
+    def _check_models_endpoint(self) -> None:
+        models_url = self._build_models_url()
+        request = urllib.request.Request(
+            models_url,
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            method="GET"
+        )
+        with urllib.request.urlopen(request, timeout=self.health_check_timeout_seconds) as response:
+            if response.status >= 400:
+                raise Exception(f"OpenAI models endpoint returned status {response.status}")
     
     async def initialize(self) -> None:
         """Initialize OpenAI provider with LangChain."""
@@ -181,20 +200,28 @@ class OpenAIProvider(BaseLLMProvider):
         start_time = time.time()
         
         try:
-            if not self._chat_model:
-                # Try to create a temporary model for health check
-                temp_model = ChatOpenAI(
+            if not self.api_key:
+                return HealthCheckResult(
+                    is_healthy=False,
+                    provider_type=self.provider_type,
                     model=self.model,
-                    openai_api_key=self.api_key,
-                    max_tokens=10,
-                    temperature=0
+                    error="OpenAI API key is missing",
+                    response_time_ms=(time.time() - start_time) * 1000
                 )
-            else:
-                temp_model = self._chat_model
-            
-            # Simple test message
-            test_message = [HumanMessage(content="Hello")]
-            response = await temp_model.ainvoke(test_message)
+
+            # Default mode avoids background provider calls to prevent accidental spend.
+            if self.health_check_mode != "remote":
+                return HealthCheckResult(
+                    is_healthy=True,
+                    provider_type=self.provider_type,
+                    model=self.model,
+                    response_time_ms=(time.time() - start_time) * 1000
+                )
+
+            await asyncio.wait_for(
+                asyncio.to_thread(self._check_models_endpoint),
+                timeout=self.health_check_timeout_seconds
+            )
             
             response_time = (time.time() - start_time) * 1000
             

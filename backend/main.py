@@ -526,25 +526,32 @@ async def test_connection(request: ConnectionTestRequest):
                 
                 # Use provided model or default
                 model = request.config.get('model', 'gpt-3.5-turbo') if request.config else 'gpt-3.5-turbo'
-                
-                test_provider = OpenAIProvider(
-                    api_key=api_key,
-                    model=model,
-                    max_tokens=10,  # Minimal tokens for test
-                    temperature=0.7
+                base_url = request.config.get('base_url', os.getenv('OPENAI_BASE_URL', 'https://api.openai.com/v1')) if request.config else os.getenv('OPENAI_BASE_URL', 'https://api.openai.com/v1')
+                base_url = base_url.rstrip('/')
+                models_url = base_url if base_url.endswith('/models') else f"{base_url}/models"
+
+                openai_request = urllib.request.Request(
+                    models_url,
+                    headers={
+                        'Authorization': f'Bearer {api_key}',
+                        'Content-Type': 'application/json'
+                    },
+                    method='GET'
                 )
-                
-                # Initialize and test the provider
-                await test_provider.initialize()
-                provider_health = await test_provider.health_check()
+
+                with urllib.request.urlopen(openai_request, timeout=8) as response:
+                    payload = json.loads(response.read().decode('utf-8') or '{}')
+                    available_models = [item.get('id') for item in payload.get('data', []) if isinstance(item, dict)]
+                    model_exists = model in available_models if available_models else None
                 
                 response_time = (datetime.now() - start_time).total_seconds() * 1000
                 
                 return {
-                    "healthy": provider_health.is_healthy,
+                    "healthy": True,
                     "responseTime": int(response_time),
-                    "model": provider_health.model,
-                    "error": provider_health.error if not provider_health.is_healthy else None
+                    "model": model,
+                    "modelAvailable": model_exists,
+                    "error": None
                 }
                 
             elif provider_type == LLMProviderType.OLLAMA:
