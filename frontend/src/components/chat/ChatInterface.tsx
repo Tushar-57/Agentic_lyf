@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Bot, User, Sparkles, Zap, Brain, Settings, Database, ChevronDown, ChevronUp } from 'lucide-react'
+import { Send, Bot, User, Sparkles, Zap, Brain, Settings, Database, ChevronDown, ChevronUp, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
@@ -45,6 +45,17 @@ interface AgentThinking {
     category?: string
     metadata?: Record<string, any>
   }>
+  intent?: {
+    agent_type?: string
+    confidence?: number
+    reason?: string
+  }
+  execution_path?: string[]
+  data_points_used?: {
+    role?: string
+    priorities?: string[]
+    knowledge_context_summary?: string
+  }
   error?: string
 }
 
@@ -68,6 +79,245 @@ const agentIcons = {
 const AgentThinkingDisplay = ({ thinking }: { thinking: AgentThinking }) => {
   const [isExpanded, setIsExpanded] = useState(false)
   const [showSources, setShowSources] = useState(false)
+  const [isMobileLayout, setIsMobileLayout] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth < 768
+  )
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobileLayout(window.innerWidth < 768)
+    }
+
+    handleResize()
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  useEffect(() => {
+    if (!(isMobileLayout && isExpanded)) {
+      return
+    }
+
+    const originalOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = originalOverflow
+    }
+  }, [isExpanded, isMobileLayout])
+
+  const toggleThinking = () => {
+    if (isMobileLayout) {
+      setIsExpanded(true)
+      return
+    }
+
+    setIsExpanded((previous) => !previous)
+  }
+
+  const closeThinking = () => {
+    setIsExpanded(false)
+  }
+
+  const quickAgent = thinking.classification?.agent_type || thinking.finalAgent
+  const quickStepCount = thinking.steps?.length || 0
+  const quickSourceCount = thinking.knowledge_sources?.length || 0
+  const derivedClassification = thinking.classification || (
+    thinking.intent?.agent_type
+      ? {
+          agent_type: thinking.intent.agent_type,
+          confidence: Number(thinking.intent.confidence || 0),
+          reason: thinking.intent.reason || '',
+        }
+      : undefined
+  )
+  const executionPath = Array.isArray(thinking.execution_path) ? thinking.execution_path : []
+  const prioritiesUsed = Array.isArray(thinking.data_points_used?.priorities)
+    ? thinking.data_points_used?.priorities || []
+    : []
+  const hasRoutingContext = Boolean(
+    executionPath.length > 0
+      || thinking.data_points_used?.role
+      || prioritiesUsed.length > 0
+      || thinking.data_points_used?.knowledge_context_summary
+      || thinking.intent?.reason
+  )
+
+  const hasAnySections = Boolean(
+    derivedClassification
+      || hasRoutingContext
+      || (thinking.knowledge_sources && thinking.knowledge_sources.length > 0)
+      || thinking.handoff
+      || (thinking.steps && thinking.steps.length > 0)
+      || thinking.finalAgent
+      || thinking.error
+  )
+
+  const thinkingSections = (
+    <>
+      {derivedClassification && (
+        <div className="mb-3 rounded border-l-4 border-teal-500 bg-teal-50/80 p-2 dark:bg-teal-950/30">
+          <div className="text-sm font-medium text-teal-900 dark:text-teal-200">Intent Classification</div>
+          <div className="mt-1 text-xs text-teal-700 dark:text-teal-300">
+            Routed to: <span className="font-medium capitalize">{derivedClassification.agent_type}</span>
+            <span className="ml-2 opacity-75">({Math.round((derivedClassification.confidence || 0) * 100)}% confidence)</span>
+          </div>
+          {derivedClassification.reason && (
+            <div className="mt-1 text-xs text-teal-600 dark:text-teal-400">{derivedClassification.reason}</div>
+          )}
+        </div>
+      )}
+
+      {hasRoutingContext && (
+        <div className="mb-3 rounded border-l-4 border-indigo-500 bg-indigo-50/80 p-2 dark:bg-indigo-950/25">
+          <div className="text-sm font-medium text-indigo-900 dark:text-indigo-200">Routing And Context Used</div>
+
+          {thinking.data_points_used?.role && (
+            <div className="mt-1 text-xs text-indigo-700 dark:text-indigo-300">
+              Role: <span className="font-medium">{thinking.data_points_used.role}</span>
+            </div>
+          )}
+
+          {prioritiesUsed.length > 0 && (
+            <div className="mt-1 text-xs text-indigo-700 dark:text-indigo-300">
+              Priorities: <span className="font-medium">{prioritiesUsed.join(', ')}</span>
+            </div>
+          )}
+
+          {thinking.data_points_used?.knowledge_context_summary && (
+            <div className="mt-1 text-xs text-indigo-600 dark:text-indigo-400">
+              {thinking.data_points_used.knowledge_context_summary}
+            </div>
+          )}
+
+          {executionPath.length > 0 && (
+            <div className="mt-2 space-y-1 text-xs text-indigo-700 dark:text-indigo-300">
+              {executionPath.map((pathStep, index) => (
+                <div key={`${pathStep}-${index}`} className="rounded bg-white/80 px-2 py-1 dark:bg-slate-800/70">
+                  {index + 1}. {pathStep}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {thinking.knowledge_sources && thinking.knowledge_sources.length > 0 && (
+        <div className="mb-3 rounded border-l-4 border-amber-500 bg-amber-50/80 p-2 dark:bg-amber-950/25">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <Database className="h-4 w-4 text-amber-700 dark:text-amber-300" />
+              <div className="font-medium text-sm text-amber-900 dark:text-amber-200">
+                Knowledge Sources ({thinking.knowledge_sources.length})
+              </div>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowSources(!showSources)}
+              className="h-6 w-6 p-0 text-amber-700 dark:text-amber-300"
+            >
+              {showSources ? (
+                <ChevronUp className="h-3 w-3" />
+              ) : (
+                <ChevronDown className="h-3 w-3" />
+              )}
+            </Button>
+          </div>
+
+          {showSources && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="space-y-2 max-h-40 overflow-y-auto"
+            >
+              {thinking.knowledge_sources.map((source, index) => (
+                <div
+                  key={index}
+                  className="bg-white dark:bg-slate-800 p-2 rounded text-xs border"
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <Badge variant="outline" className="text-xs">
+                      {source.type}
+                    </Badge>
+                    {source.similarity && (
+                      <span className="text-amber-700 dark:text-amber-300">
+                        {Math.round(source.similarity * 100)}% match
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-slate-700 dark:text-slate-300 break-words">
+                    {source.content}
+                  </p>
+                  {source.created_at && (
+                    <p className="text-slate-500 dark:text-slate-500 mt-1">
+                      {new Date(source.created_at).toLocaleDateString()}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </motion.div>
+          )}
+        </div>
+      )}
+
+      {thinking.handoff && (
+        <div className="mb-3 rounded border-l-4 border-cyan-500 bg-cyan-50/80 p-2 dark:bg-cyan-950/25">
+          <div className="text-sm font-medium text-cyan-900 dark:text-cyan-200">Agent Handoff</div>
+          <div className="mt-1 text-xs text-cyan-700 dark:text-cyan-300">
+            {thinking.handoff.from} → {thinking.handoff.to}
+          </div>
+          <div className="mt-1 text-xs text-cyan-600 dark:text-cyan-400">{thinking.handoff.reason}</div>
+        </div>
+      )}
+
+      {thinking.steps && thinking.steps.length > 0 && (
+        <div className="space-y-2">
+          <div className="font-medium text-sm text-slate-700 dark:text-slate-300">Processing Steps:</div>
+          {thinking.steps.map((step, index) => (
+            <div key={index} className="flex items-start gap-2 p-2 bg-white dark:bg-slate-800 rounded border">
+              <div className="w-2 h-2 rounded-full bg-green-400 mt-1.5 flex-shrink-0"></div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-medium text-slate-700 dark:text-slate-300 capitalize">
+                  {step.agent} Agent
+                </div>
+                <div className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
+                  {step.action}
+                </div>
+                {step.result && (
+                  <div className="text-xs text-slate-500 dark:text-slate-500 mt-1 truncate">
+                    {step.result}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {thinking.finalAgent && (
+        <div className="mt-3 p-2 bg-green-50 dark:bg-green-900/20 rounded border-l-4 border-green-400">
+          <div className="font-medium text-sm text-green-800 dark:text-green-200">Final Response</div>
+          <div className="text-xs text-green-600 dark:text-green-300 mt-1">
+            Generated by: <span className="font-medium capitalize">{thinking.finalAgent} Agent</span>
+          </div>
+        </div>
+      )}
+
+      {thinking.error && (
+        <div className="mt-3 p-2 bg-red-50 dark:bg-red-900/20 rounded border-l-4 border-red-400">
+          <div className="font-medium text-sm text-red-800 dark:text-red-200">Error</div>
+          <div className="text-xs text-red-600 dark:text-red-300 mt-1">{thinking.error}</div>
+        </div>
+      )}
+
+      {!hasAnySections && (
+        <div className="rounded border border-dashed border-slate-300 bg-white/70 p-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-300">
+          No detailed reasoning sections were provided for this response.
+        </div>
+      )}
+    </>
+  )
 
   return (
     <motion.div
@@ -76,15 +326,24 @@ const AgentThinkingDisplay = ({ thinking }: { thinking: AgentThinking }) => {
       className="mt-2 overflow-hidden rounded-xl border border-border/70 bg-cyan-50/70 dark:bg-slate-900/70"
     >
       <button
-        onClick={() => setIsExpanded(!isExpanded)}
+        onClick={toggleThinking}
         className="flex w-full items-center justify-between px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-cyan-100/70 dark:text-slate-200 dark:hover:bg-slate-800"
       >
-        <span className="flex items-center gap-2">
-          <Brain className="w-4 h-4" />
-          Agent Thinking Process
+        <span className="flex flex-col">
+          <span className="flex items-center gap-2">
+            <Brain className="w-4 h-4" />
+            Agent Thinking Process
+          </span>
+          {(quickAgent || quickStepCount > 0 || quickSourceCount > 0) && (
+            <span className="mt-0.5 text-[11px] font-normal text-slate-500 dark:text-slate-400">
+              {quickAgent ? `Agent: ${quickAgent}` : ''}
+              {quickStepCount > 0 ? `${quickAgent ? ' | ' : ''}${quickStepCount} steps` : ''}
+              {quickSourceCount > 0 ? `${quickAgent || quickStepCount > 0 ? ' | ' : ''}${quickSourceCount} sources` : ''}
+            </span>
+          )}
         </span>
         <motion.div
-          animate={{ rotate: isExpanded ? 180 : 0 }}
+          animate={{ rotate: !isMobileLayout && isExpanded ? 180 : 0 }}
           transition={{ duration: 0.2 }}
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -92,138 +351,64 @@ const AgentThinkingDisplay = ({ thinking }: { thinking: AgentThinking }) => {
           </svg>
         </motion.div>
       </button>
-      
-      <AnimatePresence>
-        {isExpanded && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            className="px-3 pb-3"
-          >
-            {thinking.classification && (
-              <div className="mb-3 rounded border-l-4 border-teal-500 bg-teal-50/80 p-2 dark:bg-teal-950/30">
-                <div className="text-sm font-medium text-teal-900 dark:text-teal-200">Intent Classification</div>
-                <div className="mt-1 text-xs text-teal-700 dark:text-teal-300">
-                  Routed to: <span className="font-medium capitalize">{thinking.classification.agent_type}</span>
-                  <span className="ml-2 opacity-75">({Math.round(thinking.classification.confidence * 100)}% confidence)</span>
-                </div>
-                <div className="mt-1 text-xs text-teal-600 dark:text-teal-400">{thinking.classification.reason}</div>
-              </div>
-            )}
 
-            {thinking.knowledge_sources && thinking.knowledge_sources.length > 0 && (
-              <div className="mb-3 rounded border-l-4 border-amber-500 bg-amber-50/80 p-2 dark:bg-amber-950/25">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <Database className="h-4 w-4 text-amber-700 dark:text-amber-300" />
-                    <div className="font-medium text-sm text-amber-900 dark:text-amber-200">
-                      Knowledge Sources ({thinking.knowledge_sources.length})
-                    </div>
-                  </div>
+      {!isMobileLayout && (
+        <AnimatePresence>
+          {isExpanded && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              className="px-3 pb-3"
+            >
+              {thinkingSections}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      )}
+
+      {isMobileLayout && (
+        <AnimatePresence>
+          {isExpanded && (
+            <>
+              <motion.button
+                type="button"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={closeThinking}
+                className="fixed inset-0 z-40 bg-black/45"
+                aria-label="Close thinking details"
+              />
+
+              <motion.div
+                initial={{ y: 60, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                exit={{ y: 60, opacity: 0 }}
+                transition={{ duration: 0.22, ease: 'easeOut' }}
+                className="fixed inset-x-0 bottom-0 z-50 max-h-[78vh] overflow-y-auto rounded-t-2xl border border-border/70 bg-white p-3 shadow-2xl dark:bg-slate-900"
+              >
+                <div className="sticky top-0 z-10 mb-3 flex items-center justify-between border-b border-border/70 bg-white/95 pb-2 dark:bg-slate-900/95">
+                  <div className="text-sm font-semibold text-slate-800 dark:text-slate-100">Agent Thinking Process</div>
                   <Button
                     variant="ghost"
-                    size="sm"
-                    onClick={() => setShowSources(!showSources)}
-                    className="h-6 w-6 p-0 text-amber-700 dark:text-amber-300"
+                    size="icon"
+                    onClick={closeThinking}
+                    className="h-8 w-8"
+                    aria-label="Close thinking details"
                   >
-                    {showSources ? (
-                      <ChevronUp className="h-3 w-3" />
-                    ) : (
-                      <ChevronDown className="h-3 w-3" />
-                    )}
+                    <X className="h-4 w-4" />
                   </Button>
                 </div>
-                
-                {showSources && (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    className="space-y-2 max-h-32 overflow-y-auto"
-                  >
-                    {thinking.knowledge_sources.map((source, index) => (
-                      <div 
-                        key={index}
-                        className="bg-white dark:bg-slate-800 p-2 rounded text-xs border"
-                      >
-                        <div className="flex items-center justify-between mb-1">
-                          <Badge variant="outline" className="text-xs">
-                            {source.type}
-                          </Badge>
-                          {source.similarity && (
-                            <span className="text-amber-700 dark:text-amber-300">
-                              {Math.round(source.similarity * 100)}% match
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-slate-700 dark:text-slate-300 break-words">
-                          {source.content}
-                        </p>
-                        {source.created_at && (
-                          <p className="text-slate-500 dark:text-slate-500 mt-1">
-                            {new Date(source.created_at).toLocaleDateString()}
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                  </motion.div>
-                )}
-              </div>
-            )}
 
-            {thinking.handoff && (
-              <div className="mb-3 rounded border-l-4 border-cyan-500 bg-cyan-50/80 p-2 dark:bg-cyan-950/25">
-                <div className="text-sm font-medium text-cyan-900 dark:text-cyan-200">Agent Handoff</div>
-                <div className="mt-1 text-xs text-cyan-700 dark:text-cyan-300">
-                  {thinking.handoff.from} → {thinking.handoff.to}
+                <div className="pb-2">
+                  {thinkingSections}
                 </div>
-                <div className="mt-1 text-xs text-cyan-600 dark:text-cyan-400">{thinking.handoff.reason}</div>
-              </div>
-            )}
-
-            {thinking.steps && thinking.steps.length > 0 && (
-              <div className="space-y-2">
-                <div className="font-medium text-sm text-slate-700 dark:text-slate-300">Processing Steps:</div>
-                {thinking.steps.map((step, index) => (
-                  <div key={index} className="flex items-start gap-2 p-2 bg-white dark:bg-slate-800 rounded border">
-                    <div className="w-2 h-2 rounded-full bg-green-400 mt-1.5 flex-shrink-0"></div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs font-medium text-slate-700 dark:text-slate-300 capitalize">
-                        {step.agent} Agent
-                      </div>
-                      <div className="text-xs text-slate-600 dark:text-slate-400 mt-0.5">
-                        {step.action}
-                      </div>
-                      {step.result && (
-                        <div className="text-xs text-slate-500 dark:text-slate-500 mt-1 truncate">
-                          {step.result}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {thinking.finalAgent && (
-              <div className="mt-3 p-2 bg-green-50 dark:bg-green-900/20 rounded border-l-4 border-green-400">
-                <div className="font-medium text-sm text-green-800 dark:text-green-200">Final Response</div>
-                <div className="text-xs text-green-600 dark:text-green-300 mt-1">
-                  Generated by: <span className="font-medium capitalize">{thinking.finalAgent} Agent</span>
-                </div>
-              </div>
-            )}
-
-            {thinking.error && (
-              <div className="mt-3 p-2 bg-red-50 dark:bg-red-900/20 rounded border-l-4 border-red-400">
-                <div className="font-medium text-sm text-red-800 dark:text-red-200">Error</div>
-                <div className="text-xs text-red-600 dark:text-red-300 mt-1">{thinking.error}</div>
-              </div>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>
+      )}
     </motion.div>
   )
 }
@@ -246,16 +431,182 @@ const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLas
   // Parse reasoning to structured format
   const parseReasoning = (reasoning: string | AgentThinking | undefined): AgentThinking | null => {
     if (!reasoning) return null
+
+    const safeString = (value: any): string => {
+      if (value === null || value === undefined) return ''
+      if (typeof value === 'string') return value
+      return String(value)
+    }
+
+    const normalizeAgentType = (value: any): string => {
+      if (!value) return ''
+      if (typeof value === 'string') return value.toLowerCase()
+      if (typeof value === 'object') {
+        if (typeof value.value === 'string') return value.value.toLowerCase()
+        if (typeof value.name === 'string') return value.name.toLowerCase()
+      }
+      return String(value).toLowerCase()
+    }
+
+    const normalizeReasoningObject = (rawObj: Record<string, any>): AgentThinking | null => {
+      const normalized: AgentThinking = {}
+
+      if (Array.isArray(rawObj.steps)) {
+        normalized.steps = rawObj.steps
+          .map((step: any) => ({
+            agent: normalizeAgentType(step?.agent || step?.from || 'orchestrator') || 'orchestrator',
+            action: safeString(step?.action || step?.description || step),
+            result: safeString(step?.result || step?.status || ''),
+          }))
+          .filter((step: { action: string }) => Boolean(step.action))
+      }
+
+      if (rawObj.classification && typeof rawObj.classification === 'object') {
+        const classificationAgent = normalizeAgentType(rawObj.classification.agent_type || rawObj.classification.agent)
+        normalized.classification = {
+          agent_type: classificationAgent || 'general',
+          confidence: Number(rawObj.classification.confidence || 0),
+          reason: safeString(rawObj.classification.reason || ''),
+        }
+      }
+
+      if (rawObj.intent && typeof rawObj.intent === 'object') {
+        const intentAgent = normalizeAgentType(rawObj.intent.agent_type || rawObj.intent.agent)
+        if (!normalized.classification && intentAgent) {
+          normalized.classification = {
+            agent_type: intentAgent,
+            confidence: Number(rawObj.intent.confidence || 0),
+            reason: safeString(rawObj.intent.reason || ''),
+          }
+        }
+        normalized.intent = {
+          agent_type: intentAgent || undefined,
+          confidence: Number(rawObj.intent.confidence || 0),
+          reason: safeString(rawObj.intent.reason || ''),
+        }
+      }
+
+      const executionPath = Array.isArray(rawObj.execution_path) ? rawObj.execution_path : []
+      if (executionPath.length > 0) {
+        const existingSteps = normalized.steps ? [...normalized.steps] : []
+        executionPath.forEach((pathStep: any, index: number) => {
+          const action = safeString(pathStep)
+          if (action) {
+            existingSteps.push({
+              agent: 'orchestrator',
+              action,
+              result: index === executionPath.length - 1 ? 'Completed' : undefined,
+            })
+          }
+        })
+        normalized.execution_path = executionPath.map((item: any) => safeString(item)).filter(Boolean)
+        if (existingSteps.length > 0) {
+          normalized.steps = existingSteps
+        }
+      }
+
+      if (rawObj.plan?.steps && Array.isArray(rawObj.plan.steps)) {
+        const existingSteps = normalized.steps ? [...normalized.steps] : []
+        rawObj.plan.steps.forEach((planStep: any) => {
+          const action = safeString(planStep?.action || planStep?.description)
+          if (action) {
+            existingSteps.push({
+              agent: normalizeAgentType(planStep?.agent || 'orchestrator') || 'orchestrator',
+              action,
+              result: safeString(planStep?.estimated_time ? `~${planStep.estimated_time} min` : ''),
+            })
+          }
+        })
+        if (existingSteps.length > 0) {
+          normalized.steps = existingSteps
+        }
+      }
+
+      const knowledgeSources: AgentThinking['knowledge_sources'] = []
+      if (Array.isArray(rawObj.knowledge_sources)) {
+        rawObj.knowledge_sources.forEach((source: any) => {
+          if (!source) return
+          knowledgeSources.push({
+            type: safeString(source.type || 'knowledge'),
+            content: safeString(source.content || source.summary || source),
+            similarity: typeof source.similarity === 'number' ? source.similarity : undefined,
+            created_at: source.created_at,
+            category: source.category,
+            metadata: source.metadata,
+          })
+        })
+      }
+
+      if (rawObj.data_points_used && typeof rawObj.data_points_used === 'object') {
+        const dataPoints = rawObj.data_points_used
+        normalized.data_points_used = {
+          role: safeString(dataPoints.role || ''),
+          priorities: Array.isArray(dataPoints.priorities)
+            ? dataPoints.priorities.map((item: any) => safeString(item)).filter(Boolean)
+            : [],
+          knowledge_context_summary: safeString(dataPoints.knowledge_context_summary || ''),
+        }
+
+        if (normalized.data_points_used.role) {
+          knowledgeSources.push({
+            type: 'Profile',
+            content: `Role: ${normalized.data_points_used.role}`,
+          })
+        }
+
+        if (normalized.data_points_used.priorities && normalized.data_points_used.priorities.length > 0) {
+          knowledgeSources.push({
+            type: 'Priorities',
+            content: normalized.data_points_used.priorities.join(', '),
+          })
+        }
+
+        if (normalized.data_points_used.knowledge_context_summary) {
+          knowledgeSources.push({
+            type: 'Knowledge Context',
+            content: normalized.data_points_used.knowledge_context_summary,
+          })
+        }
+      }
+
+      if (knowledgeSources.length > 0) {
+        normalized.knowledge_sources = knowledgeSources
+      }
+
+      if (rawObj.handoff && typeof rawObj.handoff === 'object') {
+        normalized.handoff = {
+          from: safeString(rawObj.handoff.from || 'orchestrator'),
+          to: safeString(rawObj.handoff.to || ''),
+          reason: safeString(rawObj.handoff.reason || ''),
+        }
+      }
+
+      const finalAgent = normalizeAgentType(rawObj.finalAgent || rawObj.final_agent || rawObj.agent)
+      if (finalAgent) {
+        normalized.finalAgent = finalAgent
+      } else if (normalized.classification?.agent_type) {
+        normalized.finalAgent = normalized.classification.agent_type
+      }
+
+      const error = safeString(rawObj.error || '')
+      if (error) {
+        normalized.error = error
+      }
+
+      return Object.keys(normalized).length > 0 ? normalized : null
+    }
     
     if (typeof reasoning === 'object') {
-      return reasoning
+      return normalizeReasoningObject(reasoning as Record<string, any>)
     }
     
     if (typeof reasoning === 'string') {
       try {
         // Try to parse as JSON first
         const parsed = JSON.parse(reasoning)
-        return parsed
+        if (parsed && typeof parsed === 'object') {
+          return normalizeReasoningObject(parsed)
+        }
       } catch {
         // If not JSON, check for specific patterns and create structured thinking
         const thinking: AgentThinking = {}

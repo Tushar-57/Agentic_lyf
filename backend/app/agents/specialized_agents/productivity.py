@@ -57,6 +57,7 @@ class ProductivityAgent(BaseAgent):
         """Execute productivity-related requests with contextual knowledge."""
         try:
             user_input = state.get("user_input", "")
+            state_context = state.get("context", {}) if isinstance(state, dict) else {}
             logger.info(f"ProductivityAgent processing: {user_input}")
             
             # Get contextual knowledge from knowledge base
@@ -65,16 +66,18 @@ class ProductivityAgent(BaseAgent):
                 agent_type="productivity",
                 max_results=10
             )
+
+            merged_context = self._merge_with_routing_context(contextual_knowledge, state_context)
             
             # Determine productivity task type
             if any(keyword in user_input.lower() for keyword in ["task", "todo", "organize", "project"]):
-                response = await self._handle_task_management(user_input, contextual_knowledge)
+                response = await self._handle_task_management(user_input, merged_context)
             elif any(keyword in user_input.lower() for keyword in ["goal", "objective", "target", "achieve"]):
-                response = await self._handle_goal_setting(user_input, contextual_knowledge)
+                response = await self._handle_goal_setting(user_input, merged_context)
             elif any(keyword in user_input.lower() for keyword in ["time", "schedule", "productivity", "focus"]):
-                response = await self._handle_time_management(user_input, contextual_knowledge)
+                response = await self._handle_time_management(user_input, merged_context)
             else:
-                response = await self._handle_general_productivity(user_input, contextual_knowledge)
+                response = await self._handle_general_productivity(user_input, merged_context)
             
             # Intelligently record interaction if valuable
             recorder = get_interaction_recorder()
@@ -88,7 +91,9 @@ class ProductivityAgent(BaseAgent):
                 "response": response,
                 "reasoning": {
                     "agent_type": "productivity",
-                    "context_used": len(contextual_knowledge.get("relevant_interactions", [])),
+                    "context_used": len(merged_context.get("relevant_interactions", [])),
+                    "time_entries_used": len(merged_context.get("recent_time_entries", [])),
+                    "profile_role": (merged_context.get("profile_snapshot") or {}).get("role"),
                     "specialized_handling": True
                 }
             }
@@ -110,25 +115,22 @@ class ProductivityAgent(BaseAgent):
                 return "📋 I'd be happy to help you manage your tasks! What tasks would you like to organize?"
             
             prompt = f"""
-            As a productivity coach, help the user with task management and organization.
+            You are a productivity coach. Help the user with task management and organization.
             
             User Request: {user_input}
             Task Context: {task_context}
             
-            Provide:
-            1. Task organization strategies (using Eisenhower Matrix or similar)
-            2. Priority recommendations based on their work style
-            3. Deadline and milestone suggestions
-            4. Task breakdown for complex projects
-            5. Tracking and review methods
-            
-            Use emojis and format nicely with actionable task management advice.
+            Response requirements:
+            1. Keep it concise (max 6 bullets, about 140-180 words unless user asks for depth).
+            2. Explicitly reference any relevant goals, priorities, or recent time-entry patterns from context.
+            3. Provide one immediate next action the user can do now.
+            4. Ask one focused follow-up question only if critical context is missing.
             """
             
             request = CompletionRequest(
                 messages=[ChatMessage(role="user", content=prompt)],
                 temperature=0.3,
-                max_tokens=1000
+                max_tokens=420
             )
             
             response = await llm_service.chat_completion(request)
@@ -148,25 +150,22 @@ class ProductivityAgent(BaseAgent):
                 return "🎯 I'd love to help you set and achieve your goals! What goals are you working on?"
             
             prompt = f"""
-            As a goal-setting expert, help the user create and track meaningful goals.
+            You are a goal-setting productivity coach. Help the user create and track meaningful goals.
             
             User Request: {user_input}
             Goal Context: {goal_context}
             
-            Provide:
-            1. SMART goal framework application
-            2. Goal breakdown into actionable steps
-            3. Progress tracking recommendations
-            4. Motivation and accountability strategies
-            5. Timeline and milestone suggestions
-            
-            Use emojis and format nicely with structured goal-setting guidance.
+            Response requirements:
+            1. Keep it concise (max 6 bullets, about 140-180 words unless user asks for depth).
+            2. Tie recommendations to the user's stated priorities and active goals from context.
+            3. Convert advice into concrete weekly actions.
+            4. End with one measurable checkpoint.
             """
             
             request = CompletionRequest(
                 messages=[ChatMessage(role="user", content=prompt)],
                 temperature=0.3,
-                max_tokens=1000
+                max_tokens=420
             )
             
             response = await llm_service.chat_completion(request)
@@ -186,25 +185,22 @@ class ProductivityAgent(BaseAgent):
                 return "⏰ I'd be happy to help optimize your time! What time management challenges are you facing?"
             
             prompt = f"""
-            As a time management expert, help the user optimize their productivity and time usage.
+            You are a time-management productivity coach. Help the user optimize their productivity and time usage.
             
             User Request: {user_input}
             Time Management Context: {time_context}
             
-            Provide:
-            1. Time blocking strategies for their schedule
-            2. Productivity techniques (Pomodoro, deep work, etc.)
-            3. Focus and concentration tips
-            4. Energy management recommendations
-            5. Work-life balance suggestions
-            
-            Use emojis and format nicely with practical time management advice.
+            Response requirements:
+            1. Keep it concise (max 6 bullets, about 140-180 words unless user asks for depth).
+            2. Reference relevant recent time-entry patterns and suggest targeted adjustments.
+            3. Offer a practical time-blocking plan for the next 24 hours.
+            4. End with one immediate action.
             """
             
             request = CompletionRequest(
                 messages=[ChatMessage(role="user", content=prompt)],
                 temperature=0.3,
-                max_tokens=1000
+                max_tokens=420
             )
             
             response = await llm_service.chat_completion(request)
@@ -224,19 +220,21 @@ class ProductivityAgent(BaseAgent):
                 return "🚀 I'm here to boost your productivity! What can I help you with?"
             
             prompt = f"""
-            As a productivity expert, provide helpful advice for the user's productivity question.
+            You are a productivity coach. Provide direct and practical advice.
             
             User Request: {user_input}
             Productivity Context: {productivity_context}
             
-            Provide relevant productivity advice, tips, and recommendations based on their question.
-            Use emojis and format nicely with clear, actionable information.
+            Response requirements:
+            1. Keep response concise (max 5 bullets, about 120-160 words unless user asks for detail).
+            2. Ground advice in available profile/goal/time-entry context.
+            3. Finish with one next action.
             """
             
             request = CompletionRequest(
                 messages=[ChatMessage(role="user", content=prompt)],
                 temperature=0.3,
-                max_tokens=800
+                max_tokens=320
             )
             
             response = await llm_service.chat_completion(request)
@@ -249,6 +247,41 @@ class ProductivityAgent(BaseAgent):
     def _build_productivity_context(self, context: Dict[str, Any], productivity_type: str) -> str:
         """Build productivity context from available knowledge."""
         context_parts = []
+
+        profile_snapshot = context.get("profile_snapshot", {}) if isinstance(context, dict) else {}
+        if isinstance(profile_snapshot, dict):
+            role = profile_snapshot.get("role")
+            priorities = profile_snapshot.get("priorities", []) if isinstance(profile_snapshot.get("priorities"), list) else []
+            active_goals = profile_snapshot.get("active_goals", []) if isinstance(profile_snapshot.get("active_goals"), list) else []
+
+            profile_bits = []
+            if role:
+                profile_bits.append(f"role={role}")
+            if priorities:
+                profile_bits.append(f"priorities={', '.join(str(item) for item in priorities[:3])}")
+            if active_goals:
+                profile_bits.append(f"active_goals={', '.join(str(item) for item in active_goals[:2])}")
+
+            if profile_bits:
+                context_parts.append("Profile snapshot: " + " | ".join(profile_bits))
+
+        coach_profile = context.get("coach_profile", {}) if isinstance(context, dict) else {}
+        if isinstance(coach_profile, dict) and coach_profile:
+            coach_style = str(coach_profile.get("style", "")).strip()
+            coach_directive = str(coach_profile.get("directive", "")).strip()
+            coach_name = str(coach_profile.get("name", "Coach")).strip()
+            context_parts.append(
+                f"Coach style: {coach_name} ({coach_style}) | directive: {coach_directive}"
+            )
+
+        intent_blueprint = context.get("intent_blueprint", {}) if isinstance(context, dict) else {}
+        if isinstance(intent_blueprint, dict) and intent_blueprint:
+            context_parts.append(
+                "Intent blueprint: "
+                f"intent={intent_blueprint.get('primary_intent')} | "
+                f"outcome={intent_blueprint.get('expected_outcome')} | "
+                f"horizon={intent_blueprint.get('time_horizon')}"
+            )
         
         # Add agent preferences (productivity preferences from knowledge base)
         if "agent_preferences" in context and context["agent_preferences"]:
@@ -257,9 +290,78 @@ class ProductivityAgent(BaseAgent):
                 productivity_prefs = {k: v for k, v in prefs.items() if any(term in k.lower() for term in ["work", "task", "goal", "time", "productivity", "schedule"])}
                 if productivity_prefs:
                     context_parts.append(f"Productivity preferences: {productivity_prefs}")
+
+        if context.get("user_preferences"):
+            preference_snippets = []
+            for pref in context.get("user_preferences", [])[:3]:
+                if isinstance(pref, dict):
+                    content = str(pref.get("content", "")).strip()
+                    category = str(pref.get("category", "")).strip()
+                    if content:
+                        preference_snippets.append(f"{category}: {content}")
+            if preference_snippets:
+                context_parts.append("Preference memory: " + " || ".join(preference_snippets))
+
+        if context.get("recent_time_entries"):
+            entry_snippets = []
+            for item in context.get("recent_time_entries", [])[:3]:
+                if not isinstance(item, dict):
+                    continue
+                project_name = str(item.get("project_name") or "Unassigned").strip()
+                description = str(item.get("description") or "work session").strip()
+                duration = item.get("duration_minutes")
+                duration_label = f"{duration}m" if duration is not None else "duration n/a"
+                entry_snippets.append(f"{project_name} - {description} ({duration_label})")
+            if entry_snippets:
+                context_parts.append("Recent time entries: " + " || ".join(entry_snippets))
+
+        if context.get("relevant_interactions"):
+            interaction_snippets = []
+            for item in context.get("relevant_interactions", [])[:2]:
+                if not isinstance(item, dict):
+                    continue
+                content = str(item.get("content", "")).strip()
+                if content:
+                    interaction_snippets.append(content[:220])
+            if interaction_snippets:
+                context_parts.append("Related interactions: " + " || ".join(interaction_snippets))
         
         # Add context summary
         if "context_summary" in context and context["context_summary"]:
             context_parts.append(f"Previous productivity context: {context['context_summary']}")
+
+        if "knowledge_context_summary" in context and context["knowledge_context_summary"]:
+            context_parts.append(f"Routing knowledge summary: {context['knowledge_context_summary']}")
         
         return " | ".join(context_parts) if context_parts else f"No specific {productivity_type} context available"
+
+    def _merge_with_routing_context(self, kb_context: Dict[str, Any], state_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge orchestrator routing context with knowledge-base context."""
+        merged_context = dict(kb_context or {})
+        if not isinstance(state_context, dict):
+            return merged_context
+
+        profile_snapshot = state_context.get("profile_snapshot")
+        if isinstance(profile_snapshot, dict) and profile_snapshot:
+            merged_context["profile_snapshot"] = profile_snapshot
+
+        knowledge_context_summary = state_context.get("knowledge_context_summary")
+        if knowledge_context_summary:
+            merged_context["knowledge_context_summary"] = knowledge_context_summary
+
+        coach_profile = state_context.get("coach_profile")
+        if isinstance(coach_profile, dict) and coach_profile:
+            merged_context["coach_profile"] = coach_profile
+
+        intent_blueprint = state_context.get("intent_blueprint")
+        if isinstance(intent_blueprint, dict) and intent_blueprint:
+            merged_context["intent_blueprint"] = intent_blueprint
+
+        recent_time_entries = state_context.get("general_recent_time_entries")
+        if isinstance(recent_time_entries, list) and recent_time_entries:
+            existing = merged_context.get("recent_time_entries", [])
+            if not isinstance(existing, list):
+                existing = []
+            merged_context["recent_time_entries"] = [*existing, *recent_time_entries][:5]
+
+        return merged_context

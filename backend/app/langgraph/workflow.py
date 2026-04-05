@@ -149,7 +149,7 @@ class AgentGraphWorkflow:
                         ChatMessage(role="system", content=formatting_prompt),
                         ChatMessage(role="user", content=f"Please enhance and format this response:\n\n{raw_response_text}")
                     ],
-                    max_tokens=800,
+                    max_tokens=360,
                     temperature=0.3
                 )
                 
@@ -183,20 +183,39 @@ class AgentGraphWorkflow:
 
     def _build_formatting_prompt(self, user_input: str, raw_response: str, final_agent: str, reasoning: dict, context: dict) -> str:
         """Build a comprehensive formatting prompt based on context."""
+        coach_profile = {}
+        if isinstance(context, dict) and isinstance(context.get("coach_profile"), dict):
+            coach_profile = context.get("coach_profile", {})
+        elif isinstance(reasoning, dict) and isinstance(reasoning.get("coach_profile"), dict):
+            coach_profile = reasoning.get("coach_profile", {})
+
+        coach_name = str(coach_profile.get("name", "Coach")).strip() if coach_profile else "Coach"
+        coach_style = str(coach_profile.get("style", "Direct")).strip() if coach_profile else "Direct"
+        coach_directive = str(coach_profile.get("directive", "Be clear and action-focused.")).strip() if coach_profile else "Be clear and action-focused."
+
+        intent_blueprint = reasoning.get("intent_blueprint", {}) if isinstance(reasoning, dict) else {}
+        primary_intent = str(intent_blueprint.get("primary_intent", "general_guidance")) if isinstance(intent_blueprint, dict) else "general_guidance"
+        expected_outcome = str(intent_blueprint.get("expected_outcome", "actionable_advice")) if isinstance(intent_blueprint, dict) else "actionable_advice"
+        time_horizon = str(intent_blueprint.get("time_horizon", "unspecified")) if isinstance(intent_blueprint, dict) else "unspecified"
         
-        base_prompt = f"""You are a response formatter for an AI agent ecosystem. Your job is to take a raw response and make it more helpful, engaging, and personalized.
+        base_prompt = f"""You are a response formatter for an AI agent ecosystem. Your job is to keep the response clear, concise, and grounded in existing context.
 
 **Context:**
 - User asked: "{user_input}"
 - Responding agent: {final_agent}
 - Conversation context: {context.get('conversation_id', 'New conversation')}
+- Coach persona: {coach_name} ({coach_style})
+- Coach style directive: {coach_directive}
+- Primary intent: {primary_intent}
+- Expected outcome: {expected_outcome}
+- Time horizon: {time_horizon}
 
 **Your tasks:**
-1. **Enhance Clarity**: Make the response clear and easy to understand
-2. **Add Personality**: Match the tone to the {final_agent} agent's personality
-3. **Structure Information**: Use proper formatting, bullets, or sections if helpful
-4. **Add Actionability**: Include next steps or follow-up suggestions when appropriate
-5. **Maintain Accuracy**: Don't change the core information, only improve presentation
+    1. **Keep It Concise**: Keep output around 90-180 words unless the user explicitly asks for depth
+    2. **Preserve Substance**: Do not invent details or add generic filler
+    3. **Improve Structure**: Use bullets or short sections only when they increase clarity
+    4. **Ground in Context**: Preserve explicit references to user priorities/goals/history when present
+    5. **Actionable Ending**: End with one practical next step when appropriate
 
 **Agent Personalities:**
 - orchestrator: Professional coordinator, helpful guide
@@ -209,15 +228,12 @@ class AgentGraphWorkflow:
 
 **Response Guidelines:**
 - Keep the core information intact
-- Use markdown formatting for structure
-- Add relevant emojis sparingly
-- Include actionable next steps
-- Make it conversational but professional
-- If it's a simple answer, don't over-complicate it
-
-**Example transformations:**
-- "Task added" → "✅ **Task Added Successfully!** I've added that to your task list. Would you like me to help you prioritize it or set a reminder?"
-- "Budget is good" → "💰 **Great news!** Your budget is looking healthy this month. You're staying within your limits across all categories."
+- Avoid repetitive encouragement lines and extra closings
+- Keep markdown lightweight
+- Use emojis only when they add signal
+- If the raw response is already concise and clear, make minimal edits
+- Reflect the coach style consistently without becoming theatrical
+- Prioritize practical user-betterment language (what to do next, why it matters, and expected impact)
 
 Now enhance the following response:"""
 

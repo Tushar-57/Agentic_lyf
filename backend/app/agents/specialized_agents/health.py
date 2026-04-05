@@ -190,6 +190,7 @@ Remember: Your role is to be a trusted health partner that combines AI insights 
         """Execute health-related requests with contextual awareness."""
         try:
             user_input = state.get("user_input", "")
+            state_context = state.get("context", {}) if isinstance(state, dict) else {}
             logger.info(f"HealthAgent executing request: {user_input}")
             
             # Get relevant context from knowledge base
@@ -198,9 +199,10 @@ Remember: Your role is to be a trusted health partner that combines AI insights 
                 agent_type="health",
                 max_results=10
             )
+            merged_context = self._merge_with_routing_context(context, state_context)
             
-            logger.info(f"Retrieved context with keys: {list(context.keys())}")
-            logger.info(f"Context details: {context}")
+            logger.info(f"Retrieved context with keys: {list(merged_context.keys())}")
+            logger.info(f"Context details: {merged_context}")
             
             # Determine intent more intelligently
             intent = self._classify_user_intent(user_input)
@@ -208,19 +210,19 @@ Remember: Your role is to be a trusted health partner that combines AI insights 
             
             # Route to appropriate handler based on intent
             if intent == "preference_sharing":
-                response = await self._handle_preference_sharing(user_input, context)
+                response = await self._handle_preference_sharing(user_input, merged_context)
             elif intent == "meal_planning":
-                response = await self._handle_meal_planning(user_input, context)
+                response = await self._handle_meal_planning(user_input, merged_context)
             elif intent == "habit_tracking":
-                response = await self._handle_habit_tracking(user_input, context)
+                response = await self._handle_habit_tracking(user_input, merged_context)
             else:
-                response = await self._handle_general_health_query(user_input, context)
+                response = await self._handle_general_health_query(user_input, merged_context)
             
             # Create pending interaction for user approval (instead of auto-recording)
             recorder = get_interaction_recorder()
             if recorder:
                 # Extract knowledge sources from context for transparency
-                knowledge_sources = self._extract_knowledge_sources(context)
+                knowledge_sources = self._extract_knowledge_sources(merged_context)
                 
                 interaction_id = await recorder.create_pending_interaction(
                     user_input=user_input,
@@ -239,14 +241,15 @@ Remember: Your role is to be a trusted health partner that combines AI insights 
             logger.info("Health response generated - waiting for user approval before storing preferences")
             
             # Extract knowledge sources for transparency
-            knowledge_sources = self._extract_knowledge_sources(context)
+            knowledge_sources = self._extract_knowledge_sources(merged_context)
             
             return {
                 "response": response,
                 "reasoning": {
                     "agent_type": "health",
                     "intent": intent,
-                    "context_used": len(context.get("relevant_interactions", [])) + len(context.get("user_preferences", [])),
+                    "context_used": len(merged_context.get("relevant_interactions", [])) + len(merged_context.get("user_preferences", [])),
+                    "coach_style": (merged_context.get("coach_profile") or {}).get("style"),
                     "specialized_handling": True,
                     "knowledge_sources": knowledge_sources
                 }
@@ -381,7 +384,7 @@ Remember: Your role is to be a trusted health partner that combines AI insights 
             request = CompletionRequest(
                 messages=[ChatMessage(role="user", content=meal_planning_prompt)],
                 temperature=0.7,
-                max_tokens=1000
+                max_tokens=520
             )
             
             response = await llm_service.chat_completion(request)
@@ -451,11 +454,16 @@ Remember: Your role is to be a trusted health partner that combines AI insights 
         """Handle general health queries with context."""
         try:
             context_summary = context.get("context_summary", "")
+            coach_profile = context.get("coach_profile", {}) if isinstance(context, dict) else {}
+            coach_style = coach_profile.get("style", "Direct")
+            coach_directive = coach_profile.get("directive", "Be clear and practical.")
             
             health_prompt = f"""
             You are a knowledgeable health and wellness coach. Consider this context about the user:
 
             Context: {context_summary}
+            Coach style: {coach_style}
+            Coach directive: {coach_directive}
 
             User Query: {user_input}
 
@@ -466,8 +474,8 @@ Remember: Your role is to be a trusted health partner that combines AI insights 
             llm_service = await get_llm_service()
             request = CompletionRequest(
                 messages=[ChatMessage(role="user", content=health_prompt)],
-                temperature=0.7,
-                max_tokens=800
+                temperature=0.45,
+                max_tokens=420
             )
             
             response = await llm_service.chat_completion(request)
@@ -524,3 +532,16 @@ Remember: Your role is to be a trusted health partner that combines AI insights 
             })
         
         return sources
+
+    def _merge_with_routing_context(self, kb_context: Dict[str, Any], state_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge orchestrator routing context with health KB context."""
+        merged_context = dict(kb_context or {})
+        if not isinstance(state_context, dict):
+            return merged_context
+
+        for key in ("profile_snapshot", "coach_profile", "intent_blueprint", "knowledge_context_summary"):
+            value = state_context.get(key)
+            if value:
+                merged_context[key] = value
+
+        return merged_context

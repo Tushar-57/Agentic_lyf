@@ -37,7 +37,9 @@ class OrchestratorPromptLibrary:
         }
 
         return f"""
-Route this user request to the best specialist agent.
+    Route this user request to the best specialist agent.
+
+    Your goal is not just domain matching. Choose routing that maximizes user improvement and immediate usefulness.
 
 User request:
 {user_input}
@@ -58,10 +60,26 @@ Routing rules:
 2. If request mixes domains, choose the domain most likely to produce an immediate useful action.
 3. Use GENERAL only when no specialist clearly fits.
 4. Confidence should reflect certainty, not optimism.
+5. For ambiguous "what should I do/work on now" prompts, favor actionable planning over generic conversation.
+6. For "how did I do today" style prompts, favor review-oriented routes that can leverage history/time-entry data.
 
 Return ONLY JSON with this exact schema:
-{{"agent_type": "PRODUCTIVITY", "confidence": 0.86, "reason": "short reason"}}
+{{
+    "agent_type": "PRODUCTIVITY",
+    "confidence": 0.86,
+    "reason": "short reason",
+    "primary_intent": "next_best_action",
+    "expected_outcome": "prioritized_plan",
+    "time_horizon": "now",
+    "coach_tone_hint": "direct"
+}}
 
 Allowed agent_type values:
 PRODUCTIVITY, HEALTH, FINANCE, SCHEDULING, JOURNAL, GENERAL
+
+Allowed primary_intent values:
+next_best_action, daily_review, planning, execution_help, reflection, tracking, question_answering, general_guidance
+
+Allowed time_horizon values:
+now, today, this_week, long_term, unspecified
 """.strip()

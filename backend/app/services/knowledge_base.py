@@ -1128,10 +1128,40 @@ class KnowledgeBaseService:
             general_search = KnowledgeQuery(
                 query_text=user_input,
                 limit=max_results,
-                similarity_threshold=0.7
+                similarity_threshold=0.6
             )
             
             general_results = await self.search(general_search)
+
+            # Merge agent-specific and general results while preserving ranking order.
+            combined_results: List[KnowledgeSearchResult] = []
+            seen_entry_ids = set()
+            for result_group in (search_results, general_results):
+                for result in result_group:
+                    entry_id = getattr(result.entry, "entry_id", None)
+                    if entry_id and entry_id in seen_entry_ids:
+                        continue
+                    if entry_id:
+                        seen_entry_ids.add(entry_id)
+                    combined_results.append(result)
+
+            interaction_results = [
+                result
+                for result in combined_results
+                if result.entry.entry_type == KnowledgeEntryType.INTERACTION
+            ]
+            preference_results = [
+                result
+                for result in combined_results
+                if result.entry.entry_type == KnowledgeEntryType.PREFERENCE
+            ]
+            pattern_results = [
+                result
+                for result in combined_results
+                if result.entry.entry_type in [KnowledgeEntryType.PATTERN, KnowledgeEntryType.INSIGHT]
+            ]
+
+            recent_time_entries = self._extract_recent_time_entries(interaction_results)
             
             # Organize results by type
             context = {
@@ -1141,11 +1171,12 @@ class KnowledgeBaseService:
                         "content": result.entry.content,
                         "metadata": result.entry.metadata,
                         "similarity": result.similarity_score,
-                        "created_at": result.entry.created_at.isoformat()
+                        "created_at": result.entry.created_at.isoformat(),
+                        "category": self._normalize_visual_category(result.entry),
+                        "is_time_entry": self._is_time_entry_entry(result.entry),
                     }
-                    for result in search_results 
-                    if result.entry.entry_type == KnowledgeEntryType.INTERACTION
-                ][:5],
+                    for result in interaction_results
+                ][:6],
                 "user_preferences": [
                     {
                         "content": result.entry.content,
@@ -1153,8 +1184,7 @@ class KnowledgeBaseService:
                         "metadata": result.entry.metadata,
                         "similarity": result.similarity_score
                     }
-                    for result in search_results 
-                    if result.entry.entry_type == KnowledgeEntryType.PREFERENCE
+                    for result in preference_results
                 ][:5],
                 "patterns_and_insights": [
                     {
@@ -1162,10 +1192,10 @@ class KnowledgeBaseService:
                         "metadata": result.entry.metadata,
                         "similarity": result.similarity_score
                     }
-                    for result in general_results
-                    if result.entry.entry_type in [KnowledgeEntryType.PATTERN, KnowledgeEntryType.INSIGHT]
+                    for result in pattern_results
                 ][:3],
-                "context_summary": self._generate_context_summary(user_input, agent_type, search_results)
+                "recent_time_entries": recent_time_entries,
+                "context_summary": self._generate_context_summary(user_input, agent_type, combined_results)
             }
             
             return context
@@ -1177,8 +1207,54 @@ class KnowledgeBaseService:
                 "relevant_interactions": [],
                 "user_preferences": [],
                 "patterns_and_insights": [],
+                "recent_time_entries": [],
                 "context_summary": "Unable to retrieve context due to system error."
             }
+
+    def _extract_recent_time_entries(
+        self,
+        interaction_results: List[KnowledgeSearchResult],
+        limit: int = 4,
+    ) -> List[Dict[str, Any]]:
+        """Extract concise recent time-entry context from interaction search results."""
+        extracted: List[Dict[str, Any]] = []
+
+        for result in interaction_results:
+            entry = result.entry
+            if not self._is_time_entry_entry(entry):
+                continue
+
+            metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+            context_payload = metadata.get("context") if isinstance(metadata.get("context"), dict) else {}
+
+            duration_minutes = context_payload.get("duration_minutes")
+            if duration_minutes is None and context_payload.get("duration_seconds") is not None:
+                try:
+                    duration_minutes = float(context_payload.get("duration_seconds")) / 60.0
+                except (TypeError, ValueError):
+                    duration_minutes = None
+
+            try:
+                normalized_duration = round(max(0.0, float(duration_minutes)), 1) if duration_minutes is not None else None
+            except (TypeError, ValueError):
+                normalized_duration = None
+
+            extracted.append(
+                {
+                    "entry_id": entry.entry_id,
+                    "project_name": str(context_payload.get("project_name") or "").strip() or "Unassigned",
+                    "description": str(context_payload.get("description") or context_payload.get("task_name") or "").strip(),
+                    "duration_minutes": normalized_duration,
+                    "billable": bool(context_payload.get("billable", False)),
+                    "start_time": context_payload.get("start_time"),
+                    "end_time": context_payload.get("end_time"),
+                    "created_at": entry.created_at.isoformat(),
+                    "similarity": result.similarity_score,
+                }
+            )
+
+        extracted.sort(key=lambda item: item.get("created_at", ""), reverse=True)
+        return extracted[:limit]
 
     def _generate_context_summary(self, user_input: str, agent_type: str, search_results: List) -> str:
         """Generate a context summary for the agent."""

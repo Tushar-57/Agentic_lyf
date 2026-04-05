@@ -58,6 +58,7 @@ class JournalAgent(BaseAgent):
         """Execute journaling-related requests with contextual knowledge."""
         try:
             user_input = state.get("user_input", "")
+            state_context = state.get("context", {}) if isinstance(state, dict) else {}
             logger.info(f"JournalAgent processing: {user_input}")
             
             # Get contextual knowledge from knowledge base
@@ -66,18 +67,20 @@ class JournalAgent(BaseAgent):
                 agent_type="journal",
                 max_results=10
             )
+
+            merged_context = self._merge_with_routing_context(contextual_knowledge, state_context)
             
             # Determine journaling task type
             if any(keyword in user_input.lower() for keyword in ["journal", "reflection", "reflect", "mood"]):
-                response = await self._handle_daily_journaling(user_input, contextual_knowledge)
+                response = await self._handle_daily_journaling(user_input, merged_context)
             elif any(keyword in user_input.lower() for keyword in ["goal", "progress", "achievement", "milestone"]):
-                response = await self._handle_goal_tracking(user_input, contextual_knowledge)
+                response = await self._handle_goal_tracking(user_input, merged_context)
             elif any(keyword in user_input.lower() for keyword in ["habit", "streak", "routine", "consistency"]):
-                response = await self._handle_habit_tracking(user_input, contextual_knowledge)
+                response = await self._handle_habit_tracking(user_input, merged_context)
             elif any(keyword in user_input.lower() for keyword in ["feeling", "emotion", "stress", "wellness"]):
-                response = await self._handle_emotional_wellness(user_input, contextual_knowledge)
+                response = await self._handle_emotional_wellness(user_input, merged_context)
             else:
-                response = await self._handle_general_journaling(user_input, contextual_knowledge)
+                response = await self._handle_general_journaling(user_input, merged_context)
             
             # Intelligently record interaction if valuable
             recorder = get_interaction_recorder()
@@ -91,7 +94,8 @@ class JournalAgent(BaseAgent):
                 "response": response,
                 "reasoning": {
                     "agent_type": "journal",
-                    "context_used": len(contextual_knowledge.get("relevant_interactions", [])),
+                    "context_used": len(merged_context.get("relevant_interactions", [])),
+                    "coach_style": (merged_context.get("coach_profile") or {}).get("style"),
                     "specialized_handling": True
                 }
             }
@@ -131,7 +135,7 @@ class JournalAgent(BaseAgent):
             request = CompletionRequest(
                 messages=[ChatMessage(role="user", content=prompt)],
                 temperature=0.4,
-                max_tokens=1000
+                max_tokens=420
             )
             
             response = await llm_service.chat_completion(request)
@@ -169,7 +173,7 @@ class JournalAgent(BaseAgent):
             request = CompletionRequest(
                 messages=[ChatMessage(role="user", content=prompt)],
                 temperature=0.3,
-                max_tokens=1000
+                max_tokens=420
             )
             
             response = await llm_service.chat_completion(request)
@@ -207,7 +211,7 @@ class JournalAgent(BaseAgent):
             request = CompletionRequest(
                 messages=[ChatMessage(role="user", content=prompt)],
                 temperature=0.3,
-                max_tokens=1000
+                max_tokens=420
             )
             
             response = await llm_service.chat_completion(request)
@@ -246,7 +250,7 @@ class JournalAgent(BaseAgent):
             request = CompletionRequest(
                 messages=[ChatMessage(role="user", content=prompt)],
                 temperature=0.4,
-                max_tokens=1000
+                max_tokens=420
             )
             
             response = await llm_service.chat_completion(request)
@@ -278,7 +282,7 @@ class JournalAgent(BaseAgent):
             request = CompletionRequest(
                 messages=[ChatMessage(role="user", content=prompt)],
                 temperature=0.4,
-                max_tokens=800
+                max_tokens=320
             )
             
             response = await llm_service.chat_completion(request)
@@ -291,6 +295,29 @@ class JournalAgent(BaseAgent):
     def _build_journal_context(self, context: Dict[str, Any], journal_type: str) -> str:
         """Build journaling context from available knowledge."""
         context_parts = []
+
+        coach_profile = context.get("coach_profile", {}) if isinstance(context, dict) else {}
+        if isinstance(coach_profile, dict) and coach_profile:
+            context_parts.append(
+                f"Coach style: {coach_profile.get('style')} | directive: {coach_profile.get('directive')}"
+            )
+
+        profile_snapshot = context.get("profile_snapshot", {}) if isinstance(context, dict) else {}
+        if isinstance(profile_snapshot, dict):
+            role = profile_snapshot.get("role")
+            priorities = profile_snapshot.get("priorities", []) if isinstance(profile_snapshot.get("priorities"), list) else []
+            if role or priorities:
+                context_parts.append(
+                    f"Profile: role={role or 'unknown'} | priorities={', '.join(str(item) for item in priorities[:3])}"
+                )
+
+        intent_blueprint = context.get("intent_blueprint", {}) if isinstance(context, dict) else {}
+        if isinstance(intent_blueprint, dict) and intent_blueprint:
+            context_parts.append(
+                "Intent blueprint: "
+                f"intent={intent_blueprint.get('primary_intent')} | "
+                f"outcome={intent_blueprint.get('expected_outcome')}"
+            )
         
         # Add agent preferences (journaling preferences from knowledge base)
         if "agent_preferences" in context and context["agent_preferences"]:
@@ -305,3 +332,16 @@ class JournalAgent(BaseAgent):
             context_parts.append(f"Previous journaling context: {context['context_summary']}")
         
         return " | ".join(context_parts) if context_parts else f"No specific {journal_type} context available"
+
+    def _merge_with_routing_context(self, kb_context: Dict[str, Any], state_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge orchestrator routing context with journal KB context."""
+        merged_context = dict(kb_context or {})
+        if not isinstance(state_context, dict):
+            return merged_context
+
+        for key in ("profile_snapshot", "coach_profile", "intent_blueprint", "knowledge_context_summary"):
+            value = state_context.get(key)
+            if value:
+                merged_context[key] = value
+
+        return merged_context

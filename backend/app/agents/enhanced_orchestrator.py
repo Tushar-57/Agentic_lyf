@@ -279,6 +279,257 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
 
         return str(payload).strip()
 
+    def _normalize_agent_type(self, value: Any) -> AgentType:
+        """Normalize loose agent labels to AgentType values."""
+        if isinstance(value, AgentType):
+            return value
+
+        candidate = str(value or "").strip().lower()
+        for agent in AgentType:
+            if candidate in {agent.value.lower(), agent.name.lower()}:
+                return agent
+
+        return AgentType.GENERAL
+
+    def _build_coach_profile(self, profile_snapshot: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Build coach/tone guidance payload from profile data."""
+        profile_snapshot = profile_snapshot or {}
+        mentor = profile_snapshot.get("mentor", {}) if isinstance(profile_snapshot.get("mentor"), dict) else {}
+
+        style = str(
+            mentor.get("style")
+            or profile_snapshot.get("preferred_tone")
+            or "Direct"
+        ).strip()
+        normalized_style = style.lower()
+
+        style_guidance = {
+            "sarcastic poet": "Use witty, creative language with practical guidance and no fluff.",
+            "direct": "Be clear and concise. Prioritize concrete actions over explanations.",
+            "friendly": "Be warm and supportive while staying actionable.",
+            "encouraging": "Highlight progress and keep momentum with practical next steps.",
+            "nurturing": "Be calm, kind, and reassuring while giving practical direction.",
+            "patient": "Explain clearly and avoid rushing, but still end with concrete action.",
+            "challenging": "Set a high bar, ask focused questions, and push for measurable action.",
+        }
+
+        matched_guidance = "Be clear, practical, and action-focused."
+        for key, guidance in style_guidance.items():
+            if key in normalized_style:
+                matched_guidance = guidance
+                break
+
+        return {
+            "name": mentor.get("name") or "Coach",
+            "style": style,
+            "directive": matched_guidance,
+        }
+
+    def _derive_intent_blueprint(
+        self,
+        user_input: str,
+        profile_snapshot: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Create an intent blueprint focused on immediate user improvement."""
+        text = (user_input or "").strip().lower()
+        profile_snapshot = profile_snapshot or {}
+
+        blueprint: Dict[str, Any] = {
+            "primary_intent": "general_guidance",
+            "expected_outcome": "actionable_advice",
+            "time_horizon": "unspecified",
+            "user_goal": "clarity",
+            "suggested_agent": None,
+            "source": "heuristic",
+        }
+
+        if re.search(r"\b(what should i work on|what should i do now|what to do now|what do i do now|next step|next action|focus now|priority now)\b", text):
+            blueprint.update(
+                {
+                    "primary_intent": "next_best_action",
+                    "expected_outcome": "prioritized_plan",
+                    "time_horizon": "now",
+                    "user_goal": "execution",
+                    "suggested_agent": AgentType.PRODUCTIVITY.value,
+                }
+            )
+            return blueprint
+
+        if re.search(r"\b(how did i do today|how was my day|review( my)? day|today review|daily review)\b", text):
+            blueprint.update(
+                {
+                    "primary_intent": "daily_review",
+                    "expected_outcome": "performance_review",
+                    "time_horizon": "today",
+                    "user_goal": "reflection_with_improvement",
+                    "suggested_agent": AgentType.PRODUCTIVITY.value,
+                }
+            )
+            return blueprint
+
+        if re.search(r"\b(plan my day|plan today|today plan|plan this week|weekly plan)\b", text):
+            blueprint.update(
+                {
+                    "primary_intent": "planning",
+                    "expected_outcome": "time_blocked_plan",
+                    "time_horizon": "today" if "today" in text or "day" in text else "this_week",
+                    "user_goal": "structured_execution",
+                    "suggested_agent": AgentType.PRODUCTIVITY.value,
+                }
+            )
+            return blueprint
+
+        if re.search(r"\b(reflect|journal|gratitude|mood|how do i feel)\b", text):
+            blueprint.update(
+                {
+                    "primary_intent": "reflection",
+                    "expected_outcome": "self_insight",
+                    "time_horizon": "today",
+                    "user_goal": "emotional_clarity",
+                    "suggested_agent": AgentType.JOURNAL.value,
+                }
+            )
+            return blueprint
+
+        if "today" in text:
+            blueprint["time_horizon"] = "today"
+        elif "week" in text:
+            blueprint["time_horizon"] = "this_week"
+
+        if "?" in text:
+            blueprint["primary_intent"] = "question_answering"
+
+        priorities = profile_snapshot.get("priorities", []) if isinstance(profile_snapshot.get("priorities"), list) else []
+        if priorities:
+            blueprint["priority_hint"] = priorities[:3]
+
+        return blueprint
+
+    def _resolve_priority_agent(self, profile_snapshot: Optional[Dict[str, Any]]) -> AgentType:
+        """Resolve fallback routing from user priorities when intent is ambiguous."""
+        profile_snapshot = profile_snapshot or {}
+        priorities = profile_snapshot.get("priorities", []) if isinstance(profile_snapshot.get("priorities"), list) else []
+
+        priority_to_agent = {
+            "career": AgentType.PRODUCTIVITY,
+            "work": AgentType.PRODUCTIVITY,
+            "productivity": AgentType.PRODUCTIVITY,
+            "health": AgentType.HEALTH,
+            "wellness": AgentType.HEALTH,
+            "fitness": AgentType.HEALTH,
+            "finance": AgentType.FINANCE,
+            "money": AgentType.FINANCE,
+            "budget": AgentType.FINANCE,
+            "schedule": AgentType.SCHEDULING,
+            "planning": AgentType.SCHEDULING,
+            "journal": AgentType.JOURNAL,
+            "reflection": AgentType.JOURNAL,
+        }
+
+        for priority in priorities:
+            normalized_priority = str(priority).strip().lower()
+            for keyword, agent in priority_to_agent.items():
+                if keyword in normalized_priority:
+                    return agent
+
+        return AgentType.GENERAL
+
+    def _apply_intent_policy(
+        self,
+        *,
+        user_input: str,
+        base_result: Dict[str, Any],
+        intent_blueprint: Dict[str, Any],
+        profile_snapshot: Optional[Dict[str, Any]],
+        context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Apply deterministic policy so routing favors user improvement outcomes."""
+        result = dict(base_result or {})
+        selected_agent = self._normalize_agent_type(result.get("agent_type"))
+        confidence = float(result.get("confidence", 0.0) or 0.0)
+        reason_parts = [str(result.get("reason", "")).strip()]
+
+        blueprint_agent = self._normalize_agent_type(intent_blueprint.get("suggested_agent"))
+        blueprint_intent = str(intent_blueprint.get("primary_intent", "")).strip().lower()
+
+        if blueprint_agent != AgentType.GENERAL:
+            if selected_agent == AgentType.GENERAL or confidence < 0.78:
+                selected_agent = blueprint_agent
+                confidence = max(confidence, 0.79)
+                reason_parts.append(
+                    f"Policy override: routed to {blueprint_agent.value} for {blueprint_intent or 'user-improvement'} intent."
+                )
+
+        if blueprint_intent == "daily_review":
+            recent_entries = context.get("general_recent_time_entries", []) if isinstance(context, dict) else []
+            if recent_entries:
+                selected_agent = AgentType.PRODUCTIVITY
+                confidence = max(confidence, 0.82)
+                reason_parts.append("Detected review request with available history; routed to productivity for measurable feedback.")
+
+        if selected_agent == AgentType.GENERAL and blueprint_intent in {"next_best_action", "planning"}:
+            profile_agent = self._resolve_priority_agent(profile_snapshot)
+            if profile_agent != AgentType.GENERAL:
+                selected_agent = profile_agent
+                confidence = max(confidence, 0.74)
+                reason_parts.append(f"Used profile priorities to prefer {profile_agent.value} routing.")
+
+        if selected_agent == AgentType.GENERAL and re.search(r"\b(work on|do now|next|priority|focus)\b", user_input.lower()):
+            selected_agent = AgentType.PRODUCTIVITY
+            confidence = max(confidence, 0.72)
+            reason_parts.append("Action-oriented language detected; defaulted to productivity for concrete next steps.")
+
+        result["agent_type"] = selected_agent
+        result["confidence"] = min(confidence, 0.99)
+        result["reason"] = " ".join(part for part in reason_parts if part).strip() or "Policy-guided routing"
+        result["primary_intent"] = result.get("primary_intent") or intent_blueprint.get("primary_intent")
+        result["expected_outcome"] = result.get("expected_outcome") or intent_blueprint.get("expected_outcome")
+        result["time_horizon"] = result.get("time_horizon") or intent_blueprint.get("time_horizon")
+
+        preferred_tone = (profile_snapshot or {}).get("preferred_tone")
+        if preferred_tone and not result.get("coach_tone_hint"):
+            result["coach_tone_hint"] = str(preferred_tone)
+
+        result["method"] = f"{result.get('method', 'unknown')}_policy"
+        return result
+
+    def _compose_guided_user_prompt(self, user_input: str, context: Dict[str, Any]) -> str:
+        """Compose a context-aware prompt for direct/simple responses."""
+        profile_snapshot = context.get("profile_snapshot", {}) if isinstance(context.get("profile_snapshot"), dict) else {}
+        coach_profile = context.get("coach_profile", {}) if isinstance(context.get("coach_profile"), dict) else {}
+        intent_blueprint = context.get("intent_blueprint", {}) if isinstance(context.get("intent_blueprint"), dict) else {}
+        knowledge_summary = str(context.get("knowledge_context_summary", "")).strip()
+
+        priorities = profile_snapshot.get("priorities", []) if isinstance(profile_snapshot.get("priorities"), list) else []
+        active_goals = profile_snapshot.get("active_goals", []) if isinstance(profile_snapshot.get("active_goals"), list) else []
+
+        return f"""
+User query:
+{user_input}
+
+Intent blueprint:
+{json.dumps(intent_blueprint, indent=2)}
+
+Profile snapshot:
+{json.dumps({
+    "role": profile_snapshot.get("role"),
+    "priorities": priorities[:3],
+    "active_goals": active_goals[:3],
+}, indent=2)}
+
+Coach profile:
+{json.dumps(coach_profile, indent=2)}
+
+Knowledge summary:
+{knowledge_summary or 'No related summary available.'}
+
+Response contract:
+1. Align tone with coach style guidance.
+2. Provide concrete, immediate value (not generic motivation).
+3. Keep it concise and structured.
+4. End with one practical next action.
+""".strip()
+
     async def execute(self, state: Union[AgentState, str, Dict[str, Any]]) -> Dict[str, Any]:
         """Enhanced execute method with deep agent patterns."""
         logger.info("=" * 80)
@@ -305,6 +556,7 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
             # Pull user profile + recent knowledge context so routing reflects real user data.
             user_preferences_dict: Dict[str, Any] = {}
             profile_snapshot: Dict[str, Any] = {}
+            coach_profile: Dict[str, Any] = {}
             try:
                 user_preferences = await self.knowledge_base.get_user_preferences()
                 if hasattr(user_preferences, "model_dump"):
@@ -312,10 +564,12 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
                 elif isinstance(user_preferences, dict):
                     user_preferences_dict = user_preferences
                 profile_snapshot = self._build_profile_snapshot(user_preferences_dict)
+                coach_profile = self._build_coach_profile(profile_snapshot)
             except Exception as profile_error:
                 logger.warning("Failed to load user preference snapshot: %s", profile_error)
 
             routing_context = dict(context or {})
+            general_context: Dict[str, Any] = {}
             try:
                 general_context = await self.knowledge_base.get_contextual_knowledge_for_agent(
                     user_input=user_input,
@@ -324,11 +578,17 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
                 )
                 if isinstance(general_context, dict):
                     routing_context["knowledge_context_summary"] = general_context.get("context_summary")
+                    routing_context["general_recent_time_entries"] = general_context.get("recent_time_entries", [])[:3]
             except Exception as context_error:
                 logger.warning("Failed to load general knowledge context: %s", context_error)
 
             if profile_snapshot:
                 routing_context["profile_snapshot"] = profile_snapshot
+            if coach_profile:
+                routing_context["coach_profile"] = coach_profile
+
+            intent_blueprint = self._derive_intent_blueprint(user_input, profile_snapshot)
+            routing_context["intent_blueprint"] = intent_blueprint
             
             # Assess task complexity
             complexity = await self._assess_task_complexity(user_input)
@@ -339,7 +599,20 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
                 routing_context,
                 complexity,
                 profile_snapshot,
+                intent_blueprint,
             )
+
+            # Normalize the chosen target agent to avoid downstream type drift.
+            target_agent = self._normalize_agent_type(intent_result.get("agent_type", AgentType.GENERAL))
+            intent_result["agent_type"] = target_agent
+            if coach_profile.get("style") and not intent_result.get("coach_tone_hint"):
+                intent_result["coach_tone_hint"] = coach_profile.get("style")
+            if intent_blueprint.get("primary_intent") and not intent_result.get("primary_intent"):
+                intent_result["primary_intent"] = intent_blueprint.get("primary_intent")
+            if intent_blueprint.get("expected_outcome") and not intent_result.get("expected_outcome"):
+                intent_result["expected_outcome"] = intent_blueprint.get("expected_outcome")
+            if intent_blueprint.get("time_horizon") and not intent_result.get("time_horizon"):
+                intent_result["time_horizon"] = intent_blueprint.get("time_horizon")
             
             # Create strategic plan for complex tasks
             strategic_plan = None
@@ -350,7 +623,6 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
             
             # Execute based on complexity and plan
             # Even for SIMPLE tasks, delegate to specialist if high-confidence intent classification
-            target_agent = intent_result.get("agent_type", AgentType.GENERAL)
             confidence = intent_result.get("confidence", 0.0)
             
             logger.info(f"[DELEGATION DEBUG] complexity={complexity.value}, confidence={confidence}, target_agent={target_agent}")
@@ -384,23 +656,58 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
             # Update state manager
             self.state_manager.update_state(conversation_id or "default", deep_state)
             
-            # Build reasoning for transparency
+            # Build reasoning for transparency (backward-compatible keys preserved for UI consumers).
+            intent_payload = dict(intent_result or {})
+            intent_agent = intent_payload.get("agent_type")
+            resolved_agent_type = (
+                intent_agent.value
+                if isinstance(intent_agent, AgentType)
+                else str(intent_agent or getattr(target_agent, "value", target_agent))
+            )
+            intent_payload["agent_type"] = resolved_agent_type
+
+            execution_path = self._get_execution_path(complexity, strategic_plan)
             reasoning = {
                 "complexity": complexity.value,
-                "intent": intent_result,
+                "intent": intent_payload,
                 "plan": strategic_plan,
-                "execution_path": self._get_execution_path(complexity, strategic_plan),
+                "execution_path": execution_path,
                 "data_points_used": {
                     "role": profile_snapshot.get("role"),
                     "priorities": profile_snapshot.get("priorities", [])[:3],
                     "knowledge_context_summary": routing_context.get("knowledge_context_summary"),
+                    "coach_style": coach_profile.get("style"),
+                    "recent_time_entries_considered": len(routing_context.get("general_recent_time_entries", [])),
                 },
+                "coach_profile": coach_profile,
+                "intent_blueprint": intent_blueprint,
+                "finalAgent": resolved_agent_type,
+                "classification": {
+                    "agent_type": resolved_agent_type,
+                    "confidence": float(intent_payload.get("confidence", 0.0) or 0.0),
+                    "reason": str(intent_payload.get("reason", "")),
+                },
+                "steps": [
+                    {
+                        "agent": "orchestrator",
+                        "action": f"Routed request to {resolved_agent_type} specialist",
+                        "result": str(intent_payload.get("reason", ""))[:220],
+                    },
+                    *[
+                        {
+                            "agent": "orchestrator",
+                            "action": str(path_step),
+                        }
+                        for path_step in execution_path
+                    ],
+                ],
             }
             
             return {
                 "response": response,
                 "reasoning": reasoning,
-                "deep_state": deep_state.to_dict()
+                "deep_state": deep_state.to_dict(),
+                "context": routing_context,
             }
             
         except Exception as e:
@@ -479,32 +786,47 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
         context: Dict[str, Any], 
         complexity: TaskComplexity,
         profile_snapshot: Optional[Dict[str, Any]] = None,
+        intent_blueprint: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Enhanced intent classification with LLM support and complexity awareness."""
         try:
+            intent_blueprint = intent_blueprint or {}
+
             # First, try pattern-based classification for speed
             pattern_result = self._pattern_based_classification(user_input, complexity)
-            
-            # If pattern confidence is very high (>0.8), use it directly
-            if pattern_result["confidence"] > 0.8:
-                logger.info(f"High confidence pattern match: {pattern_result['agent_type'].value} ({pattern_result['confidence']:.2f})")
-                return pattern_result
-            
+
             # For lower confidence or complex tasks, use LLM classification
-            llm_result = await self._llm_based_classification(
-                user_input,
-                context,
-                complexity,
-                profile_snapshot,
+            llm_result: Optional[Dict[str, Any]] = None
+            if pattern_result["confidence"] <= 0.8:
+                llm_result = await self._llm_based_classification(
+                    user_input,
+                    context,
+                    complexity,
+                    profile_snapshot,
+                )
+
+            # Combine results: prefer LLM when available and stronger confidence.
+            base_result = pattern_result
+            if llm_result and llm_result.get("confidence", 0.0) > pattern_result.get("confidence", 0.0):
+                base_result = llm_result
+
+            policy_result = self._apply_intent_policy(
+                user_input=user_input,
+                base_result=base_result,
+                intent_blueprint=intent_blueprint,
+                profile_snapshot=profile_snapshot,
+                context=context,
             )
-            
-            # Combine results: prefer LLM if confidence is higher
-            if llm_result["confidence"] > pattern_result["confidence"]:
-                logger.info(f"Using LLM classification: {llm_result['agent_type'].value} ({llm_result['confidence']:.2f})")
-                return llm_result
-            else:
-                logger.info(f"Using pattern classification: {pattern_result['agent_type'].value} ({pattern_result['confidence']:.2f})")
-                return pattern_result
+
+            normalized_agent = self._normalize_agent_type(policy_result.get("agent_type"))
+            logger.info(
+                "Intent routing decided: agent=%s confidence=%.2f method=%s primary_intent=%s",
+                normalized_agent.value,
+                float(policy_result.get("confidence", 0.0) or 0.0),
+                policy_result.get("method"),
+                policy_result.get("primary_intent"),
+            )
+            return policy_result
                 
         except Exception as e:
             logger.error(f"Error in intent classification: {e}", exc_info=True)
@@ -512,12 +834,14 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
                 "agent_type": AgentType.GENERAL, 
                 "confidence": 0.5, 
                 "reason": f"Classification error: {str(e)}",
-                "complexity_factor": complexity.value
+                "complexity_factor": complexity.value,
+                "primary_intent": (intent_blueprint or {}).get("primary_intent", "general_guidance"),
+                "expected_outcome": (intent_blueprint or {}).get("expected_outcome", "actionable_advice"),
+                "time_horizon": (intent_blueprint or {}).get("time_horizon", "unspecified"),
             }
     
     def _pattern_based_classification(self, user_input: str, complexity: TaskComplexity) -> Dict[str, Any]:
         """Pattern-based intent classification using regex."""
-        user_lower = user_input.lower()
         agent_scores = {}
         
         # Score each agent type
@@ -554,7 +878,10 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
                 "confidence": 0.3,
                 "reason": "No pattern matches found",
                 "complexity_factor": complexity.value,
-                "method": "pattern_based"
+                "method": "pattern_based",
+                "primary_intent": "general_guidance",
+                "expected_outcome": "actionable_advice",
+                "time_horizon": "unspecified",
             }
         
         # Find best agent
@@ -577,7 +904,10 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
             "reason": f"Pattern matches: {', '.join(map(str, result['matches'][:3]))}",
             "complexity_factor": complexity.value,
             "all_scores": {str(k.value): v["confidence"] for k, v in agent_scores.items()},
-            "method": "pattern_based"
+            "method": "pattern_based",
+            "primary_intent": "execution_help" if best_agent == AgentType.PRODUCTIVITY else "general_guidance",
+            "expected_outcome": "domain_specific_guidance",
+            "time_horizon": "unspecified",
         }
     
     async def _llm_based_classification(
@@ -623,7 +953,6 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
 
             # Parse JSON response
             try:
-                import json
                 # Extract JSON if wrapped in markdown or other text
                 json_start = response_text.find('{')
                 json_end = response_text.rfind('}') + 1
@@ -636,19 +965,24 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
                 agent_label = parsed.get("agent_type", "GENERAL").upper()
                 confidence = float(parsed.get("confidence", 0.5))
                 reason = parsed.get("reason", response_text)
+                primary_intent = str(parsed.get("primary_intent", "general_guidance"))
+                expected_outcome = str(parsed.get("expected_outcome", "actionable_advice"))
+                time_horizon = str(parsed.get("time_horizon", "unspecified"))
+                coach_tone_hint = str(parsed.get("coach_tone_hint", "")).strip() or None
                 
                 # Map label to AgentType enum
-                agent_type = next(
-                    (a for a in AgentType if a.value.upper() == agent_label or a.name == agent_label), 
-                    AgentType.GENERAL
-                )
+                agent_type = self._normalize_agent_type(agent_label)
                 
                 return {
                     "agent_type": agent_type,
                     "confidence": confidence,
                     "reason": reason,
                     "complexity_factor": complexity.value,
-                    "method": "llm_based"
+                    "method": "llm_based",
+                    "primary_intent": primary_intent,
+                    "expected_outcome": expected_outcome,
+                    "time_horizon": time_horizon,
+                    "coach_tone_hint": coach_tone_hint,
                 }
                 
             except (json.JSONDecodeError, ValueError) as parse_error:
@@ -662,7 +996,10 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
                             "confidence": 0.65,
                             "reason": response_text[:100],
                             "complexity_factor": complexity.value,
-                            "method": "llm_based_fallback"
+                            "method": "llm_based_fallback",
+                            "primary_intent": "general_guidance",
+                            "expected_outcome": "actionable_advice",
+                            "time_horizon": "unspecified",
                         }
                 
                 # Ultimate fallback
@@ -671,7 +1008,10 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
                     "confidence": 0.4,
                     "reason": f"Could not parse LLM response: {response_text[:100]}",
                     "complexity_factor": complexity.value,
-                    "method": "llm_based_error"
+                    "method": "llm_based_error",
+                    "primary_intent": "general_guidance",
+                    "expected_outcome": "actionable_advice",
+                    "time_horizon": "unspecified",
                 }
                 
         except Exception as e:
@@ -681,7 +1021,10 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
                 "confidence": 0.3,
                 "reason": f"LLM classification error: {str(e)}",
                 "complexity_factor": complexity.value,
-                "method": "llm_error"
+                "method": "llm_error",
+                "primary_intent": "general_guidance",
+                "expected_outcome": "actionable_advice",
+                "time_horizon": "unspecified",
             }
     
     def _get_agent_description(self, agent_type: AgentType) -> str:
@@ -740,11 +1083,12 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
             think_tools = create_think_tools()
             
             # Create planning prompt
+            identified_domain = self._normalize_agent_type(intent_result.get("agent_type")).value
             planning_prompt = f"""Analyze this complex request and create a strategic plan:
 
 **User Request:** {user_input}
 
-**Identified Domain:** {intent_result['agent_type'].value if intent_result.get('agent_type') else 'General'}
+**Identified Domain:** {identified_domain}
 **Task Complexity:** {complexity.value}
 **Classification Confidence:** {intent_result.get('confidence', 0):.2f}
 
@@ -763,7 +1107,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
             # Execute thinking tool (simplified for now)
             plan = {
                 "complexity": complexity.value,
-                "primary_domain": intent_result['agent_type'].value if intent_result.get('agent_type') else 'general',
+                "primary_domain": identified_domain,
                 "confidence": intent_result.get('confidence', 0),
                 "steps": self._generate_plan_steps(user_input, intent_result, complexity),
                 "agents_involved": self._identify_required_agents(user_input, intent_result),
@@ -789,6 +1133,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
         
         # Basic step generation based on complexity
         if complexity == TaskComplexity.COMPLEX:
+            primary_agent = self._normalize_agent_type(intent_result.get('agent_type', AgentType.GENERAL)).value
             steps = [
                 {
                     "step": 1,
@@ -800,8 +1145,8 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
                 {
                     "step": 2,
                     "action": "Delegate to primary specialist",
-                    "agent": intent_result.get('agent_type', AgentType.GENERAL).value,
-                    "description": f"Use {intent_result.get('agent_type', AgentType.GENERAL).value} agent for domain expertise",
+                    "agent": primary_agent,
+                    "description": f"Use {primary_agent} agent for domain expertise",
                     "estimated_time": 10
                 },
                 {
@@ -855,8 +1200,9 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
         required_agents = ["orchestrator"]
         
         # Add primary agent
-        if intent_result.get('agent_type'):
-            required_agents.append(intent_result['agent_type'].value)
+        primary_agent = self._normalize_agent_type(intent_result.get('agent_type', AgentType.GENERAL)).value
+        if primary_agent:
+            required_agents.append(primary_agent)
         
         # Check for multi-domain requirements
         user_lower = user_input.lower()
@@ -983,15 +1329,16 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
         """Handle simple tasks directly without delegation."""
         try:
             # Use LLM service directly for simple responses
+            guided_prompt = self._compose_guided_user_prompt(user_input, context or {})
             messages = [
                 ChatMessage(role="system", content=self.system_prompt),
-                ChatMessage(role="user", content=user_input)
+                ChatMessage(role="user", content=guided_prompt)
             ]
             
             request = CompletionRequest(
                 messages=messages,
-                max_tokens=500,
-                temperature=0.7
+                max_tokens=340,
+                temperature=0.35
             )
             
             response = await self.llm_service.chat_completion(request)
@@ -1010,17 +1357,18 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
     ) -> str:
         """Delegate to specialized agent."""
         try:
+            normalized_agent_type = self._normalize_agent_type(agent_type)
             # Get the specialized agent from registry
             registry = get_agent_registry()
-            agents = registry.get_agents_by_type(agent_type)
+            agents = registry.get_agents_by_type(normalized_agent_type)
             
             if not agents:
-                logger.warning(f"No agent found for type {agent_type}, falling back to simple handling")
+                logger.warning(f"No agent found for type {normalized_agent_type}, falling back to simple handling")
                 return await self._handle_simple_task(user_input, context, deep_state)
             
             # Use the first registered agent of this type
             specialist_agent = agents[0]
-            logger.info(f"[DELEGATION DEBUG] Delegating to specialist: {specialist_agent.agent_id} ({agent_type.value})")
+            logger.info(f"[DELEGATION DEBUG] Delegating to specialist: {specialist_agent.agent_id} ({normalized_agent_type.value})")
             
             # Prepare state for delegation
             delegation_state = AgentState(
@@ -1063,8 +1411,9 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
         try:
             if not plan:
                 # Fallback to single agent delegation
+                fallback_agent = self._normalize_agent_type(intent_result.get('agent_type', AgentType.GENERAL))
                 return await self._delegate_to_specialist(
-                    intent_result.get('agent_type', AgentType.GENERAL),
+                    fallback_agent,
                     user_input,
                     {},
                     deep_state
