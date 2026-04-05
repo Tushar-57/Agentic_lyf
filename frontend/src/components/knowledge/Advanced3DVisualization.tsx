@@ -7,7 +7,7 @@ import {
     Html,
     Line,
     Sphere,
-    Environment,
+    Sparkles,
     Stats
 } from '@react-three/drei'
 import * as THREE from 'three'
@@ -19,7 +19,11 @@ import {
     Settings,
     Maximize2,
     Minimize2,
-    Box
+    Box,
+    ChevronLeft,
+    ChevronRight,
+    AlertCircle,
+    CheckCircle2
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -50,6 +54,7 @@ interface EmbeddingPoint {
     category: string
     entry_type: string
     tags: string[]
+    embedding?: number[]
     position_3d: [number, number, number]
     created_at: string
     updated_at: string
@@ -88,6 +93,109 @@ interface EmbeddingDetails {
         tag_count: number
         metadata_keys: string[]
     }
+}
+
+const POSITION_EPSILON = 1e-4
+
+function stableHash(value: string): number {
+    let hash = 2166136261
+    for (let i = 0; i < value.length; i += 1) {
+        hash ^= value.charCodeAt(i)
+        hash = Math.imul(hash, 16777619)
+    }
+    return hash >>> 0
+}
+
+function seededOffset(seed: string, salt: number, amplitude: number): number {
+    const normalized = ((stableHash(`${seed}:${salt}`) % 10000) / 10000) - 0.5
+    return normalized * amplitude * 2
+}
+
+function hasMeaningfulCoordinates(points: EmbeddingPoint[]): boolean {
+    if (points.length < 2) {
+        return false
+    }
+
+    const uniquePositions = new Set(
+        points.map((point) =>
+            point.position_3d.map((value) => value.toFixed(3)).join('|')
+        )
+    )
+
+    if (uniquePositions.size <= 1) {
+        return false
+    }
+
+    return points.every((point) =>
+        point.position_3d.every((value) => Number.isFinite(value) && Math.abs(value) < 100000)
+    )
+}
+
+function hasNonZeroEmbedding(point: EmbeddingPoint): boolean {
+    if (!Array.isArray(point.embedding) || point.embedding.length === 0) {
+        return false
+    }
+
+    return point.embedding.some((value) => Math.abs(value) > POSITION_EPSILON)
+}
+
+function normalizeSemanticPositions(points: EmbeddingPoint[]): EmbeddingPoint[] {
+    const vectors = points.map((point) => new THREE.Vector3(...point.position_3d))
+    const centroid = vectors.reduce((acc, vector) => acc.add(vector), new THREE.Vector3()).divideScalar(vectors.length)
+
+    const centeredVectors = vectors.map((vector) => vector.clone().sub(centroid))
+    const maxDistance = centeredVectors.reduce((max, vector) => Math.max(max, vector.length()), 1)
+    const targetRadius = 52
+
+    return points.map((point, index) => {
+        const normalized = centeredVectors[index].clone().multiplyScalar(targetRadius / maxDistance)
+        return {
+            ...point,
+            position_3d: [normalized.x, normalized.y, normalized.z],
+        }
+    })
+}
+
+function buildStableFallbackLayout(rawPoints: EmbeddingPoint[]): EmbeddingPoint[] {
+    const categoryGroups: Record<string, EmbeddingPoint[]> = {}
+    rawPoints.forEach((point) => {
+        if (!categoryGroups[point.category]) {
+            categoryGroups[point.category] = []
+        }
+        categoryGroups[point.category].push(point)
+    })
+
+    const processedPoints: EmbeddingPoint[] = []
+    const sortedCategories = Object.keys(categoryGroups).sort((a, b) => a.localeCompare(b))
+    const clusterRadius = 34
+
+    sortedCategories.forEach((category, categoryIndex) => {
+        const categoryPoints = [...categoryGroups[category]].sort((a, b) => a.entry_id.localeCompare(b.entry_id))
+        const angle = (categoryIndex / Math.max(sortedCategories.length, 1)) * Math.PI * 2
+        const clusterCenterX = Math.cos(angle) * clusterRadius + seededOffset(category, 1, 2.5)
+        const clusterCenterZ = Math.sin(angle) * clusterRadius + seededOffset(category, 2, 2.5)
+        const clusterCenterY = seededOffset(category, 3, 4)
+
+        categoryPoints.forEach((point, pointIndex) => {
+            const ring = 1 + Math.floor(pointIndex / 8)
+            const ringStep = 7
+            const localAngle = (
+                (pointIndex % 8) / 8
+            ) * Math.PI * 2 + seededOffset(point.entry_id, 4, 0.4)
+            const distance = ring * ringStep + seededOffset(point.entry_id, 5, 1.5)
+
+            const x = clusterCenterX + Math.cos(localAngle) * distance + seededOffset(point.entry_id, 6, 1.5)
+            const y = clusterCenterY + seededOffset(point.entry_id, 7, 5)
+            const z = clusterCenterZ + Math.sin(localAngle) * distance + seededOffset(point.entry_id, 8, 1.5)
+
+            processedPoints.push({
+                ...point,
+                position_3d: [x, y, z],
+            })
+        })
+    })
+
+    return processedPoints
 }
 
 // 3D Node Component
@@ -437,7 +545,7 @@ const HoverTooltip: React.FC<{
                         </Badge>
                         <Badge
                             variant="outline"
-                            className="text-sm font-semibold bg-purple-500/30 text-purple-100 border-purple-400/60 px-3 py-1.5 rounded-full border-2"
+                            className="text-sm font-semibold bg-amber-500/30 text-amber-100 border-amber-400/60 px-3 py-1.5 rounded-full border-2"
                         >
                             🔖 {point.entry_type}
                         </Badge>
@@ -518,7 +626,9 @@ const Scene3D: React.FC<{
     showLabels,
     showConnections,
     showAllConnections,
-    similarityThreshold }) => {
+    similarityThreshold,
+    animationSpeed,
+}) => {
         const { camera } = useThree()
         const groupRef = useRef<THREE.Group>(null)
         const [hoveredPosition, setHoveredPosition] = useState<THREE.Vector3 | null>(null)
@@ -543,7 +653,13 @@ const Scene3D: React.FC<{
             }
         }, [points.length]) // Only depend on points.length, not the full points array
 
-        // Remove auto-rotation to prevent constant resets
+        useFrame((_, delta) => {
+            if (!groupRef.current || animationSpeed <= 0 || selectedPoint) {
+                return
+            }
+
+            groupRef.current.rotation.y += delta * 0.05 * animationSpeed
+        })
 
         // Update hovered position for tooltip - stable version
         useEffect(() => {
@@ -579,13 +695,19 @@ const Scene3D: React.FC<{
 
         return (
             <>
-                {/* Lighting for dark theme */}
-                <ambientLight intensity={0.2} />
-                <pointLight position={[20, 20, 20]} intensity={0.5} color="#ffffff" />
-                <pointLight position={[-20, -20, -20]} intensity={0.3} color="#4a9eff" />
-
-                {/* Dark environment */}
-                <Environment preset="night" />
+                {/* Local-only lighting and atmosphere (no external HDR dependency). */}
+                <ambientLight intensity={0.28} />
+                <hemisphereLight skyColor="#bfdbfe" groundColor="#0b1220" intensity={0.35} />
+                <pointLight position={[20, 24, 18]} intensity={0.55} color="#f8fafc" />
+                <pointLight position={[-24, -16, -18]} intensity={0.24} color="#38bdf8" />
+                <Sparkles
+                    count={120}
+                    scale={[220, 140, 220]}
+                    size={2.1}
+                    speed={0.14}
+                    opacity={0.26}
+                    color="#93c5fd"
+                />
 
                 {/* Main group with all nodes */}
                 <group ref={groupRef}>
@@ -651,6 +773,8 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
     const [categories, setCategories] = useState<string[]>([])
     const [types, setTypes] = useState<string[]>([])
     const [viewMode, setViewMode] = useState<'graph' | 'list'>('graph')
+    const [isControlPanelOpen, setIsControlPanelOpen] = useState(true)
+    const [isMobileViewport, setIsMobileViewport] = useState(false)
     const hoverStabilityRef = useRef<NodeJS.Timeout | null>(null)
 
     // Stable hover handler to prevent flickering
@@ -674,8 +798,32 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
     useEffect(() => {
         if (isOpen) {
             loadEmbeddingsData()
+            if (typeof window !== 'undefined' && window.innerWidth < 1024) {
+                setIsControlPanelOpen(false)
+            }
         }
     }, [isOpen])
+
+    useEffect(() => {
+        if (typeof window === 'undefined') {
+            return
+        }
+
+        const syncViewportState = () => {
+            const compact = window.innerWidth < 1024
+            setIsMobileViewport(compact)
+
+            if (!compact) {
+                setIsControlPanelOpen(true)
+            }
+        }
+
+        syncViewportState()
+        window.addEventListener('resize', syncViewportState)
+        return () => {
+            window.removeEventListener('resize', syncViewportState)
+        }
+    }, [])
 
     // Cleanup hover timeout on unmount
     useEffect(() => {
@@ -686,51 +834,17 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
         }
     }, [])
 
-    // Process points to create proper clustering and spacing
+    // Preserve semantic coordinates when available, otherwise build deterministic fallback coordinates.
     const processPointsForVisualization = (rawPoints: EmbeddingPoint[]): EmbeddingPoint[] => {
-        if (rawPoints.length === 0) return []
+        if (rawPoints.length === 0) {
+            return []
+        }
 
-        // Group points by category for clustering
-        const categoryGroups: Record<string, EmbeddingPoint[]> = {}
-        rawPoints.forEach(point => {
-            if (!categoryGroups[point.category]) {
-                categoryGroups[point.category] = []
-            }
-            categoryGroups[point.category].push(point)
-        })
+        if (hasMeaningfulCoordinates(rawPoints)) {
+            return normalizeSemanticPositions(rawPoints)
+        }
 
-        const processedPoints: EmbeddingPoint[] = []
-        const categories = Object.keys(categoryGroups)
-        const clusterRadius = 30
-        const nodeSpacing = 8
-
-        categories.forEach((category, categoryIndex) => {
-            const categoryPoints = categoryGroups[category]
-
-            // Position each category cluster in a circle around the origin
-            const angle = (categoryIndex / categories.length) * Math.PI * 2
-            const clusterCenterX = Math.cos(angle) * clusterRadius
-            const clusterCenterZ = Math.sin(angle) * clusterRadius
-            const clusterCenterY = (Math.random() - 0.5) * 10 // Some vertical variation
-
-            // Arrange points within each cluster
-            categoryPoints.forEach((point, pointIndex) => {
-                const pointsInCluster = categoryPoints.length
-                const pointAngle = (pointIndex / pointsInCluster) * Math.PI * 2
-                const distance = Math.sqrt(pointsInCluster) * nodeSpacing
-
-                const x = clusterCenterX + Math.cos(pointAngle) * distance + (Math.random() - 0.5) * 5
-                const y = clusterCenterY + (Math.random() - 0.5) * 10
-                const z = clusterCenterZ + Math.sin(pointAngle) * distance + (Math.random() - 0.5) * 5
-
-                processedPoints.push({
-                    ...point,
-                    position_3d: [x, y, z]
-                })
-            })
-        })
-
-        return processedPoints
+        return buildStableFallbackLayout(rawPoints)
     }
 
     // Process points when raw points change
@@ -753,6 +867,29 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
 
         return matchesSearch && matchesCategory && matchesType
     })
+
+    const visualizationHealth = useMemo(() => {
+        const hasSemanticCoordinates = hasMeaningfulCoordinates(points)
+        const nonZeroEmbeddingCount = points.filter((point) => hasNonZeroEmbedding(point)).length
+
+        return {
+            hasSemanticCoordinates,
+            usesFallbackLayout: points.length > 0 && !hasSemanticCoordinates,
+            nonZeroEmbeddingCount,
+            embeddingCoverage: points.length > 0 ? nonZeroEmbeddingCount / points.length : 0,
+        }
+    }, [points])
+
+    const topCategoryCounts = useMemo(() => {
+        const counts = filteredPoints.reduce<Record<string, number>>((acc, point) => {
+            acc[point.category] = (acc[point.category] || 0) + 1
+            return acc
+        }, {})
+
+        return Object.entries(counts)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5)
+    }, [filteredPoints])
 
     const loadEmbeddingsData = async () => {
         setIsLoading(true)
@@ -819,7 +956,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className={`fixed inset-0 bg-black/95 flex z-50 ${isFullscreen ? 'p-0' : 'p-2 sm:p-4'}`}
+            className={`fixed inset-0 bg-black/95 flex z-50 relative ${isFullscreen ? 'p-0' : 'p-2 sm:p-4'}`}
         >
             {/* Main View Area */}
             <div className="flex-1 relative">
@@ -909,7 +1046,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                                                         <Badge variant="outline" className="text-xs bg-blue-500/20 text-blue-300 border-blue-500/50">
                                                             {point.category}
                                                         </Badge>
-                                                        <Badge variant="outline" className="text-xs bg-purple-500/20 text-purple-300 border-purple-500/50">
+                                                        <Badge variant="outline" className="text-xs bg-amber-500/20 text-amber-300 border-amber-500/50">
                                                             {point.entry_type}
                                                         </Badge>
                                                     </div>
@@ -953,7 +1090,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                                                     </div>
                                                     <div>
                                                         <span className="text-gray-400">Type:</span>
-                                                        <span className="ml-2 text-purple-300">{selectedDetails.entry.entry_type}</span>
+                                                        <span className="ml-2 text-amber-300">{selectedDetails.entry.entry_type}</span>
                                                     </div>
                                                     <div>
                                                         <span className="text-gray-400">Content Length:</span>
@@ -1041,6 +1178,16 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                     >
                         {isFullscreen ? <Minimize2 className="w-5 h-5" /> : <Maximize2 className="w-5 h-5" />}
                     </Button>
+
+                    <Button
+                        variant="secondary"
+                        size="icon"
+                        onClick={() => setIsControlPanelOpen((prev) => !prev)}
+                        className="bg-black/50 hover:bg-black/70 text-white"
+                        title={isControlPanelOpen ? 'Hide controls panel' : 'Show controls panel'}
+                    >
+                        {isControlPanelOpen ? <ChevronRight className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}
+                    </Button>
                 </div>
 
                 {/* Graph/List Toggle - Top Right */}
@@ -1052,7 +1199,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                             onClick={() => setViewMode('graph')}
                             className={viewMode === 'graph' ? 'text-white bg-blue-600 hover:bg-blue-700' : 'text-gray-400 hover:text-white hover:bg-gray-700'}
                         >
-                            📊 Graph
+                            Graph
                         </Button>
                         <Button
                             variant="ghost"
@@ -1060,10 +1207,36 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                             onClick={() => setViewMode('list')}
                             className={viewMode === 'list' ? 'text-white bg-blue-600 hover:bg-blue-700' : 'text-gray-400 hover:text-white hover:bg-gray-700'}
                         >
-                            📋 List
+                            List
                         </Button>
                     </div>
                 </div>
+
+                {points.length > 0 && (
+                    <div className="absolute left-1/2 top-3 z-20 w-[min(40rem,calc(100vw-2rem))] -translate-x-1/2 px-2 sm:top-4 sm:px-0">
+                        {visualizationHealth.usesFallbackLayout ? (
+                            <div className="rounded-lg border border-amber-400/40 bg-amber-950/70 px-3 py-2 text-xs text-amber-100 backdrop-blur-sm sm:text-sm">
+                                <div className="flex items-center gap-2 font-medium">
+                                    <AlertCircle className="h-4 w-4" />
+                                    Fallback layout active
+                                </div>
+                                <p className="mt-1 text-amber-100/90">
+                                    Semantic coordinates are not distinct yet, so the graph is currently clustered by category.
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="rounded-lg border border-emerald-400/40 bg-emerald-950/65 px-3 py-2 text-xs text-emerald-100 backdrop-blur-sm sm:text-sm">
+                                <div className="flex items-center gap-2 font-medium">
+                                    <CheckCircle2 className="h-4 w-4" />
+                                    Semantic layout active
+                                </div>
+                                <p className="mt-1 text-emerald-100/90">
+                                    Node positions are driven by backend embedding coordinates.
+                                </p>
+                            </div>
+                        )}
+                    </div>
+                )}
 
                 {/* Legend Panel - Only show in graph mode */}
                 {viewMode === 'graph' && (
@@ -1078,13 +1251,23 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                             <div className="text-xs text-gray-400 mb-2">STATISTICS</div>
                             <div className="text-xs space-y-1">
                                 <div className="flex justify-between">
-                                    <span className="text-blue-400">📊 {points.length} memories</span>
+                                    <span className="text-blue-300">{filteredPoints.length} visible nodes</span>
                                 </div>
                                 <div className="flex justify-between">
-                                    <span className="text-green-400">📄 {categories.length} categories</span>
+                                    <span className="text-emerald-300">{topCategoryCounts.length} active categories</span>
                                 </div>
                                 <div className="flex justify-between">
-                                    <span className="text-purple-400">🔗 {showConnections ? 'Connected' : 'Isolated'}</span>
+                                    <span className="text-cyan-300">{showConnections ? 'Connections on' : 'Connections off'}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-amber-300">
+                                        {visualizationHealth.usesFallbackLayout ? 'Category fallback layout' : 'Semantic layout'}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-sky-300">
+                                        Embedding coverage {(visualizationHealth.embeddingCoverage * 100).toFixed(0)}%
+                                    </span>
                                 </div>
                             </div>
                         </div>
@@ -1093,15 +1276,26 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                         <div className="mb-4">
                             <div className="text-xs text-gray-400 mb-2">NODES</div>
                             <div className="text-xs space-y-1">
-                                {categories.slice(0, 4).map(category => (
-                                    <div key={category} className="flex items-center gap-2">
-                                        <div
-                                            className="w-2 h-2 rounded-full"
-                                            style={{ backgroundColor: getCategoryColor(category) }}
-                                        ></div>
-                                        <span className="capitalize">{category}</span>
+                                {topCategoryCounts.map(([category, count]) => (
+                                    <div key={category} className="flex items-center justify-between gap-2">
+                                        <div className="flex items-center gap-2">
+                                            <div
+                                                className="w-2 h-2 rounded-full"
+                                                style={{ backgroundColor: getCategoryColor(category) }}
+                                            ></div>
+                                            <span className="capitalize">{category}</span>
+                                        </div>
+                                        <span className="text-gray-400">{count}</span>
                                     </div>
                                 ))}
+                                {topCategoryCounts.length === 0 && (
+                                    <div className="text-gray-400">No categories in current filter</div>
+                                )}
+                                {topCategoryCounts.length > 0 && filteredPoints.length > 0 && (
+                                    <div className="pt-1 text-[11px] text-gray-400">
+                                        Top categories by visible nodes
+                                    </div>
+                                )}
                             </div>
                         </div>
 
@@ -1142,9 +1336,23 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                 )}
             </div>
 
+            {isMobileViewport && isControlPanelOpen && (
+                <button
+                    type="button"
+                    aria-label="Close controls panel"
+                    className="absolute inset-0 z-30 bg-black/40 lg:hidden"
+                    onClick={() => setIsControlPanelOpen(false)}
+                />
+            )}
+
             {/* Control Panel */}
-            <div className={`bg-background border-l border-border overflow-y-auto ${isFullscreen ? 'w-80' : 'w-96'}`}>
-                <div className="p-4 space-y-4">
+            <div
+                className={`bg-background border-l border-border overflow-y-auto transition-all duration-300 ${isMobileViewport
+                        ? `${isFullscreen ? 'w-80' : 'w-96'} max-w-[92vw] fixed right-0 top-0 z-40 h-full shadow-2xl`
+                        : `${isControlPanelOpen ? (isFullscreen ? 'w-80' : 'w-96') : 'w-0'} h-full`
+                    } ${isMobileViewport && !isControlPanelOpen ? 'pointer-events-none translate-x-full' : 'translate-x-0'} ${!isControlPanelOpen && !isMobileViewport ? 'border-l-0' : ''}`}
+            >
+                <div className={`p-4 space-y-4 ${!isControlPanelOpen && !isMobileViewport ? 'hidden' : ''}`}>
                     {/* Search and Filters */}
                     <Card className="p-4">
                         <h3 className="font-semibold mb-3">Filters & Search</h3>

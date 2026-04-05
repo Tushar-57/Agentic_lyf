@@ -99,35 +99,39 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
               className="space-y-6"
             >
               <div>
-                <h2 className="text-2xl font-bold mb-2">3D Embeddings Visualization</h2>
+                <h2 className="text-2xl font-bold mb-2">Knowledge Landscape</h2>
                 <p className="text-muted-foreground mb-6">
-                  Explore your knowledge base embeddings in an immersive 3D space. Each sphere represents a piece of knowledge, positioned based on semantic similarity with interactive connections.
+                  Explore your knowledge base in an interactive graph where each node is a memory and links indicate semantic closeness.
                 </p>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="space-y-4">
-                  <h3 className="text-lg font-semibold">Interactive Features</h3>
-                  <ul className="space-y-2 text-sm text-muted-foreground">
-                    <li>• Drag to rotate, scroll to zoom, right-click to pan</li>
-                    <li>• Hover over spheres to see detailed tooltips</li>
-                    <li>• Click spheres to see full details and connections</li>
-                    <li>• Similar entries are connected with lines</li>
-                    <li>• Adjustable node size, connections, and animations</li>
-                    <li>• Filter by category, type, or search terms</li>
-                  </ul>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="rounded-xl border border-border bg-card/60 p-4">
+                  <h3 className="text-sm font-semibold mb-1">Semantic Mode</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Uses backend embedding coordinates when they are available and distinct.
+                  </p>
                 </div>
-
-                <div className="space-y-4">
-                  <h3 className="text-lg font-semibold">Understanding the Visualization</h3>
-                  <ul className="space-y-2 text-sm text-muted-foreground">
-                    <li>• Closer points have more similar meanings</li>
-                    <li>• Clusters indicate related topics</li>
-                    <li>• Isolated points may be unique concepts</li>
-                    <li>• Position is determined by AI embeddings</li>
-                  </ul>
+                <div className="rounded-xl border border-border bg-card/60 p-4">
+                  <h3 className="text-sm font-semibold mb-1">Fallback Mode</h3>
+                  <p className="text-sm text-muted-foreground">
+                    If coordinates are not ready, nodes are shown in a stable category-based layout so the map stays usable.
+                  </p>
+                </div>
+                <div className="rounded-xl border border-border bg-card/60 p-4">
+                  <h3 className="text-sm font-semibold mb-1">Exploration Tools</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Search, filter, and compare connections in Graph and List modes with node detail drill-down.
+                  </p>
                 </div>
               </div>
+
+              <ul className="space-y-2 text-sm text-muted-foreground">
+                <li>• Drag to rotate, scroll to zoom, and right-click to pan</li>
+                <li>• Click any node to open details and related entries</li>
+                <li>• Switch between Graph and List view for different analysis styles</li>
+                <li>• Use category/type filters to isolate focused patterns</li>
+              </ul>
 
               <Button 
                 onClick={handleOpenEmbeddingsVisualization}
@@ -135,7 +139,7 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
                 size="lg"
               >
                 <Box className="w-5 h-5" />
-                Open 3D Visualization
+                Open Knowledge Landscape
               </Button>
             </motion.div>
           </TabsContent>
