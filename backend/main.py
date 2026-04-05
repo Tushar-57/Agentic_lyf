@@ -127,9 +127,8 @@ cors_allowed_origins, cors_allowed_origin_regex = build_cors_config(
 )
 
 logger.info(
-    "Configured CORS origins=%s origin_regex=%s",
-    cors_allowed_origins,
-    cors_allowed_origin_regex,
+    f"Configured CORS origins={cors_allowed_origins} "
+    f"origin_regex={cors_allowed_origin_regex}"
 )
 
 # Add CORS middleware
