@@ -7,7 +7,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from app.models.knowledge import (
     KnowledgeEntry,
     KnowledgeEntryType,
