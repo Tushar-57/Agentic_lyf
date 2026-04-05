@@ -46,7 +46,7 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
   }
 
   return (
-    <div className={cn("flex h-full min-h-0 flex-col rounded-[28px] border border-border/70 bg-white/70 p-3 shadow-[0_24px_70px_-52px_rgba(15,23,42,0.7)] backdrop-blur-xl dark:bg-slate-950/50 sm:p-4", className)}>
+    <div className={cn("flex h-full min-h-0 flex-col rounded-[28px] border border-border/70 bg-white/70 p-3 pt-4 shadow-[0_24px_70px_-52px_rgba(15,23,42,0.7)] backdrop-blur-xl dark:bg-slate-950/50 sm:p-4 sm:pt-5", className)}>
       <div className="mb-4 rounded-2xl border border-border/70 bg-gradient-to-r from-teal-50/80 via-cyan-50/70 to-amber-50/70 p-4 dark:from-teal-950/35 dark:via-slate-900/60 dark:to-amber-950/30">
         <div className="section-kicker mb-2">Knowledge Center</div>
         <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100 sm:text-2xl">Memory, Signals, and Semantic Maps</h2>

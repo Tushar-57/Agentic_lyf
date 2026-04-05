@@ -559,7 +559,7 @@ function App() {
 
   return (
     <div className={cn(
-      "relative flex h-[100dvh] min-h-screen overflow-hidden bg-background text-foreground transition-colors duration-300",
+      "relative flex min-h-[100svh] overflow-x-hidden bg-background text-foreground transition-colors duration-300",
       isDarkMode && "dark"
     )}>
       <div className="pointer-events-none absolute inset-0">
@@ -746,13 +746,13 @@ function App() {
         )}
         
         {currentView === 'knowledge' && (
-          <div className="flex min-h-0 flex-1 px-3 pb-4 pt-3 sm:px-4 sm:pb-5">
+          <div className="flex min-h-0 flex-1 px-3 pb-4 pt-4 sm:px-4 sm:pb-5 sm:pt-5">
             <KnowledgeManagement className="mx-auto h-full w-full max-w-[1600px]" />
           </div>
         )}
         
         {currentView === 'onboarding' && (
-          <div className="flex min-h-0 flex-1 px-3 pb-4 pt-3 sm:px-4 sm:pb-5">
+          <div className="flex min-h-0 flex-1 px-3 pb-4 pt-4 sm:px-4 sm:pb-5 sm:pt-5">
             <div className="panel-surface mx-auto h-full w-full max-w-[1600px] overflow-hidden">
               <ChatOnboarding 
                 onComplete={(data) => {
@@ -765,7 +765,7 @@ function App() {
         )}
         
         {currentView === 'analytics' && (
-          <div className="flex min-h-0 flex-1 items-center justify-center px-3 pb-4 pt-3 sm:px-4 sm:pb-5">
+          <div className="flex min-h-0 flex-1 items-center justify-center px-3 pb-4 pt-4 sm:px-4 sm:pb-5 sm:pt-5">
             <div className="panel-surface w-full max-w-2xl px-8 py-10 text-center">
               <div className="section-kicker mx-auto mb-3">Insight Studio</div>
               <h2 className="mb-2 text-2xl font-bold">Analytics</h2>
@@ -775,7 +775,7 @@ function App() {
         )}
         
         {currentView === 'activity' && (
-          <div className="flex min-h-0 flex-1 items-center justify-center px-3 pb-4 pt-3 sm:px-4 sm:pb-5">
+          <div className="flex min-h-0 flex-1 items-center justify-center px-3 pb-4 pt-4 sm:px-4 sm:pb-5 sm:pt-5">
             <div className="panel-surface w-full max-w-2xl px-8 py-10 text-center">
               <div className="section-kicker mx-auto mb-3">Live Feed</div>
               <h2 className="mb-2 text-2xl font-bold">Activity</h2>
@@ -785,7 +785,7 @@ function App() {
         )}
         
         {currentView === 'profile' && (
-          <div className="flex min-h-0 flex-1 px-3 pb-4 pt-3 sm:px-4 sm:pb-5">
+          <div className="flex min-h-0 flex-1 px-3 pb-4 pt-4 sm:px-4 sm:pb-5 sm:pt-5">
             <div className="panel-surface mx-auto h-full w-full max-w-[1600px] overflow-auto">
               <ProfileWorkspace
                 onStartOnboarding={() => setCurrentView('onboarding')}
