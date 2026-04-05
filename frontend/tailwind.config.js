@@ -72,8 +72,8 @@ export default {
           "100%": { transform: "translateX(0)" },
         },
         "pulse-glow": {
-          "0%, 100%": { boxShadow: "0 0 5px rgba(59, 130, 246, 0.5)" },
-          "50%": { boxShadow: "0 0 20px rgba(59, 130, 246, 0.8)" },
+          "0%, 100%": { boxShadow: "0 0 5px rgba(20, 184, 166, 0.45)" },
+          "50%": { boxShadow: "0 0 20px rgba(20, 184, 166, 0.8)" },
         },
         "typing": {
           "0%": { width: "0" },
@@ -98,13 +98,13 @@ export default {
         "shimmer": "shimmer 2s linear infinite",
       },
       fontFamily: {
-        sans: ["Inter", "system-ui", "sans-serif"],
-        mono: ["JetBrains Mono", "Fira Code", "monospace"],
+        sans: ["Space Grotesk", "Manrope", "system-ui", "sans-serif"],
+        mono: ["IBM Plex Mono", "JetBrains Mono", "monospace"],
       },
       backgroundImage: {
         "gradient-radial": "radial-gradient(var(--tw-gradient-stops))",
         "gradient-conic": "conic-gradient(from 180deg at 50% 50%, var(--tw-gradient-stops))",
-        "mesh-gradient": "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+        "mesh-gradient": "linear-gradient(135deg, #0891b2 0%, #14b8a6 48%, #f59e0b 100%)",
       },
     },
   },

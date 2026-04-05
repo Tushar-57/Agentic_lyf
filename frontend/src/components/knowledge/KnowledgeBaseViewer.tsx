@@ -157,13 +157,13 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
 
   const getEntryColor = (type: string) => {
     switch (type) {
-      case 'preference': return 'from-blue-500 to-blue-600'
-      case 'user_preference': return 'from-blue-500 to-blue-600'
-      case 'interaction': return 'from-green-500 to-green-600'
-      case 'pattern': return 'from-purple-500 to-purple-600'
-      case 'insight': return 'from-orange-500 to-orange-600'
-      case 'memory': return 'from-cyan-500 to-cyan-600'
-      default: return 'from-gray-500 to-gray-600'
+      case 'preference': return 'from-teal-600 to-cyan-500'
+      case 'user_preference': return 'from-teal-600 to-cyan-500'
+      case 'interaction': return 'from-emerald-500 to-green-500'
+      case 'pattern': return 'from-sky-500 to-blue-500'
+      case 'insight': return 'from-amber-500 to-orange-500'
+      case 'memory': return 'from-slate-600 to-slate-500'
+      default: return 'from-slate-500 to-slate-400'
     }
   }
 
@@ -181,7 +181,7 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
   return (
     <div className={cn("space-y-6", className)}>
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col justify-between gap-4 rounded-2xl border border-border/70 bg-card/70 p-5 sm:flex-row sm:items-center">
         <div className="flex-1 min-w-0">
           <h2 className="text-2xl font-bold">Knowledge Base</h2>
           <p className="text-muted-foreground">
@@ -215,9 +215,9 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
       {/* Stats Overview */}
       {stats && (
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <Card className="p-4">
+          <Card className="border-border/70 bg-white/75 p-4 shadow-sm dark:bg-slate-900/60">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-500 flex items-center justify-center">
                 <Database className="w-5 h-5 text-white" />
               </div>
               <div>
@@ -227,9 +227,9 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
             </div>
           </Card>
           
-          <Card className="p-4">
+          <Card className="border-border/70 bg-white/75 p-4 shadow-sm dark:bg-slate-900/60">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-green-500 to-green-600 flex items-center justify-center">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-green-500 flex items-center justify-center">
                 <User className="w-5 h-5 text-white" />
               </div>
               <div>
@@ -240,9 +240,9 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
           </Card>
 
           
-          <Card className="p-4">
+          <Card className="border-border/70 bg-white/75 p-4 shadow-sm dark:bg-slate-900/60">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-500 to-purple-600 flex items-center justify-center">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-sky-500 to-blue-500 flex items-center justify-center">
                 <TrendingUp className="w-5 h-5 text-white" />
               </div>
               <div>
@@ -252,9 +252,9 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
             </div>
           </Card>
           
-          <Card className="p-4">
+          <Card className="border-border/70 bg-white/75 p-4 shadow-sm dark:bg-slate-900/60">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-orange-500 to-orange-600 flex items-center justify-center">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center">
                 <Calendar className="w-5 h-5 text-white" />
               </div>
               <div>
@@ -269,7 +269,7 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
       )}
 
       {/* Search and Filters */}
-      <Card className="p-4">
+      <Card className="border-border/70 bg-white/75 p-4 shadow-sm dark:bg-slate-900/60">
         <div className="flex flex-col sm:flex-row gap-4">
           <div className="flex-1 relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -285,7 +285,7 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
             <select
               value={selectedCategory}
               onChange={(e) => setSelectedCategory(e.target.value)}
-              className="px-3 py-2 border border-border rounded-md bg-background text-sm"
+              className="rounded-xl border border-border/70 bg-white/75 px-3 py-2 text-sm shadow-sm dark:bg-slate-900/60"
             >
               {categories.map(category => (
                 <option key={category} value={category}>
@@ -297,7 +297,7 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
             <select
               value={selectedType}
               onChange={(e) => setSelectedType(e.target.value)}
-              className="px-3 py-2 border border-border rounded-md bg-background text-sm"
+              className="rounded-xl border border-border/70 bg-white/75 px-3 py-2 text-sm shadow-sm dark:bg-slate-900/60"
             >
               {types.map(type => (
                 <option key={type} value={type}>
@@ -324,10 +324,10 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
                 exit={{ opacity: 0, y: -20 }}
                 transition={{ delay: index * 0.1 }}
               >
-                <Card className="p-4 hover:shadow-md transition-shadow">
+                <Card className="border-border/70 bg-white/75 p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md dark:bg-slate-900/60">
                   <div className="flex items-start gap-4">
                     <div className={cn(
-                      "w-10 h-10 rounded-lg flex items-center justify-center bg-gradient-to-br",
+                      "w-10 h-10 rounded-xl flex items-center justify-center bg-gradient-to-br",
                       colorClass
                     )}>
                       <Icon className="w-5 h-5 text-white" />
@@ -409,7 +409,7 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
         </AnimatePresence>
         
         {filteredEntries.length === 0 && (
-          <Card className="p-8 text-center">
+          <Card className="border-border/70 bg-white/75 p-8 text-center shadow-sm dark:bg-slate-900/60">
             <Database className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
             <h3 className="text-lg font-semibold mb-2">No entries found</h3>
             <p className="text-muted-foreground">

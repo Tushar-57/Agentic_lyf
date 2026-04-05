@@ -559,9 +559,15 @@ function App() {
 
   return (
     <div className={cn(
-      "flex min-h-screen bg-background text-foreground transition-colors duration-300",
+      "relative flex min-h-screen overflow-hidden bg-background text-foreground transition-colors duration-300",
       isDarkMode && "dark"
     )}>
+      <div className="pointer-events-none absolute inset-0">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_12%,rgba(45,212,191,0.18),transparent_32%),radial-gradient(circle_at_82%_10%,rgba(245,158,11,0.18),transparent_34%)]" />
+        <div className="absolute -top-20 left-[-88px] h-64 w-64 rounded-full bg-cyan-300/35 blur-3xl dark:bg-cyan-500/20" />
+        <div className="absolute bottom-[-120px] right-[-64px] h-72 w-72 rounded-full bg-amber-300/30 blur-3xl dark:bg-amber-500/20" />
+      </div>
+
       {isMobile && mobileSidebarOpen && (
         <div
           className="fixed inset-0 z-40 bg-black/50"
@@ -572,19 +578,21 @@ function App() {
 
       {/* Sidebar */}
       {!isEmbedMode && (
-        <Sidebar
-          collapsed={sidebarCollapsed}
-          onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
-          currentAgent={currentAgent}
-          onAgentChange={handleAgentChange}
-          currentView={currentView}
-          onViewChange={setCurrentView}
-          isDarkMode={isDarkMode}
-          onToggleTheme={toggleTheme}
-          isMobile={isMobile}
-          mobileOpen={mobileSidebarOpen}
-          onMobileClose={() => setMobileSidebarOpen(false)}
-        />
+        <div className="relative z-20">
+          <Sidebar
+            collapsed={sidebarCollapsed}
+            onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+            currentAgent={currentAgent}
+            onAgentChange={handleAgentChange}
+            currentView={currentView}
+            onViewChange={setCurrentView}
+            isDarkMode={isDarkMode}
+            onToggleTheme={toggleTheme}
+            isMobile={isMobile}
+            mobileOpen={mobileSidebarOpen}
+            onMobileClose={() => setMobileSidebarOpen(false)}
+          />
+        </div>
       )}
 
       {/* Main Content */}
@@ -596,37 +604,48 @@ function App() {
         }}
         transition={{ duration: 0.3, ease: "easeInOut" }}
         className={cn(
-          "flex-1 flex flex-col min-w-0",
+          "relative z-10 flex min-w-0 flex-1 flex-col",
           isMobile && !isEmbedMode && "pb-16"
         )}
       >
         {isMobile && !isEmbedMode && (
-          <div className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border bg-card/95 px-4 backdrop-blur-lg lg:hidden">
+          <div className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border/70 bg-white/80 px-4 backdrop-blur-xl dark:bg-slate-950/75 lg:hidden">
             <Button
               variant="ghost"
               size="icon"
               onClick={() => setMobileSidebarOpen(true)}
               aria-label="Open navigation menu"
+              className="h-10 w-10 rounded-xl border border-border/70 bg-white/80 shadow-sm dark:bg-slate-900/70"
             >
               <Menu className="h-5 w-5" />
             </Button>
-            <div className="text-sm font-semibold">
-              {integrationContext.isAlterEgo ? 'AlterEgo Coach' : 'AI Ecosystem'}
+            <div className="text-center">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                Command Desk
+              </div>
+              <div className="text-sm font-semibold">
+                {integrationContext.isAlterEgo ? 'AlterEgo Coach' : 'Agentic Workspace'}
+              </div>
             </div>
             <div className="w-9" aria-hidden="true" />
           </div>
         )}
 
         {integrationContext.isAlterEgo && (
-          <div className="border-b border-border/70 bg-blue-50/80 px-3 py-2 dark:bg-blue-950/30 sm:px-4">
+          <div className="border-b border-border/70 bg-gradient-to-r from-teal-50/90 via-cyan-50/80 to-amber-50/85 px-3 py-2 dark:from-slate-900/90 dark:via-teal-950/40 dark:to-amber-950/35 sm:px-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">
+                <p className="text-xs font-semibold uppercase tracking-wide text-teal-700 dark:text-teal-200">
                   Connected Workspace
                 </p>
-                <p className="text-sm text-blue-900 dark:text-blue-100">AlterEgo Coach Bridge Active</p>
+                <p className="text-sm text-slate-800 dark:text-slate-100">AlterEgo Coach Bridge Active</p>
               </div>
-              <Button variant="outline" size="sm" className="gap-2" onClick={handleReturnToAlterEgo}>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2 border-teal-300 bg-white/80 text-teal-800 hover:bg-teal-100 dark:border-teal-800 dark:bg-slate-900/60 dark:text-teal-200"
+                onClick={handleReturnToAlterEgo}
+              >
                 <ArrowLeft className="h-4 w-4" />
                 Back to AlterEgo
               </Button>
@@ -636,7 +655,7 @@ function App() {
 
         {/* Main Content */}
         {currentView === 'chat' && (
-          <div className="flex-1 flex relative">
+          <div className="relative flex flex-1 px-2 pb-2 pt-2 sm:px-4 sm:pb-4">
             {/* Chat Interface */}
             <div className={cn(
               "flex-1 transition-all duration-300",
@@ -648,7 +667,7 @@ function App() {
                 isLoading={isLoading}
                 currentAgent={currentAgent}
                 currentProvider={currentProvider}
-                className="h-full"
+                className="h-full rounded-[28px] border border-border/70 bg-card/80 shadow-[0_24px_70px_-50px_rgba(15,23,42,0.7)] backdrop-blur-xl"
               />
             </div>
             
@@ -659,7 +678,7 @@ function App() {
                 className={cn(
                   "fixed right-4 h-11 w-11 p-0 rounded-full shadow-lg z-30 transition-all sm:right-6 sm:h-12 sm:w-12",
                   isMobile && !isEmbedMode ? "bottom-20" : "bottom-4 sm:bottom-20",
-                  "bg-blue-600 hover:bg-blue-700 text-white",
+                  "bg-gradient-to-r from-teal-700 to-cyan-600 text-white hover:from-teal-800 hover:to-cyan-700",
                   showDeepAgentPanel && !isMobile ? "right-[25rem]" : "right-4 sm:right-6"
                 )}
                 title="Toggle Deep Agent Panel"
@@ -684,12 +703,12 @@ function App() {
                 exit={isMobile ? { y: 80, opacity: 0 } : { x: 384, opacity: 0 }}
                 transition={{ duration: 0.3, ease: "easeInOut" }}
                 className={cn(
-                  "bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60",
+                  "bg-background/95 backdrop-blur-xl supports-[backdrop-filter]:bg-background/70",
                   isMobile
                     ? isEmbedMode
                       ? "fixed inset-0 z-40 w-full border-t"
                       : "fixed inset-x-0 bottom-16 top-14 z-40 w-full border-t"
-                    : "w-96 border-l"
+                    : "w-96 rounded-l-3xl border-l border-border/70"
                 )}
               >
                 <div className="p-4 border-b flex items-center justify-between">
@@ -718,46 +737,58 @@ function App() {
         )}
         
         {currentView === 'knowledge' && (
-          <KnowledgeManagement className="flex-1" />
+          <div className="flex-1 px-3 pb-4 pt-3 sm:px-4 sm:pb-5">
+            <KnowledgeManagement className="h-full" />
+          </div>
         )}
         
         {currentView === 'onboarding' && (
-          <ChatOnboarding 
-            onComplete={(data) => {
-              console.log('Onboarding completed:', data);
-              setCurrentView('chat');
-            }}
-          />
+          <div className="flex-1 px-3 pb-4 pt-3 sm:px-4 sm:pb-5">
+            <div className="panel-surface h-full overflow-hidden">
+              <ChatOnboarding 
+                onComplete={(data) => {
+                  console.log('Onboarding completed:', data);
+                  setCurrentView('chat');
+                }}
+              />
+            </div>
+          </div>
         )}
         
         {currentView === 'analytics' && (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="text-center">
-              <h2 className="text-2xl font-bold mb-2">Analytics</h2>
+          <div className="flex flex-1 items-center justify-center px-3 pb-4 pt-3 sm:px-4 sm:pb-5">
+            <div className="panel-surface w-full max-w-2xl px-8 py-10 text-center">
+              <div className="section-kicker mx-auto mb-3">Insight Studio</div>
+              <h2 className="mb-2 text-2xl font-bold">Analytics</h2>
               <p className="text-muted-foreground">Analytics dashboard is being prepared. Please check back shortly.</p>
             </div>
           </div>
         )}
         
         {currentView === 'activity' && (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="text-center">
-              <h2 className="text-2xl font-bold mb-2">Activity</h2>
+          <div className="flex flex-1 items-center justify-center px-3 pb-4 pt-3 sm:px-4 sm:pb-5">
+            <div className="panel-surface w-full max-w-2xl px-8 py-10 text-center">
+              <div className="section-kicker mx-auto mb-3">Live Feed</div>
+              <h2 className="mb-2 text-2xl font-bold">Activity</h2>
               <p className="text-muted-foreground">Your recent activity feed will appear here soon.</p>
             </div>
           </div>
         )}
         
         {currentView === 'profile' && (
-          <ProfileWorkspace
-            onStartOnboarding={() => setCurrentView('onboarding')}
-            onContinueToChat={() => setCurrentView('chat')}
-          />
+          <div className="flex-1 px-3 pb-4 pt-3 sm:px-4 sm:pb-5">
+            <div className="panel-surface h-full overflow-auto">
+              <ProfileWorkspace
+                onStartOnboarding={() => setCurrentView('onboarding')}
+                onContinueToChat={() => setCurrentView('chat')}
+              />
+            </div>
+          </div>
         )}
       </motion.div>
 
       {isMobile && !isEmbedMode && (
-        <nav className="fixed bottom-0 left-0 right-0 z-30 grid grid-cols-5 border-t border-border bg-card/95 px-1 py-1 backdrop-blur lg:hidden">
+        <nav className="fixed bottom-0 left-0 right-0 z-30 grid grid-cols-5 border-t border-border/70 bg-white/90 px-1 py-1 backdrop-blur-xl dark:bg-slate-950/85 lg:hidden">
           {mobileViews.map((view) => {
             const isActive = currentView === view.id
             return (
@@ -766,8 +797,10 @@ function App() {
                 type="button"
                 onClick={() => setCurrentView(view.id)}
                 className={cn(
-                  "flex flex-col items-center justify-center rounded-md py-2 text-[11px] font-medium transition",
-                  isActive ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-accent"
+                  "flex flex-col items-center justify-center rounded-xl py-2 text-[11px] font-semibold transition",
+                  isActive
+                    ? "bg-gradient-to-r from-teal-700 via-cyan-600 to-amber-500 text-white shadow-md"
+                    : "text-muted-foreground hover:bg-accent"
                 )}
               >
                 <view.icon className="mb-1 h-4 w-4" />

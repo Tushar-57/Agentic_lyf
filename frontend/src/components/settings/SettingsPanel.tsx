@@ -294,12 +294,12 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
             animate={{ x: 0 }}
             exit={{ x: '100%' }}
             transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-            className="fixed right-0 top-0 z-50 h-full w-full max-w-md overflow-y-auto border-l border-border bg-background shadow-2xl"
+            className="fixed right-0 top-0 z-50 h-full w-full max-w-md overflow-y-auto border-l border-border/70 bg-background/95 shadow-2xl backdrop-blur-xl"
           >
             {/* Header */}
-            <div className="flex items-center justify-between border-b border-border p-4 sm:p-6">
+            <div className="flex items-center justify-between border-b border-border/70 p-4 sm:p-6">
               <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-teal-700 via-cyan-600 to-amber-500 flex items-center justify-center shadow-md shadow-cyan-500/30">
                   <Settings className="w-4 h-4 text-white" />
                 </div>
                 <div>
@@ -330,8 +330,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   <div className={cn(
                     "p-4 rounded-lg border-2 transition-all cursor-pointer",
                     currentProvider === 'openai' 
-                      ? "border-primary bg-primary/5" 
-                      : "border-border hover:border-primary/50"
+                      ? "border-primary bg-primary/10" 
+                      : "border-border/70 hover:border-primary/50"
                   )}
                   onClick={() => handleProviderSwitch('openai')}
                   >
@@ -421,14 +421,14 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   <div className={cn(
                     "p-4 rounded-lg border-2 transition-all cursor-pointer",
                     currentProvider === 'ollama' 
-                      ? "border-primary bg-primary/5" 
-                      : "border-border hover:border-primary/50"
+                      ? "border-primary bg-primary/10" 
+                      : "border-border/70 hover:border-primary/50"
                   )}
                   onClick={() => handleProviderSwitch('ollama')}
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center">
+                        <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-sky-500 to-blue-500 flex items-center justify-center">
                           <Brain className="w-5 h-5 text-white" />
                         </div>
                         <div>

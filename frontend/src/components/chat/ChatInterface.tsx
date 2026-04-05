@@ -73,11 +73,11 @@ const AgentThinkingDisplay = ({ thinking }: { thinking: AgentThinking }) => {
     <motion.div
       initial={{ opacity: 0, height: 0 }}
       animate={{ opacity: 1, height: "auto" }}
-      className="mt-2 border rounded-lg bg-slate-50 dark:bg-slate-900/50 overflow-hidden"
+      className="mt-2 overflow-hidden rounded-xl border border-border/70 bg-cyan-50/70 dark:bg-slate-900/70"
     >
       <button
         onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full px-3 py-2 text-left text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-between"
+        className="flex w-full items-center justify-between px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-cyan-100/70 dark:text-slate-200 dark:hover:bg-slate-800"
       >
         <span className="flex items-center gap-2">
           <Brain className="w-4 h-4" />
@@ -102,22 +102,22 @@ const AgentThinkingDisplay = ({ thinking }: { thinking: AgentThinking }) => {
             className="px-3 pb-3"
           >
             {thinking.classification && (
-              <div className="mb-3 p-2 bg-blue-50 dark:bg-blue-900/20 rounded border-l-4 border-blue-400">
-                <div className="font-medium text-sm text-blue-800 dark:text-blue-200">Intent Classification</div>
-                <div className="text-xs text-blue-600 dark:text-blue-300 mt-1">
+              <div className="mb-3 rounded border-l-4 border-teal-500 bg-teal-50/80 p-2 dark:bg-teal-950/30">
+                <div className="text-sm font-medium text-teal-900 dark:text-teal-200">Intent Classification</div>
+                <div className="mt-1 text-xs text-teal-700 dark:text-teal-300">
                   Routed to: <span className="font-medium capitalize">{thinking.classification.agent_type}</span>
                   <span className="ml-2 opacity-75">({Math.round(thinking.classification.confidence * 100)}% confidence)</span>
                 </div>
-                <div className="text-xs text-blue-500 dark:text-blue-400 mt-1">{thinking.classification.reason}</div>
+                <div className="mt-1 text-xs text-teal-600 dark:text-teal-400">{thinking.classification.reason}</div>
               </div>
             )}
 
             {thinking.knowledge_sources && thinking.knowledge_sources.length > 0 && (
-              <div className="mb-3 p-2 bg-purple-50 dark:bg-purple-900/20 rounded border-l-4 border-purple-400">
+              <div className="mb-3 rounded border-l-4 border-amber-500 bg-amber-50/80 p-2 dark:bg-amber-950/25">
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
-                    <Database className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-                    <div className="font-medium text-sm text-purple-800 dark:text-purple-200">
+                    <Database className="h-4 w-4 text-amber-700 dark:text-amber-300" />
+                    <div className="font-medium text-sm text-amber-900 dark:text-amber-200">
                       Knowledge Sources ({thinking.knowledge_sources.length})
                     </div>
                   </div>
@@ -125,7 +125,7 @@ const AgentThinkingDisplay = ({ thinking }: { thinking: AgentThinking }) => {
                     variant="ghost"
                     size="sm"
                     onClick={() => setShowSources(!showSources)}
-                    className="h-6 w-6 p-0 text-purple-600 dark:text-purple-400"
+                    className="h-6 w-6 p-0 text-amber-700 dark:text-amber-300"
                   >
                     {showSources ? (
                       <ChevronUp className="h-3 w-3" />
@@ -152,7 +152,7 @@ const AgentThinkingDisplay = ({ thinking }: { thinking: AgentThinking }) => {
                             {source.type}
                           </Badge>
                           {source.similarity && (
-                            <span className="text-purple-600 dark:text-purple-400">
+                            <span className="text-amber-700 dark:text-amber-300">
                               {Math.round(source.similarity * 100)}% match
                             </span>
                           )}
@@ -173,12 +173,12 @@ const AgentThinkingDisplay = ({ thinking }: { thinking: AgentThinking }) => {
             )}
 
             {thinking.handoff && (
-              <div className="mb-3 p-2 bg-purple-50 dark:bg-purple-900/20 rounded border-l-4 border-purple-400">
-                <div className="font-medium text-sm text-purple-800 dark:text-purple-200">Agent Handoff</div>
-                <div className="text-xs text-purple-600 dark:text-purple-300 mt-1">
+              <div className="mb-3 rounded border-l-4 border-cyan-500 bg-cyan-50/80 p-2 dark:bg-cyan-950/25">
+                <div className="text-sm font-medium text-cyan-900 dark:text-cyan-200">Agent Handoff</div>
+                <div className="mt-1 text-xs text-cyan-700 dark:text-cyan-300">
                   {thinking.handoff.from} → {thinking.handoff.to}
                 </div>
-                <div className="text-xs text-purple-500 dark:text-purple-400 mt-1">{thinking.handoff.reason}</div>
+                <div className="mt-1 text-xs text-cyan-600 dark:text-cyan-400">{thinking.handoff.reason}</div>
               </div>
             )}
 
@@ -308,7 +308,7 @@ const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLas
       exit={{ opacity: 0, y: -20, scale: 0.95 }}
       transition={{ duration: 0.3, ease: "easeOut" }}
       className={cn(
-        "flex gap-3 p-4 group",
+        "group flex gap-3 px-3 py-4 sm:px-4",
         isUser ? "flex-row-reverse" : "flex-row"
       )}
     >
@@ -319,7 +319,7 @@ const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLas
           ? "bg-primary text-primary-foreground" 
           : coachAvatar 
             ? "bg-transparent" 
-            : "bg-gradient-to-br from-blue-500 to-purple-600 text-white"
+            : "bg-gradient-to-br from-teal-700 via-cyan-600 to-amber-500 text-white"
       )}>
         {isUser ? (
           <User className="w-4 h-4" />
@@ -372,8 +372,8 @@ const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLas
         <Card className={cn(
           "p-3 shadow-md transition-all duration-200",
           isUser 
-            ? "bg-primary text-primary-foreground ml-auto" 
-            : "bg-card hover:shadow-lg",
+            ? "ml-auto border-primary/30 bg-gradient-to-r from-teal-700 to-cyan-600 text-white" 
+            : "border-border/70 bg-card/85 hover:shadow-lg",
           message.isStreaming && "animate-pulse"
         )}>
           <div className="prose prose-sm max-w-none dark:prose-invert">
@@ -469,6 +469,21 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [userAvatar, setUserAvatar] = useState<string>('')
   const [communicationStyle, setCommunicationStyle] = useState<string>('Direct')
 
+  const starterCapabilities = [
+    {
+      title: 'Strategic Routing',
+      description: 'Routes each request to the best specialist agent automatically.',
+    },
+    {
+      title: 'Live Memory Context',
+      description: 'Uses your onboarding and preference memory for grounded guidance.',
+    },
+    {
+      title: 'Action-Ready Plans',
+      description: 'Turns broad goals into next-step execution plans quickly.',
+    },
+  ]
+
   // Load user profile on mount
   useEffect(() => {
     const loadProfile = async () => {
@@ -512,13 +527,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   }
 
   return (
-    <div className={cn("flex flex-col h-full bg-background", className)}>
+    <div className={cn("flex h-full flex-col overflow-hidden bg-background/40", className)}>
       {/* Header */}
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b bg-card/50 p-3 backdrop-blur-sm sm:items-center sm:p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border/70 bg-white/60 p-3 backdrop-blur-xl dark:bg-slate-950/50 sm:items-center sm:p-4">
         <div className="flex items-center gap-3">
           <div className={cn(
-            "w-10 h-10 rounded-full flex items-center justify-center overflow-hidden",
-            userAvatar ? "bg-transparent" : "bg-gradient-to-br from-blue-500 to-purple-600"
+            "h-10 w-10 overflow-hidden rounded-2xl border border-border/70 flex items-center justify-center",
+            userAvatar ? "bg-transparent" : "bg-gradient-to-br from-teal-700 via-cyan-600 to-amber-500"
           )}>
             {userAvatar ? (
               <img src={userAvatar} alt="Coach" className="w-full h-full object-cover" />
@@ -527,23 +542,23 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             )}
           </div>
           <div>
-            <h2 className="font-semibold text-sm sm:text-base">AI Agent Ecosystem</h2>
-            <p className="text-xs sm:text-sm text-muted-foreground capitalize">
-              {currentAgent} Agent Active
+            <h2 className="text-sm font-semibold sm:text-base">Agentic Conversation Desk</h2>
+            <p className="text-xs capitalize text-muted-foreground sm:text-sm">
+              {currentAgent} agent active
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2 sm:gap-3">
           {/* Communication Style Indicator */}
           {communicationStyle && communicationStyle !== 'Direct' && (
-            <div className="flex items-center gap-2 px-2 py-1 rounded-full bg-purple-100 dark:bg-purple-900/30">
-              <span className="text-xs text-purple-700 dark:text-purple-300 font-medium">
+            <div className="flex items-center gap-2 rounded-full bg-amber-100/80 px-2 py-1 dark:bg-amber-900/25">
+              <span className="text-xs font-semibold text-amber-800 dark:text-amber-300">
                 {communicationStyle} Style
               </span>
             </div>
           )}
           {/* Provider Indicator */}
-          <div className="flex items-center gap-2 px-2 py-1 rounded-full bg-muted/50">
+          <div className="flex items-center gap-2 rounded-full border border-border/70 bg-white/70 px-2 py-1 dark:bg-slate-900/60">
             <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
             <span className="text-xs text-muted-foreground font-medium capitalize">
               {currentProvider}
@@ -557,21 +572,32 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar">
+      <div className="custom-scrollbar flex-1 overflow-y-auto">
         <AnimatePresence mode="popLayout">
           {messages.length === 0 ? (
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className="flex flex-col items-center justify-center h-full p-8 text-center"
+              className="flex h-full flex-col items-center justify-center p-8 text-center"
             >
-              <div className="w-16 h-16 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center mb-4 floating-animation">
+              <div className="floating-animation mb-4 flex h-16 w-16 items-center justify-center rounded-3xl bg-gradient-to-br from-teal-700 via-cyan-600 to-amber-500 shadow-lg shadow-cyan-500/30">
                 <Sparkles className="w-8 h-8 text-white" />
               </div>
-              <h3 className="text-lg font-semibold mb-2">Welcome to AI Agent Ecosystem</h3>
-              <p className="text-muted-foreground max-w-md">
-                Start a conversation with your AI agents. They can help with productivity, health, finance, and more!
+              <h3 className="mb-2 text-xl font-semibold">Start A Meaningful Session</h3>
+              <p className="max-w-md text-muted-foreground">
+                Ask anything, and Agentic will route context to the right specialist so responses stay actionable and personal.
               </p>
+              <div className="mt-6 grid w-full max-w-3xl gap-3 sm:grid-cols-3">
+                {starterCapabilities.map((item) => (
+                  <div
+                    key={item.title}
+                    className="rounded-2xl border border-border/70 bg-white/70 p-3 text-left shadow-sm backdrop-blur-lg dark:bg-slate-900/65"
+                  >
+                    <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{item.title}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">{item.description}</p>
+                  </div>
+                ))}
+              </div>
             </motion.div>
           ) : (
             messages.map((message, index) => (
@@ -590,7 +616,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       </div>
 
       {/* Input */}
-      <div className="p-4 border-t bg-card/50 backdrop-blur-sm">
+      <div className="border-t border-border/70 bg-white/65 p-4 backdrop-blur-xl dark:bg-slate-950/60">
         <div className="flex gap-2 items-end">
           <div className="flex-1">
             <Input
@@ -601,7 +627,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               onCompositionStart={() => setIsComposing(true)}
               onCompositionEnd={() => setIsComposing(false)}
               placeholder="Type your message..."
-              className="resize-none min-h-[44px] pr-12"
+              className="min-h-[46px] resize-none rounded-xl border-border/70 bg-white/80 pr-12 shadow-sm dark:bg-slate-900/70"
               disabled={isLoading}
             />
           </div>
@@ -609,7 +635,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             onClick={handleSend}
             disabled={!inputValue.trim() || isLoading}
             size="icon"
-            className="h-11 w-11 shrink-0"
+            className="h-11 w-11 shrink-0 rounded-xl"
             variant="gradient"
           >
             <Send className="w-4 h-4" />
@@ -617,7 +643,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         </div>
         
         {/* Quick Actions */}
-        <div className="flex gap-2 mt-2 overflow-x-auto pb-1">
+        <div className="mt-3 flex gap-2 overflow-x-auto pb-1">
           {(() => {
             const getQuickActions = (agent: string) => {
               switch (agent) {
@@ -671,7 +697,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 key={index}
                 variant="outline"
                 size="sm"
-                className="whitespace-nowrap text-xs hover:bg-primary/10 transition-colors"
+                className="whitespace-nowrap rounded-full border-border/70 bg-white/75 text-xs font-medium shadow-sm transition-colors hover:border-teal-500/40 hover:bg-teal-50 dark:bg-slate-900/70 dark:hover:bg-teal-950/30"
                 onClick={() => {
                   setInputValue(suggestion.replace(/^[^\s]+ /, '')) // Remove emoji prefix
                   // Auto-send the message

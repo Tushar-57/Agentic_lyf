@@ -45,7 +45,7 @@ const agents = [
     name: 'Orchestrator',
     icon: Brain,
     description: 'Main coordination agent',
-    color: 'from-blue-500 to-purple-600',
+    color: 'from-teal-600 to-cyan-500',
     status: 'active'
   },
   {
@@ -53,7 +53,7 @@ const agents = [
     name: 'Productivity',
     icon: Zap,
     description: 'Task and goal management',
-    color: 'from-yellow-500 to-orange-600',
+    color: 'from-amber-500 to-orange-500',
     status: 'active'
   },
   {
@@ -61,7 +61,7 @@ const agents = [
     name: 'Health',
     icon: Heart,
     description: 'Wellness and habits',
-    color: 'from-green-500 to-emerald-600',
+    color: 'from-rose-500 to-red-500',
     status: 'active'
   },
   {
@@ -69,7 +69,7 @@ const agents = [
     name: 'Finance',
     icon: DollarSign,
     description: 'Budget and expenses',
-    color: 'from-emerald-500 to-teal-600',
+    color: 'from-emerald-500 to-green-500',
     status: 'active'
   },
   {
@@ -77,7 +77,7 @@ const agents = [
     name: 'Scheduling',
     icon: Calendar,
     description: 'Calendar management',
-    color: 'from-purple-500 to-pink-600',
+    color: 'from-sky-500 to-blue-500',
     status: 'active'
   },
   {
@@ -85,7 +85,7 @@ const agents = [
     name: 'Journal',
     icon: BookOpen,
     description: 'Reflection and insights',
-    color: 'from-indigo-500 to-blue-600',
+    color: 'from-slate-600 to-slate-500',
     status: 'active'
   }
 ]
@@ -152,13 +152,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
       animate={isMobile ? { x: mobileOpen ? 0 : -300, width: 280 } : { width: isCollapsed ? 80 : 280 }}
       transition={{ duration: 0.3, ease: "easeInOut" }}
       className={cn(
-        "h-full bg-card border-r border-border flex flex-col relative",
+        "relative flex h-full flex-col border-r border-border/70 bg-white/75 backdrop-blur-xl dark:bg-slate-950/70",
         isMobile && "fixed inset-y-0 left-0 z-50 shadow-2xl",
         className
       )}
     >
       {/* Header */}
-      <div className="p-4 border-b border-border">
+      <div className="border-b border-border/70 p-4">
         <div className="flex items-center justify-between">
           <AnimatePresence mode="wait">
             {!isCollapsed && (
@@ -169,12 +169,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 transition={{ duration: 0.2 }}
                 className="flex items-center gap-3"
               >
-                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
+                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-700 via-cyan-600 to-amber-500 shadow-lg shadow-cyan-500/30">
                   <Brain className="w-4 h-4 text-white" />
                 </div>
                 <div>
-                  <h1 className="font-semibold text-sm">AI Ecosystem</h1>
-                  <p className="text-xs text-muted-foreground">Agent Hub</p>
+                  <h1 className="text-sm font-semibold">Agentic Workspace</h1>
+                  <p className="text-[11px] text-muted-foreground">Mission Control</p>
                 </div>
               </motion.div>
             )}
@@ -190,7 +190,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               }
               onToggleCollapse?.()
             }}
-            className="h-8 w-8"
+            className="h-9 w-9 rounded-xl border border-border/70 bg-white/80 shadow-sm dark:bg-slate-900/70"
           >
             {isMobile ? (
               <X className="w-4 h-4" />
@@ -204,14 +204,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Navigation */}
-      <div className="p-4 border-b border-border">
+      <div className="border-b border-border/70 p-4">
         <AnimatePresence mode="wait">
           {!isCollapsed && (
             <motion.h2
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3"
+              className="mb-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground"
             >
               Navigation
             </motion.h2>
@@ -230,9 +230,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 }
               }}
               className={cn(
-                "w-full justify-start h-9",
+                "h-10 w-full justify-start rounded-xl text-sm",
                 isCollapsed && "justify-center px-0",
-                currentView === item.id && "bg-accent text-accent-foreground"
+                currentView === item.id
+                  ? "bg-gradient-to-r from-teal-700 via-cyan-600 to-amber-500 text-white shadow-md"
+                  : "hover:bg-accent/70"
               )}
             >
               <item.icon className="w-4 h-4" />
@@ -262,7 +264,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3"
+              className="mb-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground"
             >
               AI Agents
             </motion.h2>
@@ -283,9 +285,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
               >
                 <Card
                   className={cn(
-                    "p-3 cursor-pointer transition-all duration-200 border",
-                    isActive && "border-primary bg-primary/5",
-                    !isActive && "hover:bg-accent/50",
+                    "cursor-pointer border border-border/70 bg-white/70 p-3 shadow-sm transition-all duration-200 dark:bg-slate-900/60",
+                    isActive && "border-teal-500/70 bg-teal-50/70 shadow-md dark:bg-teal-950/30",
+                    !isActive && "hover:-translate-y-0.5 hover:bg-accent/40",
                     isCollapsed && "p-2"
                   )}
                   onClick={() => {
@@ -324,10 +326,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                             </h3>
                             <div className={cn(
                               "w-2 h-2 rounded-full",
-                              agent.status === 'active' ? "bg-green-500" : "bg-gray-400"
+                              agent.status === 'active' ? "bg-emerald-500" : "bg-gray-400"
                             )} />
                           </div>
-                          <p className="text-xs text-muted-foreground truncate">
+                          <p className="truncate text-xs text-muted-foreground">
                             {agent.description}
                           </p>
                         </motion.div>
@@ -342,7 +344,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Footer */}
-      <div className="p-4 border-t border-border">
+      <div className="border-t border-border/70 p-4">
         <div className={cn(
           "flex items-center gap-2",
           isCollapsed && "justify-center"
@@ -351,7 +353,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             variant="ghost"
             size="icon"
             onClick={onToggleTheme}
-            className="h-8 w-8"
+            className="h-9 w-9 rounded-xl border border-border/70 bg-white/80 dark:bg-slate-900/70"
           >
             {isDarkMode ? (
               <Sun className="w-4 h-4" />
@@ -366,7 +368,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-8 w-8"
+                  className="h-9 w-9 rounded-xl border border-border/70 bg-white/80 dark:bg-slate-900/70"
                   onClick={() => {
                     // This will be handled by the parent component
                     const event = new CustomEvent('openSettings')
@@ -383,8 +385,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   transition={{ duration: 0.2 }}
                   className="flex-1"
                 >
-                  <p className="text-xs text-muted-foreground">
-                    v1.0.0
+                  <p className="text-xs font-medium text-muted-foreground">
+                    v1.0.0 • Live
                   </p>
                 </motion.div>
               </>

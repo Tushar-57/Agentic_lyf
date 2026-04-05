@@ -46,9 +46,17 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
   }
 
   return (
-    <div className={cn("h-full flex flex-col", className)}>
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
-        <TabsList className="flex w-full overflow-x-auto">
+    <div className={cn("flex h-full flex-col rounded-[28px] border border-border/70 bg-white/70 p-3 shadow-[0_24px_70px_-52px_rgba(15,23,42,0.7)] backdrop-blur-xl dark:bg-slate-950/50 sm:p-4", className)}>
+      <div className="mb-4 rounded-2xl border border-border/70 bg-gradient-to-r from-teal-50/80 via-cyan-50/70 to-amber-50/70 p-4 dark:from-teal-950/35 dark:via-slate-900/60 dark:to-amber-950/30">
+        <div className="section-kicker mb-2">Knowledge Center</div>
+        <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100 sm:text-2xl">Memory, Signals, and Semantic Maps</h2>
+        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+          Manage profile memory, inspect knowledge quality, and explore embedding relationships from one focused workspace.
+        </p>
+      </div>
+
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-1 flex-col">
+        <TabsList className="flex w-full justify-start gap-1 overflow-x-auto">
           <TabsTrigger value="viewer" className="gap-2 shrink-0">
             <Eye className="w-4 h-4" />
             Knowledge Base
@@ -68,7 +76,7 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
         </TabsList>
 
         <div className="flex-1 overflow-hidden">
-          <TabsContent value="viewer" className="h-full max-h-[calc(100dvh-220px)] overflow-y-auto p-4 sm:p-6 md:max-h-[calc(100vh-200px)]">
+          <TabsContent value="viewer" className="h-full max-h-[calc(100dvh-280px)] overflow-y-auto p-2 sm:p-3 md:max-h-[calc(100vh-260px)]">
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -81,7 +89,7 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
             </motion.div>
           </TabsContent>
 
-          <TabsContent value="analytics" className="h-full max-h-[calc(100dvh-220px)] overflow-y-auto p-4 sm:p-6 md:max-h-[calc(100vh-200px)]">
+          <TabsContent value="analytics" className="h-full max-h-[calc(100dvh-280px)] overflow-y-auto p-2 sm:p-3 md:max-h-[calc(100vh-260px)]">
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -91,34 +99,34 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
             </motion.div>
           </TabsContent>
 
-          <TabsContent value="visualization" className="h-full max-h-[calc(100dvh-220px)] overflow-y-auto p-4 sm:p-6 md:max-h-[calc(100vh-200px)]">
+          <TabsContent value="visualization" className="h-full max-h-[calc(100dvh-280px)] overflow-y-auto p-2 sm:p-3 md:max-h-[calc(100vh-260px)]">
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.3, delay: 0.15 }}
               className="space-y-6"
             >
-              <div>
-                <h2 className="text-2xl font-bold mb-2">Knowledge Landscape</h2>
-                <p className="text-muted-foreground mb-6">
+              <div className="rounded-2xl border border-border/70 bg-card/70 p-5">
+                <h2 className="mb-2 text-2xl font-bold">Knowledge Landscape</h2>
+                <p className="mb-0 text-muted-foreground">
                   Explore your knowledge base in an interactive graph where each node is a memory and links indicate semantic closeness.
                 </p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="rounded-xl border border-border bg-card/60 p-4">
+                <div className="rounded-2xl border border-border/70 bg-white/75 p-4 shadow-sm dark:bg-slate-900/60">
                   <h3 className="text-sm font-semibold mb-1">Semantic Mode</h3>
                   <p className="text-sm text-muted-foreground">
                     Uses backend embedding coordinates when they are available and distinct.
                   </p>
                 </div>
-                <div className="rounded-xl border border-border bg-card/60 p-4">
+                <div className="rounded-2xl border border-border/70 bg-white/75 p-4 shadow-sm dark:bg-slate-900/60">
                   <h3 className="text-sm font-semibold mb-1">Fallback Mode</h3>
                   <p className="text-sm text-muted-foreground">
                     If coordinates are not ready, nodes are shown in a stable category-based layout so the map stays usable.
                   </p>
                 </div>
-                <div className="rounded-xl border border-border bg-card/60 p-4">
+                <div className="rounded-2xl border border-border/70 bg-white/75 p-4 shadow-sm dark:bg-slate-900/60">
                   <h3 className="text-sm font-semibold mb-1">Exploration Tools</h3>
                   <p className="text-sm text-muted-foreground">
                     Search, filter, and compare connections in Graph and List modes with node detail drill-down.
@@ -135,8 +143,9 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
 
               <Button 
                 onClick={handleOpenEmbeddingsVisualization}
-                className="w-full md:w-auto gap-2"
+                className="w-full gap-2 md:w-auto"
                 size="lg"
+                variant="gradient"
               >
                 <Box className="w-5 h-5" />
                 Open Knowledge Landscape
@@ -144,16 +153,16 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
             </motion.div>
           </TabsContent>
 
-          <TabsContent value="settings" className="h-full max-h-[calc(100dvh-220px)] overflow-y-auto p-4 sm:p-6 md:max-h-[calc(100vh-200px)]">
+          <TabsContent value="settings" className="h-full max-h-[calc(100dvh-280px)] overflow-y-auto p-2 sm:p-3 md:max-h-[calc(100vh-260px)]">
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.3, delay: 0.2 }}
               className="space-y-6"
             >
-              <div>
-                <h2 className="text-2xl font-bold mb-2">Knowledge Base Settings</h2>
-                <p className="text-muted-foreground mb-6">
+              <div className="rounded-2xl border border-border/70 bg-card/70 p-5">
+                <h2 className="mb-2 text-2xl font-bold">Knowledge Base Settings</h2>
+                <p className="mb-0 text-muted-foreground">
                   Configure how your AI agents learn and store information about your preferences.
                 </p>
               </div>
@@ -164,7 +173,7 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
                   <div className="space-y-2">
                     <button
                       onClick={handleEditPreferences}
-                      className="w-full p-4 text-left border border-border rounded-lg hover:bg-accent/50 transition-colors"
+                      className="w-full rounded-2xl border border-border/70 bg-white/75 p-4 text-left shadow-sm transition-colors hover:bg-accent/40 dark:bg-slate-900/60"
                     >
                       <div className="flex items-center gap-3">
                         <Settings className="w-5 h-5 text-primary" />
@@ -179,7 +188,7 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
 
                     <button
                       onClick={handleAddManualPreference}
-                      className="w-full p-4 text-left border border-border rounded-lg hover:bg-accent/50 transition-colors"
+                      className="w-full rounded-2xl border border-border/70 bg-white/75 p-4 text-left shadow-sm transition-colors hover:bg-accent/40 dark:bg-slate-900/60"
                     >
                       <div className="flex items-center gap-3">
                         <UserPlus className="w-5 h-5 text-primary" />
@@ -192,7 +201,7 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
                       </div>
                     </button>
                     
-                    <button className="w-full p-4 text-left border border-border rounded-lg hover:bg-accent/50 transition-colors">
+                    <button className="w-full rounded-2xl border border-border/70 bg-white/75 p-4 text-left shadow-sm transition-colors hover:bg-accent/40 dark:bg-slate-900/60">
                       <div className="flex items-center gap-3">
                         <Database className="w-5 h-5 text-primary" />
                         <div>
@@ -204,7 +213,7 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
                       </div>
                     </button>
                     
-                    <button className="w-full p-4 text-left border border-border rounded-lg hover:bg-accent/50 transition-colors">
+                    <button className="w-full rounded-2xl border border-border/70 bg-white/75 p-4 text-left shadow-sm transition-colors hover:bg-accent/40 dark:bg-slate-900/60">
                       <div className="flex items-center gap-3">
                         <Database className="w-5 h-5 text-primary" />
                         <div>
@@ -221,7 +230,7 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
                 <div className="space-y-4">
                   <h3 className="text-lg font-semibold">Privacy & Security</h3>
                   <div className="space-y-2">
-                    <button className="w-full p-4 text-left border border-border rounded-lg hover:bg-accent/50 transition-colors">
+                    <button className="w-full rounded-2xl border border-border/70 bg-white/75 p-4 text-left shadow-sm transition-colors hover:bg-accent/40 dark:bg-slate-900/60">
                       <div className="flex items-center gap-3">
                         <Database className="w-5 h-5 text-primary" />
                         <div>
@@ -233,7 +242,7 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
                       </div>
                     </button>
                     
-                    <button className="w-full p-4 text-left border border-border rounded-lg hover:bg-accent/50 transition-colors">
+                    <button className="w-full rounded-2xl border border-border/70 bg-white/75 p-4 text-left shadow-sm transition-colors hover:bg-accent/40 dark:bg-slate-900/60">
                       <div className="flex items-center gap-3">
                         <Database className="w-5 h-5 text-primary" />
                         <div>
