@@ -329,15 +329,25 @@ class VectorStore:
             raise
 
 
-# Global vector store instance
-_vector_store: Optional[VectorStore] = None
+# Per-user vector store instances
+_vector_stores_by_user: Dict[str, VectorStore] = {}
 
 
-def get_vector_store() -> VectorStore:
-    """Get the global vector store instance."""
-    global _vector_store
-    
-    if _vector_store is None:
-        _vector_store = VectorStore()
-    
-    return _vector_store
+def _resolve_index_path_for_user(user_id: str) -> str:
+    if user_id == "single_user":
+        return "data/vector_index"
+
+    return f"data/users/{user_id}/vector_index"
+
+
+def get_vector_store(user_id: Optional[str] = None) -> VectorStore:
+    """Get a user-scoped vector store instance."""
+    from app.auth.user_context import get_current_user_id, normalize_user_storage_key
+
+    resolved_user_id = normalize_user_storage_key(user_id or get_current_user_id())
+    if resolved_user_id not in _vector_stores_by_user:
+        _vector_stores_by_user[resolved_user_id] = VectorStore(
+            index_path=_resolve_index_path_for_user(resolved_user_id)
+        )
+
+    return _vector_stores_by_user[resolved_user_id]

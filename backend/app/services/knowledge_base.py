@@ -28,8 +28,9 @@ logger = logging.getLogger(__name__)
 class KnowledgeBaseService:
     """Service for managing knowledge base operations and RAG functionality."""
     
-    def __init__(self):
-        self.vector_store = get_vector_store()
+    def __init__(self, user_id: str = "single_user"):
+        self.user_id = user_id
+        self.vector_store = get_vector_store(user_id)
         self._user_preferences: Optional[UserPreferences] = None
 
     def _generate_fallback_embedding(self, text: str) -> List[float]:
@@ -137,6 +138,7 @@ class KnowledgeBaseService:
             # Create entry
             entry = KnowledgeEntry(
                 entry_id=entry_id,
+                user_id=self.user_id,
                 entry_type=entry_type,
                 category=category,
                 entry_sub_type=entry_sub_type,
@@ -316,6 +318,8 @@ class KnowledgeBaseService:
             # Apply filters
             filtered_entries = []
             for entry in all_entries:
+                if getattr(entry, "user_id", self.user_id) != self.user_id:
+                    continue
                 if category and entry.category != category:
                     continue
                 if entry_type and entry.entry_type != entry_type:
@@ -422,6 +426,7 @@ class KnowledgeBaseService:
 
                 if loaded_from_knowledge:
                     logger.info(f"Loaded user preferences from knowledge base: {prefs_dict}")
+                    prefs_dict["user_id"] = self.user_id
                     self._user_preferences = UserPreferences(**prefs_dict)
                     return self._user_preferences
 
@@ -438,16 +443,17 @@ class KnowledgeBaseService:
                         if not data:
                             raise ValueError("Empty preferences file")
                         prefs_dict = json.loads(data)
+                        prefs_dict["user_id"] = self.user_id
                         self._user_preferences = UserPreferences(**prefs_dict)
                         return self._user_preferences
             except Exception as e:
                 logger.warning(f"Failed to parse stored preferences: {e}. Using defaults.")
 
-            self._user_preferences = UserPreferences()
+            self._user_preferences = UserPreferences(user_id=self.user_id)
             return self._user_preferences
         except Exception as e:
             logger.error(f"Failed to get user preferences: {e}")
-            return UserPreferences()
+            return UserPreferences(user_id=self.user_id)
 
     def _is_time_entry_entry(self, entry: KnowledgeEntry) -> bool:
         """Detect AlterEgo time entries that are persisted as interaction events."""
@@ -1243,15 +1249,16 @@ class KnowledgeBaseService:
             return None
 
 
-# Global service instance
-_knowledge_base_service: Optional[KnowledgeBaseService] = None
+# Per-user service instances
+_knowledge_base_services: Dict[str, KnowledgeBaseService] = {}
 
 
-def get_knowledge_base_service() -> KnowledgeBaseService:
-    """Get the global knowledge base service instance."""
-    global _knowledge_base_service
-    
-    if _knowledge_base_service is None:
-        _knowledge_base_service = KnowledgeBaseService()
-    
-    return _knowledge_base_service
+def get_knowledge_base_service(user_id: Optional[str] = None) -> KnowledgeBaseService:
+    """Get a user-scoped knowledge base service instance."""
+    from app.auth.user_context import get_current_user_id, normalize_user_storage_key
+
+    resolved_user_id = normalize_user_storage_key(user_id or get_current_user_id())
+    if resolved_user_id not in _knowledge_base_services:
+        _knowledge_base_services[resolved_user_id] = KnowledgeBaseService(resolved_user_id)
+
+    return _knowledge_base_services[resolved_user_id]

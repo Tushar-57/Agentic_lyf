@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from typing import Optional, Any, List
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -31,6 +31,7 @@ from app.utils.logging import get_api_category_logger
 from app.services.config_storage import get_config_storage
 from app.services.interaction_recorder import get_interaction_recorder
 from app.services.knowledge_base import get_knowledge_base_service
+from app.auth.user_context import resolve_request_user, set_request_user, reset_request_user
 from langgraph.graph import StateGraph, START, END
 
 # Load environment variables from .env file
@@ -48,7 +49,7 @@ async def lifespan(_app: FastAPI):
     
     try:
         knowledge_service = get_knowledge_base_service()
-        llm_service = get_llm_service()
+        llm_service = await get_llm_service()
         _ = get_interaction_recorder(knowledge_service, llm_service)
         logger.info("Successfully initialized interaction recorder")
     except Exception as e:
@@ -72,6 +73,21 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+
+@app.middleware("http")
+async def attach_user_context(request: Request, call_next):
+    """Resolve and attach request user scope for per-user data partitioning."""
+    resolved_user = resolve_request_user(request)
+    context_token = set_request_user(resolved_user)
+
+    try:
+        response = await call_next(request)
+    finally:
+        reset_request_user(context_token)
+
+    response.headers["X-Agentic-User"] = resolved_user.storage_key
+    return response
 
 def parse_csv_env(name: str, default: str) -> List[str]:
     raw = os.getenv(name, default)

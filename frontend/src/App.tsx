@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import { prefetchEmbeddingsVisualization } from '@/lib/embeddingsCache'
 import { cn } from '@/lib/utils'
 import { AnalyticsDashboard } from '@/components/knowledge/AnalyticsDashboard'
+import { getOrCreateConversationId } from '@/lib/agenticBridgeSession'
 import './globals.css'
 
 const BUILTIN_ALTEREGO_RETURN_ORIGINS = [
@@ -93,6 +94,7 @@ function App() {
     return false
   })
   const [messages, setMessages] = useState<Message[]>([])
+  const [conversationId] = useState<string>(() => getOrCreateConversationId())
   const [isLoading, setIsLoading] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [currentProvider, setCurrentProvider] = useState<'openai' | 'ollama'>('ollama')  // Default to Ollama
@@ -421,7 +423,7 @@ function App() {
         body: JSON.stringify({
           message: content,
           agent: currentAgent,
-          conversation_id: 'demo-conversation'
+          conversation_id: conversationId,
         })
       })
 

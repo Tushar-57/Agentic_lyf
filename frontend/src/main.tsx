@@ -3,7 +3,9 @@ import ReactDOM from 'react-dom/client'
 import App from './App.tsx'
 import './globals.css'
 import { installApiRouting } from '@/lib/installApiRouting'
+import { bootstrapAgenticBridgeSession } from '@/lib/agenticBridgeSession'
 
+bootstrapAgenticBridgeSession()
 installApiRouting()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

@@ -68,15 +68,25 @@ class ConfigStorage:
         self.set('provider_preference', provider)
 
 
-# Global instance storage
-class _ConfigStorageHolder:
-    instance: Optional[ConfigStorage] = None
-
-_holder = _ConfigStorageHolder()
+# Per-user instance storage
+_instances_by_user: Dict[str, ConfigStorage] = {}
 
 
-def get_config_storage() -> ConfigStorage:
-    """Get global configuration storage instance."""
-    if _holder.instance is None:
-        _holder.instance = ConfigStorage()
-    return _holder.instance
+def _resolve_config_dir_for_user(user_id: str) -> str:
+    if user_id == "single_user":
+        return "data/config"
+
+    return f"data/users/{user_id}/config"
+
+
+def get_config_storage(user_id: Optional[str] = None) -> ConfigStorage:
+    """Get a user-scoped configuration storage instance."""
+    from app.auth.user_context import get_current_user_id, normalize_user_storage_key
+
+    resolved_user_id = normalize_user_storage_key(user_id or get_current_user_id())
+    if resolved_user_id not in _instances_by_user:
+        _instances_by_user[resolved_user_id] = ConfigStorage(
+            config_dir=_resolve_config_dir_for_user(resolved_user_id)
+        )
+
+    return _instances_by_user[resolved_user_id]

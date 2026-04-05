@@ -328,33 +328,38 @@ class InteractionRecorder:
             self.logger.error("Error getting recording stats: %s", str(e))
             return {"error": "Failed to get stats"}
 
-# Singleton instance
-interaction_recorder_instance = None
+# Per-user recorder instances
+_recorders_by_user: Dict[str, InteractionRecorder] = {}
 
-def get_interaction_recorder(knowledge_base_service=None, llm_service=None):
-    """Get or create the interaction recorder singleton."""
-    global interaction_recorder_instance  # noqa: PLW0603
-    
-    logger.info("Getting interaction recorder - current instance: %s, kb_service: %s, llm_service: %s", 
-                id(interaction_recorder_instance) if interaction_recorder_instance else None,
-                knowledge_base_service is not None, llm_service is not None)
-    
-    # If instance doesn't exist and we have services, create it
-    if interaction_recorder_instance is None and knowledge_base_service and llm_service:
-        interaction_recorder_instance = InteractionRecorder(knowledge_base_service, llm_service)
-        logger.info("Created new interaction recorder instance: %s", id(interaction_recorder_instance))
-    
-    # If instance doesn't exist but we don't have services, try to get them
-    elif interaction_recorder_instance is None:
+
+def get_interaction_recorder(knowledge_base_service=None, llm_service=None, user_id: Optional[str] = None):
+    """Get or create a user-scoped interaction recorder instance."""
+    from app.auth.user_context import get_current_user_id, normalize_user_storage_key
+
+    resolved_user_id = normalize_user_storage_key(user_id or get_current_user_id())
+    recorder = _recorders_by_user.get(resolved_user_id)
+
+    logger.info(
+        "Getting interaction recorder for user=%s current instance=%s kb_service=%s llm_service=%s",
+        resolved_user_id,
+        id(recorder) if recorder else None,
+        knowledge_base_service is not None,
+        llm_service is not None,
+    )
+
+    if recorder is None:
         try:
             from app.services.knowledge_base import get_knowledge_base_service
-            from app.llm.service import get_llm_service
-            kb_service = get_knowledge_base_service()
-            llm_svc = get_llm_service()
-            if kb_service and llm_svc:
-                interaction_recorder_instance = InteractionRecorder(kb_service, llm_svc)
-                logger.info("Auto-initialized interaction recorder instance: %s", id(interaction_recorder_instance))
+            from app.llm import service as llm_service_module
+
+            kb_service = knowledge_base_service or get_knowledge_base_service(resolved_user_id)
+            llm_svc = llm_service or llm_service_module._llm_service
+
+            recorder = InteractionRecorder(kb_service, llm_svc)
+            _recorders_by_user[resolved_user_id] = recorder
+            logger.info("Created new interaction recorder instance for user=%s id=%s", resolved_user_id, id(recorder))
         except Exception as e:
-            logger.error("Failed to auto-initialize interaction recorder: %s", str(e))
-    
-    return interaction_recorder_instance
+            logger.error("Failed to initialize interaction recorder for user=%s: %s", resolved_user_id, str(e))
+            return None
+
+    return recorder
