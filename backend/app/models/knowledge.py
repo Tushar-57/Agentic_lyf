@@ -90,7 +90,12 @@ class UserPreferences(BaseModel):
         "budget_categories": ["food", "transport", "entertainment", "rent"],
         "savings_goals": 2100,
         "expense_tracking": "weekly",
-        "currency": "USD"
+        "currency": "USD",
+        "monthly_income_target": 5000,
+        "monthly_savings_target": 1200,
+        "expense_alert_threshold": 80,
+        "investment_risk_profile": "moderate",
+        "planning_priority": "budgeting"
     })
     
     # Journal preferences

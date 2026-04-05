@@ -77,6 +77,8 @@
   body,
   #root {
     min-height: 100%;
+    min-height: 100svh;
+    min-height: 100dvh;
     width: 100%;
     max-width: 100%;
     overflow-x: hidden;

@@ -244,7 +244,11 @@ async def chat_endpoint(request: ChatRequest):
 
         if isinstance(response, str):
             lowered = response.lower()
-            if "no healthy providers available" in lowered or "llm service not initialized" in lowered:
+            if (
+                "llm_provider_unavailable" in lowered
+                or "no healthy providers available" in lowered
+                or "llm service not initialized" in lowered
+            ):
                 response = (
                     "I cannot reach an AI provider right now. "
                     "Please connect OpenAI in settings or ensure Ollama is running, then retry your message."
@@ -261,7 +265,12 @@ async def chat_endpoint(request: ChatRequest):
     except Exception as e:
         logging.error("Orchestrator Error: %s", e)
         error_text = str(e)
-        if "No healthy providers available" in error_text or "LLM service not initialized" in error_text:
+        normalized_error = error_text.lower()
+        if (
+            "llm_provider_unavailable" in normalized_error
+            or "no healthy providers available" in normalized_error
+            or "llm service not initialized" in normalized_error
+        ):
             user_facing_message = (
                 "I cannot reach an AI provider right now. "
                 "Please connect OpenAI in settings or ensure Ollama is running, then retry your message."
@@ -310,7 +319,7 @@ async def get_agents_status():
         print(f"Status check error: {e}")
         # Fallback with error indication
         return {
-            "current_provider": "openai",
+            "current_provider": "none",
             "health_status": {
                 "openai": {"is_healthy": False, "model": "gpt-3.5-turbo", "response_time_ms": 0, "error": str(e)},
                 "ollama": {"is_healthy": False, "model": "llama3.2:3b", "response_time_ms": 0, "error": str(e)}

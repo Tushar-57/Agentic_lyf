@@ -18,6 +18,7 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
   className
 }) => {
   const [activeTab, setActiveTab] = useState('viewer')
+  const [refreshToken, setRefreshToken] = useState(0)
   const [isPreferencesEditorOpen, setIsPreferencesEditorOpen] = useState(false)
   const [isManualPreferenceAdderOpen, setIsManualPreferenceAdderOpen] = useState(false)
   const [isEmbeddingsVisualizationOpen, setIsEmbeddingsVisualizationOpen] = useState(false)
@@ -35,14 +36,11 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
   }
 
   const handlePreferencesSaved = () => {
-    // Refresh the knowledge base viewer when preferences are saved
-    // This could trigger a re-fetch of data in the viewer component
-    console.log('Preferences saved, refreshing knowledge base...')
+    setRefreshToken((previous) => previous + 1)
   }
 
   const handlePreferenceAdded = () => {
-    // Refresh data when a new preference is added
-    console.log('New preference added, refreshing knowledge base...')
+    setRefreshToken((previous) => previous + 1)
   }
 
   return (
@@ -56,10 +54,11 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-1 flex-col">
-        <TabsList className="flex w-full justify-start gap-1 overflow-x-auto">
+        <TabsList className="no-scrollbar sticky top-0 z-10 flex w-full justify-start gap-1 overflow-x-auto rounded-2xl border border-border/70 bg-white/80 p-1 backdrop-blur dark:bg-slate-900/70">
           <TabsTrigger value="viewer" className="gap-2 shrink-0">
             <Eye className="w-4 h-4" />
-            Knowledge Base
+            <span className="hidden sm:inline">Knowledge Base</span>
+            <span className="sm:hidden">Base</span>
           </TabsTrigger>
           <TabsTrigger value="analytics" className="gap-2 shrink-0">
             <BarChart3 className="w-4 h-4" />
@@ -67,7 +66,8 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
           </TabsTrigger>
           <TabsTrigger value="visualization" className="gap-2 shrink-0">
             <Box className="w-4 h-4" />
-            Visualization
+            <span className="hidden sm:inline">Visualization</span>
+            <span className="sm:hidden">3D View</span>
           </TabsTrigger>
           <TabsTrigger value="settings" className="gap-2 shrink-0">
             <Settings className="w-4 h-4" />
@@ -85,6 +85,7 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
               <KnowledgeBaseViewer 
                 onEditPreferences={handleEditPreferences}
                 onAddPreference={handleAddManualPreference}
+                refreshKey={refreshToken}
               />
             </motion.div>
           </TabsContent>

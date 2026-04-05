@@ -164,7 +164,7 @@ class LLMProviderFactory:
             except Exception as e:
                 logger.error(f"Failed to reinitialize primary provider: {e}")
         
-        raise Exception("No healthy providers available")
+        raise RuntimeError("LLM_PROVIDER_UNAVAILABLE: No healthy providers available")
     
     async def _check_provider_health(self) -> None:
         """Check health of all providers if needed."""

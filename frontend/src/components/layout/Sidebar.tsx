@@ -145,14 +145,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const [hoveredAgent, setHoveredAgent] = useState<string | null>(null)
   const isCollapsed = isMobile ? false : collapsed
+  const mobileDrawerWidth = 304
 
   return (
     <motion.div
       initial={false}
-      animate={isMobile ? { x: mobileOpen ? 0 : -300, width: 280 } : { width: isCollapsed ? 80 : 280 }}
+      animate={isMobile ? { x: mobileOpen ? 0 : -mobileDrawerWidth, width: mobileDrawerWidth } : { width: isCollapsed ? 80 : 280 }}
       transition={{ duration: 0.3, ease: "easeInOut" }}
       className={cn(
         "relative flex h-[100dvh] flex-col border-r border-border/70 bg-white/75 backdrop-blur-xl dark:bg-slate-950/70",
+        isMobile && "pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)]",
         isMobile && "fixed inset-y-0 left-0 z-50 shadow-2xl",
         className
       )}

@@ -13,7 +13,8 @@ import {
   User,
   Brain,
   TrendingUp,
-  BarChart3
+  BarChart3,
+  Target
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -58,12 +59,71 @@ interface KnowledgeBaseViewerProps {
   className?: string
   onEditPreferences?: () => void
   onAddPreference?: () => void
+  refreshKey?: number
+}
+
+interface DisplayKnowledgeEntry extends KnowledgeEntry {
+  displayType: string
+  displayTypeLabel: string
+  displayCategory: string
+  displayCategoryLabel: string
+}
+
+const toDisplayLabel = (rawValue: string) => {
+  return rawValue
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+const resolveEntryCategory = (entry: KnowledgeEntry): string => {
+  const metadata = entry.metadata || {}
+  const context = (metadata.context || {}) as Record<string, any>
+
+  const source = String(context.source || '').toLowerCase()
+  const sourceAction = String(context.source_action || '').toLowerCase()
+  const category = String(entry.category || '').toLowerCase()
+
+  if (
+    category === 'time_entry' ||
+    source === 'alterego_timetracker' ||
+    sourceAction.includes('time_entry') ||
+    context.time_entry_id
+  ) {
+    return 'time_entry'
+  }
+
+  return category || 'uncategorized'
+}
+
+const resolveEntryType = (entry: KnowledgeEntry, resolvedCategory: string): string => {
+  const subType = String(entry.entry_sub_type || '').toLowerCase()
+
+  if (resolvedCategory === 'time_entry') {
+    return 'time_entry'
+  }
+
+  if (subType.includes('goal')) {
+    return 'goal'
+  }
+
+  if (subType.includes('schedule')) {
+    return 'schedule'
+  }
+
+  if (subType.includes('profile')) {
+    return 'profile'
+  }
+
+  return String(entry.entry_type || 'memory').toLowerCase()
 }
 
 export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
   className,
   onEditPreferences,
-  onAddPreference
+  onAddPreference,
+  refreshKey = 0,
 }) => {
   const [entries, setEntries] = useState<KnowledgeEntry[]>([])
   const [preferences, setPreferences] = useState<UserPreferences | null>(null)
@@ -73,38 +133,54 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
   const [selectedType, setSelectedType] = useState<string>('all')
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null)
 
   // Load data on component mount
   useEffect(() => {
-    loadKnowledgeData()
-  }, [])
+    void loadKnowledgeData()
+  }, [refreshKey])
 
   const loadKnowledgeData = async () => {
     setIsLoading(true)
     setError(null)
     
     try {
+      const requestOptions: RequestInit = {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache',
+        },
+      }
+
       // Load entries, preferences, and stats in parallel
       const [entriesRes, preferencesRes, statsRes] = await Promise.all([
-        fetch('/api/knowledge/entries').catch(() => null),
-        fetch('/api/knowledge/preferences').catch(() => null),
-        fetch('/api/knowledge/stats').catch(() => null)
+        fetch('/api/knowledge/entries', requestOptions).catch(() => null),
+        fetch('/api/knowledge/preferences', requestOptions).catch(() => null),
+        fetch('/api/knowledge/stats', requestOptions).catch(() => null)
       ])
 
       if (entriesRes && entriesRes.ok) {
         const entriesData = await entriesRes.json()
-        setEntries(entriesData)
+        setEntries(Array.isArray(entriesData) ? entriesData : [])
+      } else {
+        setEntries([])
       }
 
       if (preferencesRes && preferencesRes.ok) {
         const preferencesData = await preferencesRes.json()
         setPreferences(preferencesData)
+      } else {
+        setPreferences(null)
       }
 
       if (statsRes && statsRes.ok) {
         const statsData = await statsRes.json()
         setStats(statsData)
+      } else {
+        setStats(null)
       }
+
+      setLastSyncedAt(new Date().toISOString())
     } catch (err) {
       console.error('Failed to load knowledge data:', err)
       setError('Failed to load knowledge base data')
@@ -127,26 +203,50 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
     }
   }
 
+  const displayEntries: DisplayKnowledgeEntry[] = entries.map((entry) => {
+    const displayCategory = resolveEntryCategory(entry)
+    const displayType = resolveEntryType(entry, displayCategory)
+
+    return {
+      ...entry,
+      displayType,
+      displayTypeLabel: toDisplayLabel(displayType),
+      displayCategory,
+      displayCategoryLabel: toDisplayLabel(displayCategory),
+    }
+  })
+
   // Filter entries based on search and filters
-  const filteredEntries = entries.filter(entry => {
+  const filteredEntries = displayEntries.filter(entry => {
     const matchesSearch = searchQuery === '' || 
       entry.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       entry.content.toLowerCase().includes(searchQuery.toLowerCase()) ||
       entry.tags.some(tag => tag.toLowerCase().includes(searchQuery.toLowerCase()))
     
-    const matchesCategory = selectedCategory === 'all' || entry.category === selectedCategory
-    const matchesType = selectedType === 'all' || entry.entry_type === selectedType
+    const matchesCategory = selectedCategory === 'all' || entry.displayCategory === selectedCategory
+    const matchesType = selectedType === 'all' || entry.displayType === selectedType
     
     return matchesSearch && matchesCategory && matchesType
   })
 
-  const categories = ['all', ...new Set(entries.map(e => e.category))]
-  const types = ['all', ...new Set(entries.map(e => e.entry_type))]
+  const categories = ['all', ...new Set(displayEntries.map((entry) => entry.displayCategory))]
+  const types = ['all', ...new Set(displayEntries.map((entry) => entry.displayType))]
+
+  const preferencesCount = displayEntries.filter((entry) =>
+    entry.displayType === 'preference' || entry.displayType === 'user_preference'
+  ).length
+  const goalsCount = displayEntries.filter((entry) => entry.displayType === 'goal').length
+  const timeEntriesCount = displayEntries.filter((entry) => entry.displayType === 'time_entry').length
+  const patternsCount = displayEntries.filter((entry) => entry.displayType === 'pattern').length
 
   const getEntryIcon = (type: string) => {
     switch (type) {
       case 'preference': return User
       case 'user_preference': return User
+      case 'goal': return Target
+      case 'schedule': return Calendar
+      case 'profile': return User
+      case 'time_entry': return Calendar
       case 'interaction': return Brain
       case 'pattern': return TrendingUp
       case 'insight': return BarChart3
@@ -159,6 +259,10 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
     switch (type) {
       case 'preference': return 'from-teal-600 to-cyan-500'
       case 'user_preference': return 'from-teal-600 to-cyan-500'
+      case 'goal': return 'from-fuchsia-600 to-violet-500'
+      case 'schedule': return 'from-blue-600 to-cyan-500'
+      case 'profile': return 'from-emerald-600 to-teal-500'
+      case 'time_entry': return 'from-indigo-600 to-blue-500'
       case 'interaction': return 'from-emerald-500 to-green-500'
       case 'pattern': return 'from-sky-500 to-blue-500'
       case 'insight': return 'from-amber-500 to-orange-500'
@@ -187,6 +291,11 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
           <p className="text-muted-foreground">
             View and manage your AI agent's learned preferences and patterns
           </p>
+          {lastSyncedAt && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Last synced: {new Date(lastSyncedAt).toLocaleTimeString()}
+            </p>
+          )}
         </div>
         <div className="flex gap-2 flex-shrink-0 flex-wrap">
           <Button 
@@ -212,9 +321,44 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
         </div>
       </div>
 
+      {preferences && (
+        <Card className="border-border/70 bg-white/75 p-4 shadow-sm dark:bg-slate-900/60">
+          <div className="mb-2 flex items-center justify-between">
+            <h3 className="text-sm font-semibold">Preference Snapshot</h3>
+            <Badge variant="outline" className="text-xs">
+              Live Preferences
+            </Badge>
+          </div>
+          <div className="grid grid-cols-1 gap-3 text-xs text-muted-foreground sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <p className="font-medium text-slate-700 dark:text-slate-200">Primary Provider</p>
+              <p>{String(preferences.llm_provider?.provider || 'not set')}</p>
+            </div>
+            <div>
+              <p className="font-medium text-slate-700 dark:text-slate-200">Timezone</p>
+              <p>{String(preferences.general?.timezone || 'not set')}</p>
+            </div>
+            <div>
+              <p className="font-medium text-slate-700 dark:text-slate-200">Work Hours</p>
+              <p>{String(preferences.productivity?.work_hours || preferences.general?.work_hours || 'not set')}</p>
+            </div>
+            <div>
+              <p className="font-medium text-slate-700 dark:text-slate-200">Check-In Time</p>
+              <p>{String(preferences.journal?.check_in_time || 'not set')}</p>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {error && (
+        <Card className="border-red-300/60 bg-red-50/70 p-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/35 dark:text-red-200">
+          {error}
+        </Card>
+      )}
+
       {/* Stats Overview */}
       {stats && (
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
           <Card className="border-border/70 bg-white/75 p-4 shadow-sm dark:bg-slate-900/60">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-500 flex items-center justify-center">
@@ -233,8 +377,32 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
                 <User className="w-5 h-5 text-white" />
               </div>
               <div>
-                <p className="text-2xl font-bold">{(stats.entries_by_type.preference || 0) + (stats.entries_by_type.user_preference || 0)}</p>
+                <p className="text-2xl font-bold">{preferencesCount}</p>
                 <p className="text-sm text-muted-foreground">Preferences</p>
+              </div>
+            </div>
+          </Card>
+
+          <Card className="border-border/70 bg-white/75 p-4 shadow-sm dark:bg-slate-900/60">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-fuchsia-600 to-violet-500 flex items-center justify-center">
+                <Target className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold">{goalsCount}</p>
+                <p className="text-sm text-muted-foreground">Goals</p>
+              </div>
+            </div>
+          </Card>
+
+          <Card className="border-border/70 bg-white/75 p-4 shadow-sm dark:bg-slate-900/60">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-600 to-blue-500 flex items-center justify-center">
+                <Calendar className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold">{timeEntriesCount}</p>
+                <p className="text-sm text-muted-foreground">Time Entries</p>
               </div>
             </div>
           </Card>
@@ -246,7 +414,7 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
                 <TrendingUp className="w-5 h-5 text-white" />
               </div>
               <div>
-                <p className="text-2xl font-bold">{stats.entries_by_type.pattern || 0}</p>
+                <p className="text-2xl font-bold">{patternsCount}</p>
                 <p className="text-sm text-muted-foreground">Patterns</p>
               </div>
             </div>
@@ -289,7 +457,7 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
             >
               {categories.map(category => (
                 <option key={category} value={category}>
-                  {category === 'all' ? 'All Categories' : category.charAt(0).toUpperCase() + category.slice(1)}
+                  {category === 'all' ? 'All Categories' : toDisplayLabel(category)}
                 </option>
               ))}
             </select>
@@ -301,7 +469,7 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
             >
               {types.map(type => (
                 <option key={type} value={type}>
-                  {type === 'all' ? 'All Types' : type.charAt(0).toUpperCase() + type.slice(1)}
+                  {type === 'all' ? 'All Types' : toDisplayLabel(type)}
                 </option>
               ))}
             </select>
@@ -313,8 +481,8 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
       <div className="space-y-4">
         <AnimatePresence>
           {filteredEntries.map((entry, index) => {
-            const Icon = getEntryIcon(entry.entry_type)
-            const colorClass = getEntryColor(entry.entry_type)
+            const Icon = getEntryIcon(entry.displayType)
+            const colorClass = getEntryColor(entry.displayType)
             
             return (
               <motion.div
@@ -339,15 +507,15 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
                           <h3 className="font-semibold text-lg break-words">{entry.title}</h3>
                           <div className="flex items-center gap-2 text-sm text-muted-foreground flex-wrap">
                             <Badge variant="secondary" className="text-xs">
-                              {entry.entry_type}
+                              {entry.displayTypeLabel}
                             </Badge>
                             {entry.entry_sub_type && (
                               <Badge variant="outline" className="text-xs">
-                                {entry.entry_sub_type}
+                                {toDisplayLabel(entry.entry_sub_type)}
                               </Badge>
                             )}
                             <span>•</span>
-                            <span className="break-words">{entry.category}</span>
+                            <span className="break-words">{entry.displayCategoryLabel}</span>
                             <span>•</span>
                             <span>{new Date(entry.created_at).toLocaleDateString()}</span>
                           </div>
@@ -371,10 +539,10 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
                             size="icon" 
                             className="h-8 w-8"
                             onClick={() => {
-                              if ((entry.entry_type === 'preference' || entry.entry_type === 'user_preference') && onEditPreferences) {
+                              if ((entry.displayType === 'preference' || entry.displayType === 'user_preference') && onEditPreferences) {
                                 onEditPreferences()
                               } else {
-                                alert(`Editing for ${entry.entry_type} entries is not available yet.`)
+                                alert(`Editing for ${entry.displayTypeLabel} entries is not available yet.`)
                               }
                             }}
                           >

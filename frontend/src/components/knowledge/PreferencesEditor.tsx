@@ -43,7 +43,12 @@ const preferencesSchema = z.object({
     budget_categories: z.array(z.string()).min(1, 'At least one budget category is required'),
     savings_goals: z.number().min(0, 'Savings goals must be positive'),
     expense_tracking: z.string().min(1, 'Expense tracking frequency is required'),
-    currency: z.string().min(1, 'Currency is required')
+    currency: z.string().min(1, 'Currency is required'),
+    monthly_income_target: z.number().min(0, 'Monthly income target must be positive'),
+    monthly_savings_target: z.number().min(0, 'Monthly savings target must be positive'),
+    expense_alert_threshold: z.number().min(0).max(100),
+    investment_risk_profile: z.string().min(1, 'Risk profile is required'),
+    planning_priority: z.string().min(1, 'Planning priority is required')
   }),
   journal: z.object({
     reflection_frequency: z.string().min(1, 'Reflection frequency is required'),
@@ -111,7 +116,12 @@ export const PreferencesEditor: React.FC<PreferencesEditorProps> = ({
         budget_categories: ['food', 'transport', 'entertainment'],
         savings_goals: 1000,
         expense_tracking: 'weekly',
-        currency: 'USD'
+        currency: 'USD',
+        monthly_income_target: 5000,
+        monthly_savings_target: 1200,
+        expense_alert_threshold: 80,
+        investment_risk_profile: 'moderate',
+        planning_priority: 'budgeting'
       },
       journal: {
         reflection_frequency: 'daily',
@@ -146,10 +156,47 @@ export const PreferencesEditor: React.FC<PreferencesEditorProps> = ({
   const loadPreferences = async () => {
     setIsLoading(true)
     try {
-      const response = await fetch('/api/knowledge/preferences')
+      const response = await fetch('/api/knowledge/preferences', {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache'
+        }
+      })
+
       if (response.ok) {
         const preferences = await response.json()
-        reset(preferences)
+        const defaults = getValues()
+
+        reset({
+          productivity: {
+            ...defaults.productivity,
+            ...(preferences?.productivity || {}),
+          },
+          health: {
+            ...defaults.health,
+            ...(preferences?.health || {}),
+          },
+          finance: {
+            ...defaults.finance,
+            ...(preferences?.finance || {}),
+          },
+          journal: {
+            ...defaults.journal,
+            ...(preferences?.journal || {}),
+          },
+          llm_provider: {
+            ...defaults.llm_provider,
+            ...(preferences?.llm_provider || {}),
+          },
+          general: {
+            ...defaults.general,
+            ...(preferences?.general || {}),
+            notification_preferences: {
+              ...defaults.general.notification_preferences,
+              ...(preferences?.general?.notification_preferences || {}),
+            }
+          }
+        })
       }
     } catch (error) {
       console.error('Failed to load preferences:', error)
@@ -165,8 +212,10 @@ export const PreferencesEditor: React.FC<PreferencesEditorProps> = ({
       const response = await fetch('/api/knowledge/preferences', {
         method: 'PUT',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache'
         },
+        cache: 'no-store',
         body: JSON.stringify(data)
       })
 
@@ -420,6 +469,60 @@ export const PreferencesEditor: React.FC<PreferencesEditorProps> = ({
                           <option value="EUR">EUR (€)</option>
                           <option value="GBP">GBP (£)</option>
                           <option value="JPY">JPY (¥)</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium mb-2">Monthly Income Target</label>
+                        <Input
+                          type="number"
+                          {...register('finance.monthly_income_target', { valueAsNumber: true })}
+                          placeholder="5000"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium mb-2">Monthly Savings Target</label>
+                        <Input
+                          type="number"
+                          {...register('finance.monthly_savings_target', { valueAsNumber: true })}
+                          placeholder="1200"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium mb-2">Expense Alert Threshold (%)</label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={100}
+                          {...register('finance.expense_alert_threshold', { valueAsNumber: true })}
+                          placeholder="80"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium mb-2">Investment Risk Profile</label>
+                        <select
+                          {...register('finance.investment_risk_profile')}
+                          className="w-full px-3 py-2 border border-border rounded-md bg-background"
+                        >
+                          <option value="conservative">Conservative</option>
+                          <option value="moderate">Moderate</option>
+                          <option value="aggressive">Aggressive</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium mb-2">Finance Planning Priority</label>
+                        <select
+                          {...register('finance.planning_priority')}
+                          className="w-full px-3 py-2 border border-border rounded-md bg-background"
+                        >
+                          <option value="budgeting">Budgeting</option>
+                          <option value="saving">Saving</option>
+                          <option value="debt_reduction">Debt Reduction</option>
+                          <option value="investing">Investing</option>
                         </select>
                       </div>
                     </div>

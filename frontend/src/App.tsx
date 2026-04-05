@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { motion } from 'framer-motion'
-import { ArrowLeft, BarChart3, Brain, Database, Menu, MessageSquare, Sparkles, User } from 'lucide-react'
+import { ArrowLeft, BarChart3, Brain, Database, Menu, MessageSquare, Sparkles, User, X } from 'lucide-react'
 import { Toaster } from 'sonner'
 import { ChatInterface } from '@/components/chat/ChatInterface'
 import { Sidebar } from '@/components/layout/Sidebar'
@@ -13,7 +13,15 @@ import { FloatingApprovalNotification } from '@/components/chat/FloatingApproval
 import { Button } from '@/components/ui/button'
 import { prefetchEmbeddingsVisualization } from '@/lib/embeddingsCache'
 import { cn } from '@/lib/utils'
+import { AnalyticsDashboard } from '@/components/knowledge/AnalyticsDashboard'
 import './globals.css'
+
+const BUILTIN_ALTEREGO_RETURN_ORIGINS = [
+  'https://alterego-conventional.vercel.app',
+  'https://alterego.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:3000',
+]
 
 interface Message {
   id: string
@@ -119,12 +127,33 @@ function App() {
       }
     })()
 
+    const sourceIsAlterEgo = source === 'alterego'
+
     const envOrigins = ((import.meta.env.VITE_ALLOWED_RETURN_ORIGINS as string | undefined) || '')
       .split(',')
       .map((origin) => origin.trim())
       .filter((origin) => origin.length > 0)
 
-    const allowedOrigins = new Set<string>([window.location.origin, ...envOrigins])
+    const trackerAppOrigin = (import.meta.env.VITE_TIMETRACKER_APP_ORIGIN as string | undefined)?.trim()
+    const trustedAlterEgoHost = (hostname: string) => {
+      const normalizedHost = hostname.toLowerCase()
+      return (
+        normalizedHost.includes('alterego') ||
+        normalizedHost.includes('localhost') ||
+        normalizedHost.includes('127.0.0.1')
+      )
+    }
+
+    const allowedOrigins = new Set<string>([
+      window.location.origin,
+      ...envOrigins,
+      ...BUILTIN_ALTEREGO_RETURN_ORIGINS,
+    ])
+
+    if (trackerAppOrigin) {
+      allowedOrigins.add(trackerAppOrigin)
+    }
+
     if (referrerOrigin) {
       allowedOrigins.add(referrerOrigin)
     }
@@ -133,7 +162,10 @@ function App() {
     if (rawReturnUrl) {
       try {
         const parsed = new URL(rawReturnUrl, window.location.origin)
-        if (allowedOrigins.has(parsed.origin)) {
+        const allowByOrigin = allowedOrigins.has(parsed.origin)
+        const allowByAlterEgoHost = sourceIsAlterEgo && trustedAlterEgoHost(parsed.hostname)
+
+        if (allowByOrigin || allowByAlterEgoHost) {
           returnUrl = parsed.toString()
         }
       } catch {
@@ -141,11 +173,28 @@ function App() {
       }
     }
 
-    const isAlterEgo = source === 'alterego' || !!returnUrl || (referrerOrigin?.includes('alterego') ?? false)
+    const isAlterEgo = sourceIsAlterEgo || !!returnUrl || (referrerOrigin?.includes('alterego') ?? false)
+
+    const fallbackReturnUrl = (() => {
+      if (returnUrl) {
+        return returnUrl
+      }
+
+      if (!sourceIsAlterEgo || !trackerAppOrigin) {
+        return null
+      }
+
+      try {
+        const parsedFallback = new URL('/coach', trackerAppOrigin)
+        return parsedFallback.toString()
+      } catch {
+        return null
+      }
+    })()
 
     return {
       isAlterEgo,
-      returnUrl,
+      returnUrl: fallbackReturnUrl,
     }
   }, [])
 
@@ -156,6 +205,15 @@ function App() {
     { id: 'analytics', label: 'Analytics', icon: BarChart3 },
     { id: 'profile', label: 'Profile', icon: User },
   ]
+
+  const activeMobileView = useMemo(
+    () => mobileViews.find((view) => view.id === currentView),
+    [currentView]
+  )
+
+  const mobileContentInsetClass = isMobile && !isEmbedMode
+    ? 'pb-[calc(5.2rem+env(safe-area-inset-bottom))]'
+    : ''
 
   // Theme management
   useEffect(() => {
@@ -278,6 +336,17 @@ function App() {
       return
     }
 
+    const trackerAppOrigin = (import.meta.env.VITE_TIMETRACKER_APP_ORIGIN as string | undefined)?.trim()
+    if (trackerAppOrigin) {
+      try {
+        const trackerCoachUrl = new URL('/coach', trackerAppOrigin)
+        window.location.assign(trackerCoachUrl.toString())
+        return
+      } catch {
+        // Fall through to referrer/history fallback.
+      }
+    }
+
     if (typeof document !== 'undefined' && document.referrer) {
       window.location.assign(document.referrer)
       return
@@ -378,12 +447,18 @@ function App() {
       }
     } catch (error) {
       console.error('Error sending message:', error)
+      const errorText = error instanceof Error ? error.message : 'Unknown error'
+      const providerUnavailable = /llm_provider_unavailable|no healthy providers available|llm service not initialized/i.test(errorText)
       
       // Demo response when backend is not available
       const demoResponse: Message = {
         id: `demo-${Date.now()}`,
-        content: `Hello! I'm the **${currentAgent}** agent. I'm currently I had to switch to demo mode since the backend is chilling somewhere with connected yet. 
-        Here's what I can help you with once fully connected:
+        content: `${providerUnavailable
+          ? "I cannot reach a healthy AI provider right now. Please connect OpenAI in Settings or make sure Ollama is running, then retry your message."
+          : "I could not reach the backend right now, so I switched to fallback mode."
+        }
+
+        Here is what I can help with once the connection is restored:
         ${currentAgent === 'orchestrator' ? `
         - 🧠 **Coordinate** between different AI agents
         - 🎯 **Route** your requests to the right specialist
@@ -411,11 +486,11 @@ function App() {
         - 📝 **Help** with various tasks
         `}
 
-      Try switching between different agents using the sidebar to see how each one specializes in different areas, or just trust me, and let me do my Orchestration Job!`,
+      Try switching between different agents using the sidebar to explore each specialization.`,
         role: 'assistant',
         timestamp: new Date(),
         agent: currentAgent,
-        reasoning: `Selected ${currentAgent} agent based on current context. Providing demo capabilities overview.`
+        reasoning: `Fallback response after backend error: ${errorText}`
       }
 
       setMessages(prev => [...prev, demoResponse])
@@ -605,7 +680,7 @@ function App() {
         transition={{ duration: 0.3, ease: "easeInOut" }}
         className={cn(
           "relative z-10 flex min-h-0 min-w-0 flex-1 flex-col",
-          isMobile && !isEmbedMode && currentView !== 'chat' && "pb-16"
+          isMobile && !isEmbedMode && "pb-[calc(5.2rem+env(safe-area-inset-bottom))]"
         )}
       >
         {isMobile && !isEmbedMode && (
@@ -613,11 +688,11 @@ function App() {
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => setMobileSidebarOpen(true)}
+              onClick={() => setMobileSidebarOpen((previous) => !previous)}
               aria-label="Open navigation menu"
               className="h-10 w-10 rounded-xl border border-border/70 bg-white/80 shadow-sm dark:bg-slate-900/70"
             >
-              <Menu className="h-5 w-5" />
+              {mobileSidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
             </Button>
             <div className="text-center">
               <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
@@ -625,6 +700,9 @@ function App() {
               </div>
               <div className="text-sm font-semibold">
                 {integrationContext.isAlterEgo ? 'AlterEgo Coach' : 'Agentic Workspace'}
+              </div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 capitalize">
+                {activeMobileView?.label || currentView.replace('_', ' ')}
               </div>
             </div>
             <div className="w-9" aria-hidden="true" />
@@ -658,9 +736,7 @@ function App() {
           <div
             className={cn(
               "relative mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 px-2 pt-2 sm:px-4",
-              isMobile && !isEmbedMode
-                ? "pb-[calc(4.75rem+env(safe-area-inset-bottom))]"
-                : "pb-2 sm:pb-4"
+              isMobile && !isEmbedMode ? mobileContentInsetClass : "pb-2 sm:pb-4"
             )}
           >
             {/* Chat Interface */}
@@ -746,13 +822,13 @@ function App() {
         )}
         
         {currentView === 'knowledge' && (
-          <div className="flex min-h-0 flex-1 px-3 pb-4 pt-4 sm:px-4 sm:pb-5 sm:pt-5">
+          <div className={cn("flex min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-3 sm:px-4 sm:pb-5 sm:pt-5", mobileContentInsetClass)}>
             <KnowledgeManagement className="mx-auto h-full w-full max-w-[1600px]" />
           </div>
         )}
         
         {currentView === 'onboarding' && (
-          <div className="flex min-h-0 flex-1 px-3 pb-4 pt-4 sm:px-4 sm:pb-5 sm:pt-5">
+          <div className={cn("flex min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-3 sm:px-4 sm:pb-5 sm:pt-5", mobileContentInsetClass)}>
             <div className="panel-surface mx-auto h-full w-full max-w-[1600px] overflow-hidden">
               <ChatOnboarding 
                 onComplete={(data) => {
@@ -765,17 +841,15 @@ function App() {
         )}
         
         {currentView === 'analytics' && (
-          <div className="flex min-h-0 flex-1 items-center justify-center px-3 pb-4 pt-4 sm:px-4 sm:pb-5 sm:pt-5">
-            <div className="panel-surface w-full max-w-2xl px-8 py-10 text-center">
-              <div className="section-kicker mx-auto mb-3">Insight Studio</div>
-              <h2 className="mb-2 text-2xl font-bold">Analytics</h2>
-              <p className="text-muted-foreground">Analytics dashboard is being prepared. Please check back shortly.</p>
+          <div className={cn("flex min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-3 sm:px-4 sm:pb-5 sm:pt-5", mobileContentInsetClass)}>
+            <div className="panel-surface mx-auto h-full w-full max-w-[1600px] overflow-y-auto p-4 sm:p-5">
+              <AnalyticsDashboard />
             </div>
           </div>
         )}
         
         {currentView === 'activity' && (
-          <div className="flex min-h-0 flex-1 items-center justify-center px-3 pb-4 pt-4 sm:px-4 sm:pb-5 sm:pt-5">
+          <div className={cn("flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-3 pb-4 pt-3 sm:px-4 sm:pb-5 sm:pt-5", mobileContentInsetClass)}>
             <div className="panel-surface w-full max-w-2xl px-8 py-10 text-center">
               <div className="section-kicker mx-auto mb-3">Live Feed</div>
               <h2 className="mb-2 text-2xl font-bold">Activity</h2>
@@ -785,7 +859,7 @@ function App() {
         )}
         
         {currentView === 'profile' && (
-          <div className="flex min-h-0 flex-1 px-3 pb-4 pt-4 sm:px-4 sm:pb-5 sm:pt-5">
+          <div className={cn("flex min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-3 sm:px-4 sm:pb-5 sm:pt-5", mobileContentInsetClass)}>
             <div className="panel-surface mx-auto h-full w-full max-w-[1600px] overflow-auto">
               <ProfileWorkspace
                 onStartOnboarding={() => setCurrentView('onboarding')}

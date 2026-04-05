@@ -20,6 +20,19 @@ from ..utils.logging import get_llm_category_logger
 logger = get_llm_category_logger(__name__)
 
 
+def _normalize_provider_exception(error: Exception) -> Exception:
+    """Convert provider failures into a stable error shape for API handlers."""
+    error_text = str(error).lower()
+
+    if "llm_provider_unavailable" in error_text or "no healthy providers available" in error_text:
+        return RuntimeError("LLM_PROVIDER_UNAVAILABLE: No healthy providers available")
+
+    if "llm service not initialized" in error_text:
+        return RuntimeError("LLM_PROVIDER_UNAVAILABLE: LLM service not initialized")
+
+    return error
+
+
 class LLMService:
     """High-level service for LLM operations with automatic provider management."""
     
@@ -52,7 +65,8 @@ class LLMService:
             return await provider.chat_completion(request)
         except Exception as e:
             logger.error(f"Chat completion failed: {e}")
-            raise
+            normalized = _normalize_provider_exception(e)
+            raise normalized from e
     
     async def chat_completion_stream(self, request: CompletionRequest) -> AsyncGenerator[str, None]:
         """Generate a streaming chat completion using the active provider."""
@@ -65,7 +79,8 @@ class LLMService:
                 yield chunk
         except Exception as e:
             logger.error(f"Streaming chat completion failed: {e}")
-            raise
+            normalized = _normalize_provider_exception(e)
+            raise normalized from e
     
     async def generate_embedding(self, request: EmbeddingRequest) -> EmbeddingResponse:
         """Generate embeddings using the active provider."""
@@ -77,7 +92,8 @@ class LLMService:
             return await provider.generate_embedding(request)
         except Exception as e:
             logger.error(f"Embedding generation failed: {e}")
-            raise
+            normalized = _normalize_provider_exception(e)
+            raise normalized from e
     
     async def health_check(self) -> Dict[LLMProviderType, HealthCheckResult]:
         """Get health status of all providers."""

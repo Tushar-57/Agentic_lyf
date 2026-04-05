@@ -28,7 +28,9 @@ import {
   BookOpen,
   BarChart3,
   PieChart as PieChartIcon,
-  LineChart as LineChartIcon
+  LineChart as LineChartIcon,
+  Layers,
+  Clock3,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -40,11 +42,13 @@ interface AnalyticsData {
     daily: Array<{ date: string; count: number; agent: string }>
     weekly: Array<{ week: string; count: number }>
     by_agent: Array<{ agent: string; count: number; color: string }>
+    by_category: Array<{ category: string; raw_category: string; count: number; color: string }>
   }
   patterns: {
     most_active_hours: Array<{ hour: number; interactions: number }>
     preference_changes: Array<{ date: string; category: string; changes: number }>
     knowledge_growth: Array<{ date: string; total_entries: number; new_entries: number }>
+    category_focus: Array<{ date: string; category: string; count: number }>
   }
   insights: {
     total_interactions: number
@@ -53,6 +57,10 @@ interface AnalyticsData {
     knowledge_base_size: number
     preference_stability: number
     learning_velocity: number
+    top_knowledge_category: string
+    time_entry_records: number
+    time_entry_billable_records: number
+    avg_time_entry_minutes: number
   }
 }
 
@@ -80,7 +88,34 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       }
 
       const data = await response.json()
-      setAnalyticsData(data)
+      const normalizedData: AnalyticsData = {
+        interactions: {
+          daily: data.interactions?.daily ?? [],
+          weekly: data.interactions?.weekly ?? [],
+          by_agent: data.interactions?.by_agent ?? [],
+          by_category: data.interactions?.by_category ?? [],
+        },
+        patterns: {
+          most_active_hours: data.patterns?.most_active_hours ?? [],
+          preference_changes: data.patterns?.preference_changes ?? [],
+          knowledge_growth: data.patterns?.knowledge_growth ?? [],
+          category_focus: data.patterns?.category_focus ?? [],
+        },
+        insights: {
+          total_interactions: data.insights?.total_interactions ?? 0,
+          most_used_agent: data.insights?.most_used_agent ?? 'N/A',
+          avg_daily_interactions: data.insights?.avg_daily_interactions ?? 0,
+          knowledge_base_size: data.insights?.knowledge_base_size ?? 0,
+          preference_stability: data.insights?.preference_stability ?? 0,
+          learning_velocity: data.insights?.learning_velocity ?? 0,
+          top_knowledge_category: data.insights?.top_knowledge_category ?? 'N/A',
+          time_entry_records: data.insights?.time_entry_records ?? 0,
+          time_entry_billable_records: data.insights?.time_entry_billable_records ?? 0,
+          avg_time_entry_minutes: data.insights?.avg_time_entry_minutes ?? 0,
+        },
+      }
+
+      setAnalyticsData(normalizedData)
     } catch (error) {
       console.error('Failed to load analytics data:', error)
       setAnalyticsData(null)
@@ -157,7 +192,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       </div>
 
       {/* Key Metrics */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         <Card className="p-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center">
@@ -205,6 +240,30 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
             </div>
           </div>
         </Card>
+
+        <Card className="p-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-cyan-500 to-cyan-600 flex items-center justify-center">
+              <Layers className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold">{analyticsData.insights.top_knowledge_category}</p>
+              <p className="text-sm text-muted-foreground">Top Category</p>
+            </div>
+          </div>
+        </Card>
+
+        <Card className="p-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center">
+              <Clock3 className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold">{analyticsData.insights.time_entry_records}</p>
+              <p className="text-sm text-muted-foreground">Time Entry Records</p>
+            </div>
+          </div>
+        </Card>
       </div>
 
       {/* Charts */}
@@ -221,6 +280,10 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
           <TabsTrigger value="patterns" className="gap-2 shrink-0">
             <LineChartIcon className="w-4 h-4" />
             Patterns
+          </TabsTrigger>
+          <TabsTrigger value="categories" className="gap-2 shrink-0">
+            <Layers className="w-4 h-4" />
+            Categories
           </TabsTrigger>
           <TabsTrigger value="growth" className="gap-2 shrink-0">
             <TrendingUp className="w-4 h-4" />
@@ -331,28 +394,85 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
 
         {/* Patterns Tab */}
         <TabsContent value="patterns" className="space-y-6">
-          <Card className="p-6">
-            <h3 className="text-lg font-semibold mb-4">Preference Changes Over Time</h3>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={analyticsData.patterns.preference_changes}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis 
-                  dataKey="date" 
-                  tickFormatter={(value) => new Date(value).toLocaleDateString()}
-                />
-                <YAxis />
-                <Tooltip 
-                  labelFormatter={(value) => new Date(value).toLocaleDateString()}
-                />
-                <Line 
-                  type="monotone" 
-                  dataKey="changes" 
-                  stroke="#8b5cf6" 
-                  strokeWidth={2}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </Card>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <Card className="p-6">
+              <h3 className="text-lg font-semibold mb-4">Preference Changes Over Time</h3>
+              <ResponsiveContainer width="100%" height={300}>
+                <LineChart data={analyticsData.patterns.preference_changes}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis 
+                    dataKey="date" 
+                    tickFormatter={(value) => new Date(value).toLocaleDateString()}
+                  />
+                  <YAxis />
+                  <Tooltip 
+                    labelFormatter={(value) => new Date(value).toLocaleDateString()}
+                  />
+                  <Line 
+                    type="monotone" 
+                    dataKey="changes" 
+                    stroke="#8b5cf6" 
+                    strokeWidth={2}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </Card>
+
+            <Card className="p-6">
+              <h3 className="text-lg font-semibold mb-4">Dominant Category By Day</h3>
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={analyticsData.patterns.category_focus}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis
+                    dataKey="date"
+                    tickFormatter={(value) => new Date(value).toLocaleDateString()}
+                  />
+                  <YAxis />
+                  <Tooltip
+                    labelFormatter={(value) => new Date(value).toLocaleDateString()}
+                  />
+                  <Bar dataKey="count" fill="#06b6d4" />
+                </BarChart>
+              </ResponsiveContainer>
+            </Card>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="categories" className="space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <Card className="p-6">
+              <h3 className="text-lg font-semibold mb-4">Knowledge Categories</h3>
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={analyticsData.interactions.by_category}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="category" />
+                  <YAxis />
+                  <Tooltip />
+                  <Bar dataKey="count" radius={[6, 6, 0, 0]}>
+                    {analyticsData.interactions.by_category.map((entry) => (
+                      <Cell key={entry.raw_category} fill={entry.color} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </Card>
+
+            <Card className="p-6 space-y-4">
+              <h3 className="text-lg font-semibold">Time Entry Intelligence</h3>
+              <div className="rounded-xl border bg-secondary/40 p-4">
+                <p className="text-sm text-muted-foreground">Billable Entries</p>
+                <p className="text-2xl font-bold">{analyticsData.insights.time_entry_billable_records}</p>
+              </div>
+              <div className="rounded-xl border bg-secondary/40 p-4">
+                <p className="text-sm text-muted-foreground">Average Logged Minutes</p>
+                <p className="text-2xl font-bold">{analyticsData.insights.avg_time_entry_minutes}</p>
+              </div>
+              <div className="rounded-xl border bg-secondary/40 p-4">
+                <p className="text-sm text-muted-foreground">Most Used Agent</p>
+                <p className="text-2xl font-bold">{analyticsData.insights.most_used_agent}</p>
+              </div>
+            </Card>
+          </div>
         </TabsContent>
 
         {/* Growth Tab */}

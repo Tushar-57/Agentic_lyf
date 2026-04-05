@@ -1075,7 +1075,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className={`fixed inset-0 bg-black/95 flex z-50 relative ${isFullscreen ? 'p-0' : 'p-2 sm:p-4'}`}
+            className={`fixed inset-0 bg-black/95 flex z-50 relative ${isFullscreen ? 'p-0' : 'p-0 sm:p-4'}`}
         >
             {/* Main View Area */}
             <div className="flex-1 relative">
@@ -1275,7 +1275,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                 )}
 
                 {/* Control Overlay */}
-                <div className="absolute top-4 left-4 flex flex-col gap-2">
+                <div className="absolute left-3 top-[max(0.75rem,env(safe-area-inset-top))] flex flex-col gap-2 sm:left-4">
                     <Button
                         variant="secondary"
                         size="icon"
@@ -1404,7 +1404,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                 )}
 
                 {/* Legend Panel - Only show in graph mode */}
-                {viewMode === 'graph' && (
+                {viewMode === 'graph' && !isMobileViewport && (
                     <div className="absolute right-2 top-16 w-[min(18rem,calc(100vw-1rem))] text-white text-sm bg-black/80 rounded-lg p-3 sm:p-4 sm:right-4 sm:w-auto sm:min-w-[200px] border border-gray-700">
                         <div className="flex items-center gap-2 mb-3">
                             <Info className="w-4 h-4" />
@@ -1513,11 +1513,11 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
             {/* Control Panel */}
             <div
                 className={`bg-background border-l border-border overflow-y-auto transition-all duration-300 ${isMobileViewport
-                        ? `${isFullscreen ? 'w-80' : 'w-96'} max-w-[92vw] fixed right-0 top-0 z-40 h-full shadow-2xl`
+                        ? `${isFullscreen ? 'w-[min(24rem,100vw)]' : 'w-[min(24rem,100vw)]'} max-w-[100vw] fixed right-0 top-0 z-40 h-full shadow-2xl`
                         : `${isControlPanelOpen ? (isFullscreen ? 'w-80' : 'w-96') : 'w-0'} h-full`
                     } ${isMobileViewport && !isControlPanelOpen ? 'pointer-events-none translate-x-full' : 'translate-x-0'} ${!isControlPanelOpen && !isMobileViewport ? 'border-l-0' : ''}`}
             >
-                <div className={`p-4 space-y-4 ${!isControlPanelOpen && !isMobileViewport ? 'hidden' : ''}`}>
+                <div className={`space-y-4 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] ${!isControlPanelOpen && !isMobileViewport ? 'hidden' : ''}`}>
                     {/* Search and Filters */}
                     <Card className="p-4">
                         <h3 className="font-semibold mb-3">Filters & Search</h3>
