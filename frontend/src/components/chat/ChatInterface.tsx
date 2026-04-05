@@ -462,6 +462,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [inputValue, setInputValue] = useState('')
   const [isComposing, setIsComposing] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const messagesContainerRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   
   // User profile state
@@ -482,6 +483,18 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       title: 'Action-Ready Plans',
       description: 'Turns broad goals into next-step execution plans quickly.',
     },
+  ]
+
+  const starterTasks = [
+    'Plan tomorrow\'s top 3 priorities',
+    'Block focused work from 9:00 AM to 11:00 AM',
+    'Prepare weekly meal plan and grocery list',
+  ]
+
+  const starterHabits = [
+    'Wake up by 6:30 AM daily',
+    'Log every meal and water intake',
+    'Walk for 20 minutes after dinner',
   ]
 
   // Load user profile on mount
@@ -505,7 +518,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   }, []);
 
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    if (messagesContainerRef.current) {
+      const container = messagesContainerRef.current
+      container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' })
+      return
+    }
+
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }
 
   useEffect(() => {
@@ -572,7 +591,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       </div>
 
       {/* Messages */}
-      <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
+      <div
+        ref={messagesContainerRef}
+        data-app-scroll-region="true"
+        className="custom-scrollbar min-h-0 flex-1 overflow-y-auto"
+      >
         <AnimatePresence mode="popLayout">
           {messages.length === 0 ? (
             <motion.div
@@ -597,6 +620,44 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     <p className="mt-1 text-xs text-muted-foreground">{item.description}</p>
                   </div>
                 ))}
+              </div>
+
+              <div className="mt-6 grid w-full max-w-3xl gap-3 text-left sm:grid-cols-2">
+                <div className="rounded-2xl border border-border/70 bg-white/75 p-4 shadow-sm backdrop-blur-lg dark:bg-slate-900/65">
+                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Sample Tasks</p>
+                  <ul className="mt-2 space-y-2 text-xs text-muted-foreground">
+                    {starterTasks.map((task) => (
+                      <li key={task} className="flex items-start gap-2">
+                        <span className="mt-[2px] h-1.5 w-1.5 rounded-full bg-teal-500" />
+                        <button
+                          type="button"
+                          onClick={() => setInputValue(`Add task: ${task}`)}
+                          className="text-left transition-colors hover:text-teal-700 dark:hover:text-teal-300"
+                        >
+                          {task}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="rounded-2xl border border-border/70 bg-white/75 p-4 shadow-sm backdrop-blur-lg dark:bg-slate-900/65">
+                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Sample Habits</p>
+                  <ul className="mt-2 space-y-2 text-xs text-muted-foreground">
+                    {starterHabits.map((habit) => (
+                      <li key={habit} className="flex items-start gap-2">
+                        <span className="mt-[2px] h-1.5 w-1.5 rounded-full bg-amber-500" />
+                        <button
+                          type="button"
+                          onClick={() => setInputValue(`Track habit: ${habit}`)}
+                          className="text-left transition-colors hover:text-amber-700 dark:hover:text-amber-300"
+                        >
+                          {habit}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               </div>
             </motion.div>
           ) : (
@@ -651,15 +712,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                   return [
                     "📋 Add a new task",
                     "📊 Show my productivity stats",
-                    "🎯 Review my goals",
-                    "⚡ What should I focus on?"
+                    "🌅 Add task: Wake up by 6:30 AM",
+                    "🍽️ Add task: Plan this week's meals"
                   ]
                 case 'health':
                   return [
                     "❤️ Health check-in",
                     "💪 Log a workout",
-                    "😴 Track my sleep",
-                    "🥗 Meal planning help"
+                    "😴 Track sleep quality",
+                    "🥗 Track habit: Log every meal"
                   ]
                 case 'finance':
                   return [

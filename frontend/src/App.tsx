@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { ArrowLeft, BarChart3, Brain, Database, Menu, MessageSquare, Sparkles, User, X } from 'lucide-react'
 import { Toaster } from 'sonner'
@@ -79,6 +79,7 @@ interface DeepAgentState {
 }
 
 function App() {
+  const appShellRef = useRef<HTMLDivElement | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
@@ -251,6 +252,27 @@ function App() {
 
     document.body.style.overflow = ''
   }, [mobileSidebarOpen])
+
+  useEffect(() => {
+    const resetScrollPosition = () => {
+      window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+      document.documentElement.scrollTop = 0
+      document.body.scrollTop = 0
+
+      if (appShellRef.current) {
+        appShellRef.current.scrollTop = 0
+      }
+
+      document
+        .querySelectorAll<HTMLElement>('[data-app-scroll-region="true"]')
+        .forEach((region) => {
+          region.scrollTop = 0
+        })
+    }
+
+    const raf = window.requestAnimationFrame(resetScrollPosition)
+    return () => window.cancelAnimationFrame(raf)
+  }, [currentView])
 
   // Settings panel event listener
   useEffect(() => {
@@ -633,10 +655,13 @@ function App() {
   }
 
   return (
-    <div className={cn(
+    <div
+      ref={appShellRef}
+      className={cn(
       "relative flex min-h-[100svh] overflow-x-hidden bg-background text-foreground transition-colors duration-300",
       isDarkMode && "dark"
-    )}>
+      )}
+    >
       <div className="pointer-events-none absolute inset-0">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_12%,rgba(45,212,191,0.18),transparent_32%),radial-gradient(circle_at_82%_10%,rgba(245,158,11,0.18),transparent_34%)]" />
         <div className="absolute -top-20 left-[-88px] h-64 w-64 rounded-full bg-cyan-300/35 blur-3xl dark:bg-cyan-500/20" />
@@ -734,6 +759,7 @@ function App() {
         {/* Main Content */}
         {currentView === 'chat' && (
           <div
+            data-app-scroll-region="true"
             className={cn(
               "relative mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 px-2 pt-2 sm:px-4",
               isMobile && !isEmbedMode ? mobileContentInsetClass : "pb-2 sm:pb-4"
@@ -822,13 +848,13 @@ function App() {
         )}
         
         {currentView === 'knowledge' && (
-          <div className={cn("flex min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-3 sm:px-4 sm:pb-5 sm:pt-5", mobileContentInsetClass)}>
+          <div data-app-scroll-region="true" className={cn("flex min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-3 sm:px-4 sm:pb-5 sm:pt-5", mobileContentInsetClass)}>
             <KnowledgeManagement className="mx-auto h-full w-full max-w-[1600px]" />
           </div>
         )}
         
         {currentView === 'onboarding' && (
-          <div className={cn("flex min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-3 sm:px-4 sm:pb-5 sm:pt-5", mobileContentInsetClass)}>
+          <div data-app-scroll-region="true" className={cn("flex min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-3 sm:px-4 sm:pb-5 sm:pt-5", mobileContentInsetClass)}>
             <div className="panel-surface mx-auto h-full w-full max-w-[1600px] overflow-hidden">
               <ChatOnboarding 
                 onComplete={(data) => {
@@ -841,7 +867,7 @@ function App() {
         )}
         
         {currentView === 'analytics' && (
-          <div className={cn("flex min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-3 sm:px-4 sm:pb-5 sm:pt-5", mobileContentInsetClass)}>
+          <div data-app-scroll-region="true" className={cn("flex min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-3 sm:px-4 sm:pb-5 sm:pt-5", mobileContentInsetClass)}>
             <div className="panel-surface mx-auto h-full w-full max-w-[1600px] overflow-y-auto p-4 sm:p-5">
               <AnalyticsDashboard />
             </div>
@@ -849,7 +875,7 @@ function App() {
         )}
         
         {currentView === 'activity' && (
-          <div className={cn("flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-3 pb-4 pt-3 sm:px-4 sm:pb-5 sm:pt-5", mobileContentInsetClass)}>
+          <div data-app-scroll-region="true" className={cn("flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-3 pb-4 pt-3 sm:px-4 sm:pb-5 sm:pt-5", mobileContentInsetClass)}>
             <div className="panel-surface w-full max-w-2xl px-8 py-10 text-center">
               <div className="section-kicker mx-auto mb-3">Live Feed</div>
               <h2 className="mb-2 text-2xl font-bold">Activity</h2>
@@ -859,7 +885,7 @@ function App() {
         )}
         
         {currentView === 'profile' && (
-          <div className={cn("flex min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-3 sm:px-4 sm:pb-5 sm:pt-5", mobileContentInsetClass)}>
+          <div data-app-scroll-region="true" className={cn("flex min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-3 sm:px-4 sm:pb-5 sm:pt-5", mobileContentInsetClass)}>
             <div className="panel-surface mx-auto h-full w-full max-w-[1600px] overflow-auto">
               <ProfileWorkspace
                 onStartOnboarding={() => setCurrentView('onboarding')}
