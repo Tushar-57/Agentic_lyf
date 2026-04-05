@@ -697,7 +697,7 @@ const Scene3D: React.FC<{
             <>
                 {/* Local-only lighting and atmosphere (no external HDR dependency). */}
                 <ambientLight intensity={0.28} />
-                <hemisphereLight skyColor="#bfdbfe" groundColor="#0b1220" intensity={0.35} />
+                <hemisphereLight args={['#bfdbfe', '#0b1220', 0.35]} />
                 <pointLight position={[20, 24, 18]} intensity={0.55} color="#f8fafc" />
                 <pointLight position={[-24, -16, -18]} intensity={0.24} color="#38bdf8" />
                 <Sparkles
