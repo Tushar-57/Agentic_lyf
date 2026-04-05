@@ -102,6 +102,29 @@ class OllamaProvider(BaseLLMProvider):
         else:
             # Truncate if too large (simple approach)
             return embedding[:self.target_embedding_dimension]
+
+    def _normalize_completion_content(self, payload) -> str:
+        """Normalize completion payload to text to support provider-specific response shapes."""
+        if payload is None:
+            return ""
+
+        if isinstance(payload, str):
+            return payload.strip()
+
+        if isinstance(payload, dict):
+            for key in ("content", "response", "message", "text", "output"):
+                if key in payload:
+                    candidate = self._normalize_completion_content(payload.get(key))
+                    if candidate:
+                        return candidate
+            return str(payload).strip()
+
+        if isinstance(payload, (list, tuple)):
+            normalized_parts = [self._normalize_completion_content(part) for part in payload]
+            normalized_parts = [part for part in normalized_parts if part]
+            return "\n".join(normalized_parts)
+
+        return str(payload).strip()
     
     async def chat_completion(self, request: CompletionRequest) -> CompletionResponse:
         """Generate a chat completion using Ollama."""
@@ -140,7 +163,7 @@ class OllamaProvider(BaseLLMProvider):
             response = await chat_model.ainvoke(langchain_messages)
             
             return CompletionResponse(
-                content=response.content.strip(),
+                content=self._normalize_completion_content(getattr(response, "content", response)),
                 model=self.model
             )
             

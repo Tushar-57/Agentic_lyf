@@ -3,7 +3,7 @@ LLM service that provides a high-level interface to the LLM providers.
 """
 
 import os
-from typing import AsyncGenerator, Dict, Any, List, Optional
+from typing import AsyncGenerator, Dict, List, Optional
 
 from .base import (
     CompletionRequest, 
@@ -33,6 +33,16 @@ def _normalize_provider_exception(error: Exception) -> Exception:
     return error
 
 
+def _is_provider_unavailable_error(error: Exception) -> bool:
+    """Check whether an exception represents provider unavailability."""
+    error_text = str(error).lower()
+    return (
+        "llm_provider_unavailable" in error_text
+        or "no healthy providers available" in error_text
+        or "llm service not initialized" in error_text
+    )
+
+
 class LLMService:
     """High-level service for LLM operations with automatic provider management."""
     
@@ -54,14 +64,65 @@ class LLMService:
         except Exception as e:
             logger.error(f"Failed to initialize LLM service: {e}")
             raise
+
+    def has_valid_provider_config(self, config: Optional[LLMConfig] = None) -> bool:
+        """Return True when at least one configured provider can be initialized."""
+        effective_config = config or self.config
+        return (
+            effective_config.validate_provider_config(effective_config.provider)
+            or (
+                effective_config.fallback_enabled
+                and effective_config.fallback_provider
+                and effective_config.validate_provider_config(effective_config.fallback_provider)
+            )
+        )
+
+    async def _reload_from_environment(self) -> bool:
+        """Reload LLM config from env/storage and reinitialize provider factory."""
+        refreshed_config = LLMConfig.from_env(dict(os.environ))
+        self.config = refreshed_config
+        self.factory = LLMProviderFactory(refreshed_config)
+        self._initialized = False
+
+        if not self.has_valid_provider_config(refreshed_config):
+            logger.warning("No valid provider config available after reload")
+            return False
+
+        try:
+            await self.factory.initialize()
+            self._initialized = True
+            logger.info("LLM service reloaded from latest configuration")
+            return True
+        except Exception as reload_error:
+            logger.error(f"Failed to reload LLM service from config: {reload_error}")
+            return False
+
+    async def _resolve_provider(self):
+        """Resolve a healthy provider with a one-time automatic recovery attempt."""
+        if not self._initialized:
+            ready = await self._reload_from_environment()
+            if not ready:
+                raise RuntimeError("LLM_PROVIDER_UNAVAILABLE: No healthy providers available")
+
+        for attempt in range(2):
+            try:
+                return await self.factory.get_provider()
+            except Exception as provider_error:
+                normalized_error = _normalize_provider_exception(provider_error)
+
+                if attempt == 0 and _is_provider_unavailable_error(normalized_error):
+                    recovered = await self._reload_from_environment()
+                    if recovered:
+                        continue
+
+                raise normalized_error from provider_error
+
+        raise RuntimeError("LLM_PROVIDER_UNAVAILABLE: No healthy providers available")
     
     async def chat_completion(self, request: CompletionRequest) -> CompletionResponse:
         """Generate a chat completion using the active provider."""
-        if not self._initialized:
-            raise Exception("LLM service not initialized")
-        
         try:
-            provider = await self.factory.get_provider()
+            provider = await self._resolve_provider()
             return await provider.chat_completion(request)
         except Exception as e:
             logger.error(f"Chat completion failed: {e}")
@@ -70,11 +131,8 @@ class LLMService:
     
     async def chat_completion_stream(self, request: CompletionRequest) -> AsyncGenerator[str, None]:
         """Generate a streaming chat completion using the active provider."""
-        if not self._initialized:
-            raise Exception("LLM service not initialized")
-        
         try:
-            provider = await self.factory.get_provider()
+            provider = await self._resolve_provider()
             async for chunk in provider.chat_completion_stream(request):
                 yield chunk
         except Exception as e:
@@ -84,11 +142,8 @@ class LLMService:
     
     async def generate_embedding(self, request: EmbeddingRequest) -> EmbeddingResponse:
         """Generate embeddings using the active provider."""
-        if not self._initialized:
-            raise Exception("LLM service not initialized")
-        
         try:
-            provider = await self.factory.get_provider()
+            provider = await self._resolve_provider()
             return await provider.generate_embedding(request)
         except Exception as e:
             logger.error(f"Embedding generation failed: {e}")
@@ -98,16 +153,30 @@ class LLMService:
     async def health_check(self) -> Dict[LLMProviderType, HealthCheckResult]:
         """Get health status of all providers."""
         if not self._initialized:
-            raise Exception("LLM service not initialized")
+            ready = await self._reload_from_environment()
+            if not ready:
+                raise RuntimeError("LLM service not initialized")
         
         return self.factory.get_health_status()
     
     async def switch_provider(self, provider_type: LLMProviderType, skip_health_check: bool = False) -> bool:
         """Switch to a specific provider."""
         if not self._initialized:
-            raise Exception("LLM service not initialized")
+            ready = await self._reload_from_environment()
+            if not ready:
+                raise RuntimeError("LLM service not initialized")
         
         return await self.factory.switch_provider(provider_type, skip_health_check)
+
+    def is_initialized(self) -> bool:
+        """Return whether service providers are initialized and ready."""
+        return self._initialized
+
+    def set_uninitialized(self, new_config: LLMConfig) -> None:
+        """Reset service state to an uninitialized factory for new config."""
+        self.config = new_config
+        self.factory = LLMProviderFactory(new_config)
+        self._initialized = False
     
     def get_current_provider(self) -> Optional[LLMProviderType]:
         """Get the current active provider type."""
@@ -138,7 +207,14 @@ class LLMService:
         try:
             self.config = new_config
             self.factory = LLMProviderFactory(new_config)
+            self._initialized = False
+
+            if not self.has_valid_provider_config(new_config):
+                logger.warning("Updated LLM config has no valid providers; service is uninitialized")
+                return False
+
             await self.factory.initialize()
+            self._initialized = True
             logger.info("LLM service configuration updated successfully")
             return True
         except Exception as e:
@@ -160,25 +236,26 @@ _llm_service: Optional[LLMService] = None
 async def get_llm_service() -> LLMService:
     """Get the global LLM service instance."""
     global _llm_service
-    
+
+    latest_config = LLMConfig.from_env(dict(os.environ))
+
     if _llm_service is None:
-        # Create service but don't initialize if no valid providers are configured
-        config = LLMConfig.from_env(dict(os.environ))
-        
-        # Check if any provider has valid configuration
-        has_valid_provider = (
-            config.validate_provider_config(config.provider) or
-            (config.fallback_enabled and config.fallback_provider and 
-             config.validate_provider_config(config.fallback_provider))
-        )
-        
-        if not has_valid_provider:
-            logger.warning("No valid LLM provider configurations found - LLM service will be created but not initialized")
-            _llm_service = LLMService(config)
-            # Don't initialize - service will be available but not functional until provider is configured
-        else:
-            _llm_service = LLMService(config)
+        _llm_service = LLMService(latest_config)
+        if _llm_service.has_valid_provider_config(latest_config):
             await _llm_service.initialize()
+        else:
+            logger.warning(
+                "No valid LLM provider configurations found - LLM service will be created but not initialized"
+            )
+        return _llm_service
+
+    if _llm_service.config.model_dump() != latest_config.model_dump():
+        logger.info("Detected LLM configuration change; refreshing service configuration")
+        updated = await _llm_service.update_config(latest_config)
+        if not updated:
+            _llm_service.set_uninitialized(latest_config)
+    elif not _llm_service.is_initialized() and _llm_service.has_valid_provider_config(latest_config):
+        await _llm_service.update_config(latest_config)
     
     return _llm_service
 

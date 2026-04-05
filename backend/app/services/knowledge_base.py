@@ -6,6 +6,7 @@ import json
 import uuid
 import logging
 import re
+from time import monotonic
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
@@ -25,6 +26,10 @@ from .vector_store import get_vector_store
 logger = logging.getLogger(__name__)
 
 
+EMBEDDING_CACHE_KEY_FIELD = "_embedding_cache_key"
+EMBEDDING_PROVIDER_COOLDOWN_SECONDS = 30.0
+
+
 class KnowledgeBaseService:
     """Service for managing knowledge base operations and RAG functionality."""
     
@@ -32,6 +37,11 @@ class KnowledgeBaseService:
         self.user_id = user_id
         self.vector_store = get_vector_store(user_id)
         self._user_preferences: Optional[UserPreferences] = None
+        self._sync_event_index: Dict[str, str] = {}
+        self._sync_event_index_loaded = False
+        self._embedding_cache: Dict[str, List[float]] = {}
+        self._embedding_cache_loaded = False
+        self._embedding_provider_cooldown_until = 0.0
 
     def _generate_fallback_embedding(self, text: str) -> List[float]:
         """
@@ -66,6 +76,9 @@ class KnowledgeBaseService:
     async def _generate_embedding(self, text: str) -> List[float]:
         """Generate embedding for text using the configured LLM provider."""
         try:
+            if monotonic() < self._embedding_provider_cooldown_until:
+                return self._generate_fallback_embedding(text)
+
             # Check if LLM service is already initialized before trying to get it
             from ..llm import service as llm_service_module
             if not llm_service_module._llm_service or not llm_service_module._llm_service._initialized:
@@ -76,13 +89,82 @@ class KnowledgeBaseService:
             
             request = EmbeddingRequest(text=text)
             response = await llm_service.generate_embedding(request)
+            self._embedding_provider_cooldown_until = 0.0
             return response.embedding
         except ImportError as e:
             logger.warning(f"Missing dependencies for embedding generation: {e}")
             return self._generate_fallback_embedding(text)
         except Exception as e:
+            error_text = str(e).lower()
+            if "no healthy providers available" in error_text or "provider_unavailable" in error_text:
+                self._embedding_provider_cooldown_until = monotonic() + EMBEDDING_PROVIDER_COOLDOWN_SECONDS
             logger.warning(f"Embedding generation failed: {e}")
             return self._generate_fallback_embedding(text)
+
+    def _build_embedding_text(self, title: str, content: str, tags: Optional[List[str]] = None) -> str:
+        return f"{title or ''} {content or ''} {' '.join(tags or [])}".strip()
+
+    def _build_embedding_cache_key(self, embedding_text: str) -> str:
+        normalized_text = " ".join(str(embedding_text or "").split()).strip().lower() or "empty"
+        return hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
+
+    def _extract_embedding_cache_key(self, entry: KnowledgeEntry) -> str:
+        metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+        cached_key = str(metadata.get(EMBEDDING_CACHE_KEY_FIELD, "")).strip()
+        if cached_key:
+            return cached_key
+
+        fallback_text = self._build_embedding_text(entry.title, entry.content, entry.tags)
+        return self._build_embedding_cache_key(fallback_text)
+
+    def _cache_embedding_value(self, embedding_key: str, embedding: Optional[List[float]]) -> None:
+        if not embedding_key or not embedding:
+            return
+        self._embedding_cache[embedding_key] = list(embedding)
+
+    def _cache_entry_embedding(self, entry: Optional[KnowledgeEntry]) -> None:
+        if not entry or not entry.embedding:
+            return
+        self._cache_embedding_value(self._extract_embedding_cache_key(entry), entry.embedding)
+
+    async def _ensure_embedding_cache_loaded(self) -> None:
+        if self._embedding_cache_loaded:
+            return
+
+        try:
+            existing_entries = await self.get_all_entries()
+            for entry in existing_entries:
+                self._cache_entry_embedding(entry)
+        finally:
+            self._embedding_cache_loaded = True
+
+    def _preserve_embeddings_for_entry_ids(self, entry_ids: List[str]) -> None:
+        for entry_id in entry_ids:
+            entry = self.vector_store.get_entry(entry_id)
+            self._cache_entry_embedding(entry)
+
+    async def _resolve_embedding(
+        self,
+        embedding_text: str,
+        embedding_key: str,
+        existing_entry: Optional[KnowledgeEntry] = None,
+    ) -> List[float]:
+        await self._ensure_embedding_cache_loaded()
+
+        if existing_entry and existing_entry.embedding:
+            existing_key = self._extract_embedding_cache_key(existing_entry)
+            if existing_key == embedding_key:
+                resolved = list(existing_entry.embedding)
+                self._cache_embedding_value(embedding_key, resolved)
+                return resolved
+
+        cached_embedding = self._embedding_cache.get(embedding_key)
+        if cached_embedding:
+            return list(cached_embedding)
+
+        generated_embedding = await self._generate_embedding(embedding_text)
+        self._cache_embedding_value(embedding_key, generated_embedding)
+        return generated_embedding
 
     async def search_knowledge(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Search for relevant knowledge entries based on a query."""
@@ -132,6 +214,13 @@ class KnowledgeBaseService:
             The created knowledge entry
         """
         try:
+            metadata_payload = dict(metadata or {})
+
+            embedding_text = self._build_embedding_text(title, content, tags)
+            embedding_key = self._build_embedding_cache_key(embedding_text)
+
+            embedding = await self._resolve_embedding(embedding_text, embedding_key)
+
             # Generate unique ID
             entry_id = str(uuid.uuid4())
             
@@ -144,16 +233,14 @@ class KnowledgeBaseService:
                 entry_sub_type=entry_sub_type,
                 title=title,
                 content=content,
-                metadata=metadata or {},
+                metadata=metadata_payload,
                 tags=tags or []
             )
             
-            # Generate embedding for the content
-            embedding_text = f"{title} {content} {' '.join(tags or [])}"
-            embedding = await self._generate_embedding(embedding_text)
-            
             # Add to vector store
             self.vector_store.add_entry(entry, embedding)
+            self._index_sync_event_key(entry)
+            self._cache_entry_embedding(entry)
             
             logger.info(f"Created knowledge entry: {entry_id}")
             return entry
@@ -213,15 +300,29 @@ class KnowledgeBaseService:
                 updated_entry.metadata.update(metadata)
             if tags is not None:
                 updated_entry.tags = tags
+
+            if not isinstance(updated_entry.metadata, dict):
+                updated_entry.metadata = {}
+
+            embedding_text = self._build_embedding_text(
+                updated_entry.title,
+                updated_entry.content,
+                updated_entry.tags,
+            )
+            embedding_key = self._build_embedding_cache_key(embedding_text)
             
             updated_entry.updated_at = datetime.utcnow()
             
-            # Generate new embedding
-            embedding_text = f"{updated_entry.title} {updated_entry.content} {' '.join(updated_entry.tags)}"
-            embedding = await self._generate_embedding(embedding_text)
+            embedding = await self._resolve_embedding(
+                embedding_text,
+                embedding_key,
+                existing_entry=existing_entry,
+            )
             
             # Update in vector store
             self.vector_store.update_entry(updated_entry, embedding)
+            self._index_sync_event_key(updated_entry)
+            self._cache_entry_embedding(updated_entry)
             
             logger.info(f"Updated knowledge entry: {entry_id}")
             return updated_entry
@@ -240,6 +341,8 @@ class KnowledgeBaseService:
             True if deleted successfully, False otherwise
         """
         try:
+            self._preserve_embeddings_for_entry_ids([entry_id])
+            self._remove_indexed_sync_event_for_entry(entry_id)
             success = self.vector_store.remove_entry(entry_id)
             if success:
                 logger.info(f"Deleted knowledge entry: {entry_id}")
@@ -249,6 +352,26 @@ class KnowledgeBaseService:
         except Exception as e:
             logger.error(f"Failed to delete knowledge entry {entry_id}: {e}")
             return False
+
+    async def delete_entries(self, entry_ids: List[str]) -> int:
+        """Delete multiple knowledge entries in a single vector index rebuild pass."""
+        try:
+            normalized_ids = [entry_id for entry_id in entry_ids if entry_id]
+            if not normalized_ids:
+                return 0
+
+            self._preserve_embeddings_for_entry_ids(normalized_ids)
+
+            for entry_id in normalized_ids:
+                self._remove_indexed_sync_event_for_entry(entry_id)
+
+            removed = self.vector_store.remove_entries(normalized_ids)
+            if removed > 0:
+                logger.info("Deleted %d knowledge entries in bulk", removed)
+            return removed
+        except Exception as e:
+            logger.error(f"Failed to bulk delete knowledge entries: {e}")
+            return 0
     
     async def search(self, query: KnowledgeQuery) -> List[KnowledgeSearchResult]:
         """
@@ -528,16 +651,97 @@ class KnowledgeBaseService:
 
         return normalized_agent, sub_type, ["interaction", "history", normalized_agent]
 
+    def _build_time_entry_title(self, context_payload: Optional[Dict[str, Any]] = None) -> str:
+        """Build a human-meaningful title for synced time entries."""
+        payload = context_payload or {}
+
+        project_name = str(payload.get("project_name", "")).strip()
+        description = str(payload.get("description", "")).strip()
+        task_name = str(payload.get("task_name", "")).strip()
+
+        activity = task_name or description
+
+        if project_name and activity and project_name.lower() != activity.lower():
+            base_title = f"{project_name}: {activity}"
+        else:
+            base_title = activity or project_name
+
+        duration_suffix = ""
+        raw_duration = payload.get("duration_minutes")
+        try:
+            duration_minutes = int(round(float(raw_duration))) if raw_duration is not None else 0
+            if duration_minutes > 0:
+                duration_suffix = f" ({duration_minutes}m)"
+        except (TypeError, ValueError):
+            duration_suffix = ""
+
+        if base_title:
+            compact_title = base_title if len(base_title) <= 90 else f"{base_title[:87]}..."
+            return f"Time Entry - {compact_title}{duration_suffix}"
+
+        return f"Time Entry{duration_suffix}" if duration_suffix else "Time Entry"
+
+    def _build_interaction_title(
+        self,
+        category: str,
+        context_payload: Optional[Dict[str, Any]],
+    ) -> str:
+        if category == "time_entry":
+            return self._build_time_entry_title(context_payload)
+
+        title_source = category.replace("_", " ").title()
+        return f"Interaction with {title_source}"
+
+    def _extract_sync_event_key(self, entry: KnowledgeEntry) -> str:
+        metadata = entry.metadata or {}
+        context = metadata.get("context") if isinstance(metadata.get("context"), dict) else {}
+        return str(context.get("sync_event_key", "")).strip()
+
+    def _index_sync_event_key(self, entry: KnowledgeEntry) -> None:
+        if entry.entry_type != KnowledgeEntryType.INTERACTION:
+            return
+
+        sync_event_key = self._extract_sync_event_key(entry)
+        if sync_event_key:
+            self._sync_event_index[sync_event_key] = entry.entry_id
+
+    def _remove_indexed_sync_event_for_entry(self, entry_id: str) -> None:
+        stale_keys = [key for key, mapped_entry_id in self._sync_event_index.items() if mapped_entry_id == entry_id]
+        for key in stale_keys:
+            self._sync_event_index.pop(key, None)
+
+    async def _ensure_sync_event_index_loaded(self) -> None:
+        if self._sync_event_index_loaded:
+            return
+
+        try:
+            interaction_entries = await self.get_all_entries(entry_type=KnowledgeEntryType.INTERACTION)
+            self._sync_event_index = {}
+            for entry in interaction_entries:
+                self._index_sync_event_key(entry)
+        finally:
+            self._sync_event_index_loaded = True
+
     async def _find_interaction_by_sync_event_key(self, sync_event_key: str) -> Optional[KnowledgeEntry]:
         """Find an existing interaction entry by external sync key."""
-        if not sync_event_key:
+        normalized_sync_key = str(sync_event_key or "").strip()
+        if not normalized_sync_key:
             return None
 
+        await self._ensure_sync_event_index_loaded()
+
+        entry_id = self._sync_event_index.get(normalized_sync_key)
+        if entry_id:
+            entry = self.vector_store.get_entry(entry_id)
+            if entry:
+                return entry
+            self._sync_event_index.pop(normalized_sync_key, None)
+
+        # Fallback scan for robustness in case index becomes stale.
         existing_entries = await self.get_all_entries(entry_type=KnowledgeEntryType.INTERACTION)
         for entry in existing_entries:
-            metadata = entry.metadata or {}
-            context = metadata.get("context") if isinstance(metadata.get("context"), dict) else {}
-            if str(context.get("sync_event_key", "")).strip() == sync_event_key:
+            if self._extract_sync_event_key(entry) == normalized_sync_key:
+                self._sync_event_index[normalized_sync_key] = entry.entry_id
                 return entry
 
         return None
@@ -724,7 +928,7 @@ class KnowledgeBaseService:
                 context=context_payload,
             )
 
-            title_source = category.replace("_", " ").title()
+            interaction_title = self._build_interaction_title(category, context_payload)
             interaction_content = f"User: {user_input}\nAgent ({agent_type}): {agent_response}"
 
             sync_event_key = str(context_payload.get("sync_event_key", "")).strip()
@@ -733,7 +937,7 @@ class KnowledgeBaseService:
                 if existing_entry:
                     updated_entry = await self.update_entry(
                         entry_id=existing_entry.entry_id,
-                        title=f"Interaction with {title_source}",
+                        title=interaction_title,
                         content=interaction_content,
                         metadata={
                             "agent_type": agent_type,
@@ -751,7 +955,7 @@ class KnowledgeBaseService:
                 entry_type=KnowledgeEntryType.INTERACTION,
                 entry_sub_type=entry_sub_type,
                 category=category,
-                title=f"Interaction with {title_source}",
+                title=interaction_title,
                 content=interaction_content,
                 metadata={
                     "agent_type": agent_type,
@@ -821,7 +1025,22 @@ class KnowledgeBaseService:
             try:
                 import json
                 # Try to extract JSON from response
-                response_text = response.content.strip()
+                response_payload = getattr(response, "content", response)
+                if isinstance(response_payload, str):
+                    response_text = response_payload.strip()
+                elif isinstance(response_payload, dict):
+                    for key in ("content", "response", "message", "text", "output"):
+                        if key in response_payload and response_payload[key]:
+                            response_text = str(response_payload[key]).strip()
+                            break
+                    else:
+                        response_text = json.dumps(response_payload)
+                elif isinstance(response_payload, (list, tuple)):
+                    response_text = "\n".join(
+                        str(part).strip() for part in response_payload if str(part).strip()
+                    )
+                else:
+                    response_text = str(response_payload).strip()
                 
                 # Handle cases where response might have extra text
                 if '[' in response_text and ']' in response_text:
@@ -1016,7 +1235,7 @@ class KnowledgeBaseService:
             Knowledge base statistics
         """
         try:
-            all_entries = self.vector_store.get_all_entries()
+            all_entries = await self.get_all_entries()
             
             # Count by type
             entries_by_type = {}
@@ -1067,6 +1286,11 @@ class KnowledgeBaseService:
         try:
             self.vector_store.clear()
             self._user_preferences = None
+            self._sync_event_index = {}
+            self._sync_event_index_loaded = False
+            self._embedding_cache = {}
+            self._embedding_cache_loaded = False
+            self._embedding_provider_cooldown_until = 0.0
             logger.info("Cleared all knowledge base entries")
             return True
         except Exception as e:
@@ -1160,6 +1384,42 @@ class KnowledgeBaseService:
                     z = cluster_z + math.sin(local_angle) * local_radius
                     
                     positions_3d.append([x, y, z])
+
+            positions_array = np.array(positions_3d, dtype=float)
+
+            # Apply a light repulsion pass to reduce overlap in dense clusters.
+            if positions_array.shape[0] > 1:
+                min_node_distance = 2.2
+                for _ in range(12):
+                    moved = False
+                    for i in range(len(positions_array)):
+                        for j in range(i + 1, len(positions_array)):
+                            delta = positions_array[i] - positions_array[j]
+                            distance = float(np.linalg.norm(delta))
+
+                            if distance <= 1e-9:
+                                delta = np.array([
+                                    0.13 * (i + 1),
+                                    0.07 * (j + 1),
+                                    0.11 * ((i + j) + 1),
+                                ], dtype=float)
+                                distance = float(np.linalg.norm(delta))
+
+                            if distance < min_node_distance:
+                                push = (min_node_distance - distance) * 0.5
+                                direction = delta / max(distance, 1e-9)
+                                positions_array[i] += direction * push
+                                positions_array[j] -= direction * push
+                                moved = True
+
+                    if not moved:
+                        break
+
+                max_norm = float(np.max(np.linalg.norm(positions_array, axis=1)))
+                if max_norm > 0:
+                    positions_array = (positions_array / max_norm) * 35.0
+
+            positions_3d = positions_array
             
             # Create visualization data with similarity connections
             for i, (entry, position) in enumerate(zip(entries_info, positions_3d)):
@@ -1182,11 +1442,20 @@ class KnowledgeBaseService:
                         if not np.isfinite(similarity):
                             continue
 
-                        if similarity > 0.7:  # Only include high similarity connections
+                        if similarity > 0.45:
                             similarities.append({
                                 "target_id": entries_info[j].entry_id,
-                                "similarity": similarity
+                                "similarity": similarity,
                             })
+
+                similarities.sort(key=lambda value: value["similarity"], reverse=True)
+                if similarities:
+                    anchor_index = min(2, len(similarities) - 1)
+                    adaptive_floor = max(0.55, similarities[anchor_index]["similarity"] - 0.05)
+                    similarities = [
+                        edge for edge in similarities[:4]
+                        if edge["similarity"] >= adaptive_floor
+                    ]
                 
                 visualization_data = {
                     "entry_id": entry.entry_id,
@@ -1199,7 +1468,7 @@ class KnowledgeBaseService:
                     "position_3d": position if isinstance(position, list) else position.tolist(),
                     "created_at": entry.created_at.isoformat(),
                     "updated_at": entry.updated_at.isoformat(),
-                    "similarities": similarities[:5]  # Top 5 most similar entries
+                    "similarities": similarities,
                 }
                 embeddings_data.append(visualization_data)
             

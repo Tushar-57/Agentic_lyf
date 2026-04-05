@@ -21,11 +21,9 @@ from app.api.knowledge import router as knowledge_router
 from app.api.approval import router as approval_router
 from app.agents.factory import initialize_agents, AgentFactory
 from app.agents.base import AgentType
-from app.llm import service as llm_service_module
-from app.llm.service import LLMService, get_llm_service
+from app.llm.service import get_llm_service
 from app.llm.base import LLMProviderType
 from app.llm.config import LLMConfig
-from app.llm.openai_provider import OpenAIProvider
 from app.llm.ollama_provider import OllamaProvider
 from app.utils.logging import get_api_category_logger
 from app.services.config_storage import get_config_storage
@@ -362,121 +360,99 @@ async def switch_provider(request: ProviderSwitchRequest):
             raise HTTPException(status_code=400, detail="Invalid provider type")
         
         provider_type = LLMProviderType.OPENAI if request.provider == 'openai' else LLMProviderType.OLLAMA
-    
-        
-        # Create new service with updated provider preference
-        config = LLMConfig.from_env(dict(os.environ))
-        config.provider = provider_type  # Set the preferred provider
-        
-        # Import config storage to save settings
+
+        # Persist incoming provider-specific settings first.
         config_storage = get_config_storage()
-        
-        # Override config with frontend-provided values and save them
-        if request.config:
-            if provider_type == LLMProviderType.OPENAI and 'api_key' in request.config:
-                config.openai_api_key = request.config['api_key']
-                # Handle model selection
-                if 'model' in request.config:
-                    config.openai_model = request.config['model']
-                # Save OpenAI config for persistence
-                openai_config = {'api_key': request.config['api_key']}
-                if 'model' in request.config:
-                    openai_config['model'] = request.config['model']
-                config_storage.set_openai_config(openai_config)
-            elif provider_type == LLMProviderType.OLLAMA and 'endpoint' in request.config:
-                config.ollama_endpoint = request.config['endpoint']
-                # Save Ollama config for persistence
-                config_storage.set_ollama_config({'endpoint': request.config['endpoint']})
+
+        if provider_type == LLMProviderType.OPENAI:
+            existing_openai = config_storage.get_openai_config() or {}
+            merged_openai = dict(existing_openai)
+
+            provided_model = str((request.config or {}).get("model", "")).strip()
+            if provided_model:
+                merged_openai["model"] = provided_model
+
+            provided_base_url = str((request.config or {}).get("base_url", "")).strip()
+            if provided_base_url:
+                merged_openai["base_url"] = provided_base_url
+
+            if merged_openai:
+                config_storage.set_openai_config(merged_openai)
+
+        elif provider_type == LLMProviderType.OLLAMA:
+            existing_ollama = config_storage.get_ollama_config() or {}
+            merged_ollama = dict(existing_ollama)
+
+            provided_endpoint = str((request.config or {}).get("endpoint", "")).strip()
+            if provided_endpoint:
+                merged_ollama["endpoint"] = provided_endpoint
+
+            provided_model = str((request.config or {}).get("model", "")).strip()
+            if provided_model:
+                merged_ollama["model"] = provided_model
+
+            if merged_ollama:
+                config_storage.set_ollama_config(merged_ollama)
         
         # Save provider preference
         config_storage.set_provider_preference(request.provider)
-        
-        # Create new service instance
-        new_service = LLMService(config)
-        new_service._initialized = True  # Mark as initialized to bypass initialize()
-        
-        # Create and add the specific provider directly to avoid config conflicts
-        try:
-            if provider_type == LLMProviderType.OLLAMA:
-                # Create Ollama provider directly
-                provider = OllamaProvider(
-                    endpoint=config.ollama_endpoint,
-                    model=config.ollama_model,
-                    max_tokens=config.max_tokens,
-                    temperature=config.temperature
-                )
-                # Initialize Ollama provider (should not hit OpenAI)
-                await provider.initialize()
-                new_service.factory._providers[provider_type] = provider
-                new_service.factory._current_provider = provider
-                
-            elif provider_type == LLMProviderType.OPENAI:
-                # Only create OpenAI provider if API key is provided
-                if not config.openai_api_key:
-                    return {
-                        "success": False,
-                        "current_provider": "none",
-                        "message": "OpenAI API key is required to use OpenAI provider"
-                    }
 
-                openai_base_url = config.openai_base_url or "https://api.openai.com/v1"
-                openai_base_url = openai_base_url.rstrip('/')
-                models_url = openai_base_url if openai_base_url.endswith('/models') else f"{openai_base_url}/models"
+        # Build effective config after persistence changes.
+        config = LLMConfig.from_env(dict(os.environ))
+        config.provider = provider_type
+        config.fallback_provider = (
+            LLMProviderType.OPENAI if provider_type == LLMProviderType.OLLAMA else LLMProviderType.OLLAMA
+        )
 
-                connectivity_request = urllib.request.Request(
-                    models_url,
-                    headers={
-                        'Authorization': f'Bearer {config.openai_api_key}',
-                        'Content-Type': 'application/json'
-                    },
-                    method='GET'
-                )
-
-                try:
-                    with urllib.request.urlopen(connectivity_request, timeout=8) as response:
-                        if response.status >= 400:
-                            return {
-                                "success": False,
-                                "current_provider": "none",
-                                "message": f"OpenAI connectivity check failed with status {response.status}"
-                            }
-                except Exception as connectivity_error:
-                    return {
-                        "success": False,
-                        "current_provider": "none",
-                        "message": f"OpenAI connectivity check failed: {str(connectivity_error)}"
-                    }
-                
-                # Create OpenAI provider directly
-                provider = OpenAIProvider(
-                    api_key=config.openai_api_key,
-                    model=config.openai_model,
-                    max_tokens=config.max_tokens,
-                    temperature=config.temperature,
-                    base_url=config.openai_base_url
-                )
-                # Initialize the provider to test the connection
-                await provider.initialize()
-                new_service.factory._providers[provider_type] = provider
-                new_service.factory._current_provider = provider
-            
-            # Update the global service reference
-            if llm_service_module._llm_service is not None:
-                await llm_service_module._llm_service.shutdown()
-            llm_service_module._llm_service = new_service
-            
-            return {
-                "success": True,
-                "current_provider": str(provider_type),
-                "message": f"Successfully switched to {request.provider}"
-            }
-            
-        except Exception as provider_error:
+        if provider_type == LLMProviderType.OPENAI and not config.openai_api_key:
             return {
                 "success": False,
                 "current_provider": "none",
-                "message": f"Failed to create {request.provider} provider: {str(provider_error)}"
+                "message": "OpenAI API key is missing. Set OPENAI_API_KEY in environment variables."
             }
+
+        if provider_type == LLMProviderType.OLLAMA and not config.ollama_endpoint:
+            return {
+                "success": False,
+                "current_provider": "none",
+                "message": "Ollama endpoint is required to use Ollama provider"
+            }
+
+        llm_service = await get_llm_service()
+        config_updated = await llm_service.update_config(config)
+
+        if not config_updated:
+            return {
+                "success": False,
+                "current_provider": "none",
+                "message": f"Failed to initialize {request.provider} provider with current configuration"
+            }
+
+        switched = await llm_service.switch_provider(
+            provider_type,
+            # OpenAI health check defaults to config-only, so skip explicit probe to avoid false negatives.
+            skip_health_check=(provider_type == LLMProviderType.OPENAI)
+        )
+
+        if not switched:
+            current_provider = llm_service.get_current_provider()
+            current_provider_name = (
+                str(current_provider).split('.')[-1].lower() if current_provider else "none"
+            )
+            return {
+                "success": False,
+                "current_provider": current_provider_name,
+                "message": f"Provider switch to {request.provider} failed health checks"
+            }
+
+        current_provider = llm_service.get_current_provider()
+        current_provider_name = str(current_provider).split('.')[-1].lower() if current_provider else request.provider
+        
+        return {
+            "success": True,
+            "current_provider": current_provider_name,
+            "message": f"Successfully switched to {request.provider}"
+        }
             
     except Exception as e:
         print(f"Provider switch error: {e}")
@@ -492,8 +468,8 @@ async def get_llm_status():
     try:
         effective_config = LLMConfig.from_env(dict(os.environ))
 
-        # Get current service if available
-        current_service = llm_service_module._llm_service
+        # Ensure we always inspect the latest service/config state.
+        current_service = await get_llm_service()
         
         status = {
             "current_provider": None,
@@ -518,7 +494,7 @@ async def get_llm_status():
             }
         }
         
-        if current_service and current_service._initialized:
+        if current_service and current_service.is_initialized():
             current_provider_type = current_service.get_current_provider()
             if current_provider_type:
                 status["current_provider"] = str(current_provider_type).split('.')[-1].lower()
@@ -580,17 +556,30 @@ async def test_connection(request: ConnectionTestRequest):
         
         try:
             if provider_type == LLMProviderType.OPENAI:
-                # Require API key for OpenAI testing
-                api_key = request.config.get('api_key') if request.config else None
+                effective_config = LLMConfig.from_env(dict(os.environ))
+
+                provided_api_key = str((request.config or {}).get('api_key', '')).strip()
+                if provided_api_key and not any(ch.isalnum() for ch in provided_api_key):
+                    provided_api_key = ''
+
+                api_key = provided_api_key or (effective_config.openai_api_key or '').strip()
                 if not api_key:
                     return {
                         "healthy": False,
                         "error": "OpenAI API key is required for testing"
                     }
                 
-                # Use provided model or default
-                model = request.config.get('model', 'gpt-3.5-turbo') if request.config else 'gpt-3.5-turbo'
-                base_url = request.config.get('base_url', os.getenv('OPENAI_BASE_URL', 'https://api.openai.com/v1')) if request.config else os.getenv('OPENAI_BASE_URL', 'https://api.openai.com/v1')
+                # Use provided model/base_url overrides, otherwise use persisted config.
+                model = str(
+                    (request.config or {}).get('model')
+                    or effective_config.openai_model
+                    or 'gpt-3.5-turbo'
+                ).strip()
+                base_url = str(
+                    (request.config or {}).get('base_url')
+                    or effective_config.openai_base_url
+                    or os.getenv('OPENAI_BASE_URL', 'https://api.openai.com/v1')
+                ).strip()
                 base_url = base_url.rstrip('/')
                 models_url = base_url if base_url.endswith('/models') else f"{base_url}/models"
 
@@ -667,9 +656,17 @@ async def get_config():
     """Get current stored configuration."""
     try:
         config_storage = get_config_storage()
+        effective_config = LLMConfig.from_env(dict(os.environ))
+
+        openai_config = dict(config_storage.get_openai_config() or {})
+        openai_config.pop("api_key", None)
+        if effective_config.openai_api_key:
+            openai_config["api_key"] = "***configured***"
+        if not openai_config.get("model"):
+            openai_config["model"] = effective_config.openai_model
         
         return {
-            "openai": config_storage.get_openai_config(),
+            "openai": openai_config,
             "ollama": config_storage.get_ollama_config(),
             "provider_preference": config_storage.get_provider_preference()
         }
@@ -685,7 +682,14 @@ async def update_config(request: ConfigUpdateRequest):
         
         # Update configurations if provided
         if request.openai is not None:
-            config_storage.set_openai_config(request.openai)
+            openai_payload = dict(request.openai)
+            # Never persist API keys to user config files.
+            openai_payload.pop("api_key", None)
+
+            existing_openai = config_storage.get_openai_config() or {}
+            merged_openai = dict(existing_openai)
+            merged_openai.update(openai_payload)
+            config_storage.set_openai_config(merged_openai)
         
         if request.ollama is not None:
             config_storage.set_ollama_config(request.ollama)

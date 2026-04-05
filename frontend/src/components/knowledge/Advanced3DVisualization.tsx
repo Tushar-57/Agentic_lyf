@@ -142,6 +142,7 @@ interface EmbeddingDetails {
 }
 
 const POSITION_EPSILON = 1e-4
+const DEFAULT_CONNECTION_THRESHOLD = 0.72
 
 function stableHash(value: string): number {
     let hash = 2166136261
@@ -242,6 +243,61 @@ function buildStableFallbackLayout(rawPoints: EmbeddingPoint[]): EmbeddingPoint[
     })
 
     return processedPoints
+}
+
+function spreadNodesWithRepulsion(
+    points: EmbeddingPoint[],
+    minDistance: number,
+    iterations: number,
+): EmbeddingPoint[] {
+    if (points.length < 2) {
+        return points
+    }
+
+    const vectors = points.map((point) => new THREE.Vector3(...point.position_3d))
+
+    for (let iteration = 0; iteration < iterations; iteration += 1) {
+        for (let i = 0; i < vectors.length; i += 1) {
+            for (let j = i + 1; j < vectors.length; j += 1) {
+                const delta = vectors[i].clone().sub(vectors[j])
+                let distance = delta.length()
+
+                if (distance <= POSITION_EPSILON) {
+                    const jitterSeed = `${points[i].entry_id}:${points[j].entry_id}:${iteration}`
+                    delta.set(
+                        seededOffset(jitterSeed, 11, 0.35) || 0.08,
+                        seededOffset(jitterSeed, 12, 0.35) || 0.08,
+                        seededOffset(jitterSeed, 13, 0.35) || 0.08,
+                    )
+                    distance = delta.length()
+                }
+
+                if (distance < minDistance) {
+                    const pushDistance = (minDistance - distance) * 0.5
+                    const push = delta.normalize().multiplyScalar(pushDistance)
+                    vectors[i].add(push)
+                    vectors[j].sub(push)
+                }
+            }
+        }
+    }
+
+    const centroid = vectors
+        .reduce((acc, vector) => acc.add(vector), new THREE.Vector3())
+        .divideScalar(vectors.length)
+
+    const centeredVectors = vectors.map((vector) => vector.clone().sub(centroid))
+    const maxDistance = centeredVectors.reduce((max, vector) => Math.max(max, vector.length()), 1)
+    const targetRadius = 58
+    const normalizationScale = targetRadius / maxDistance
+
+    return points.map((point, index) => {
+        const stabilized = centeredVectors[index].clone().multiplyScalar(normalizationScale)
+        return {
+            ...point,
+            position_3d: [stabilized.x, stabilized.y, stabilized.z],
+        }
+    })
 }
 
 // 3D Node Component
@@ -421,72 +477,182 @@ const ConnectionLines: React.FC<{
     similarityThreshold: number
     showAllConnections: boolean
 }> = ({ points, selectedPoint, similarityThreshold, showAllConnections }) => {
-    // Robust similarity calculation
-    const calcSimilarity = (a: EmbeddingPoint, b: EmbeddingPoint) => {
+    const pointsById = useMemo(
+        () => new Map(points.map((point) => [point.entry_id, point])),
+        [points],
+    )
+
+    const hasBackendSimilarityData = useMemo(
+        () => points.some((point) => Array.isArray(point.similarities) && point.similarities.length > 0),
+        [points],
+    )
+
+    const calcFallbackSimilarity = (a: EmbeddingPoint, b: EmbeddingPoint) => {
         let similarity = 0
-        if (a.category && b.category && a.category === b.category) similarity += 0.5
+        if (a.category && b.category && a.category === b.category) {
+            similarity += 0.45
+        }
+
+        if (a.entry_type && b.entry_type && a.entry_type === b.entry_type) {
+            similarity += 0.15
+        }
+
         const tagsA = Array.isArray(a.tags) ? a.tags : []
         const tagsB = Array.isArray(b.tags) ? b.tags : []
-        const commonTags = tagsA.filter(tag => tagsB.includes(tag)).length
+        const commonTags = tagsA.filter((tag) => tagsB.includes(tag)).length
         if (tagsA.length > 0 && tagsB.length > 0) {
-            similarity += (commonTags / Math.max(tagsA.length, tagsB.length)) * 0.5
+            similarity += (commonTags / Math.max(tagsA.length, tagsB.length)) * 0.4
         }
-        return similarity
+
+        return Math.min(similarity, 1)
+    }
+
+    const distanceBetween = (a: EmbeddingPoint, b: EmbeddingPoint) => {
+        const dx = a.position_3d[0] - b.position_3d[0]
+        const dy = a.position_3d[1] - b.position_3d[1]
+        const dz = a.position_3d[2] - b.position_3d[2]
+        return Math.sqrt((dx * dx) + (dy * dy) + (dz * dz))
+    }
+
+    const getFallbackNeighbors = (source: EmbeddingPoint, maxNeighbors: number) => {
+        return points
+            .filter((point) => point.entry_id !== source.entry_id)
+            .map((point) => ({
+                target: point,
+                similarity: calcFallbackSimilarity(source, point),
+            }))
+            .filter((candidate) => candidate.similarity > 0)
+            .sort((a, b) => b.similarity - a.similarity)
+            .slice(0, maxNeighbors)
     }
 
     const connections = useMemo(() => {
         const lines: Array<{
+            key: string
             start: [number, number, number]
             end: [number, number, number]
             strength: number
             color: string
+            opacity: number
+            width: number
         }> = []
 
-        if (showAllConnections) {
-            // Show all connections above threshold
-            for (let i = 0; i < points.length; i++) {
-                for (let j = i + 1; j < points.length; j++) {
-                    const point1 = points[i]
-                    const point2 = points[j]
-                    const similarity = calcSimilarity(point1, point2)
-                    if (similarity >= similarityThreshold) {
-                        lines.push({
-                            start: point1.position_3d,
-                            end: point2.position_3d,
-                            strength: similarity,
-                            color: similarity > 0.7 ? '#4ecdc4' : '#6b7280'
-                        })
-                    }
-                }
+        const seenPairs = new Set<string>()
+        const minVisualDistance = 3
+        const maxVisualDistance = 110
+
+        const addConnection = (source: EmbeddingPoint, target: EmbeddingPoint, strength: number) => {
+            const pairKey = source.entry_id < target.entry_id
+                ? `${source.entry_id}|${target.entry_id}`
+                : `${target.entry_id}|${source.entry_id}`
+
+            if (seenPairs.has(pairKey)) {
+                return
             }
-        } else if (selectedPoint) {
-            // Show connections from selected point to similar points
-            points.forEach(point => {
-                if (point.entry_id !== selectedPoint.entry_id) {
-                    const similarity = calcSimilarity(selectedPoint, point)
-                    if (similarity >= similarityThreshold) {
-                        lines.push({
-                            start: selectedPoint.position_3d,
-                            end: point.position_3d,
-                            strength: similarity,
-                            color: similarity > 0.7 ? '#4ecdc4' : '#6b7280'
-                        })
-                    }
-                }
+
+            const distance = distanceBetween(source, target)
+            if (distance < minVisualDistance || distance > maxVisualDistance) {
+                return
+            }
+
+            seenPairs.add(pairKey)
+
+            const color = strength >= 0.85
+                ? '#34d399'
+                : strength >= 0.75
+                    ? '#60a5fa'
+                    : '#64748b'
+
+            const opacity = strength >= 0.85
+                ? 0.9
+                : strength >= 0.75
+                    ? 0.7
+                    : 0.42
+
+            lines.push({
+                key: pairKey,
+                start: source.position_3d,
+                end: target.position_3d,
+                strength,
+                color,
+                opacity,
+                width: Math.max(0.6, Math.min(2.4, strength * 2.4)),
             })
         }
+
+        if (showAllConnections) {
+            const perNodeLimit = hasBackendSimilarityData ? 3 : 2
+
+            points.forEach((point) => {
+                if (hasBackendSimilarityData && Array.isArray(point.similarities) && point.similarities.length > 0) {
+                    point.similarities
+                        .slice()
+                        .sort((a, b) => b.similarity - a.similarity)
+                        .slice(0, perNodeLimit + 2)
+                        .forEach((candidate) => {
+                            if (candidate.similarity < similarityThreshold) {
+                                return
+                            }
+                            const target = pointsById.get(candidate.target_id)
+                            if (target) {
+                                addConnection(point, target, candidate.similarity)
+                            }
+                        })
+                    return
+                }
+
+                getFallbackNeighbors(point, perNodeLimit).forEach((candidate) => {
+                    if (candidate.similarity >= similarityThreshold) {
+                        addConnection(point, candidate.target, candidate.similarity)
+                    }
+                })
+            })
+        } else if (selectedPoint) {
+            const selected = pointsById.get(selectedPoint.entry_id) || selectedPoint
+
+            if (hasBackendSimilarityData && Array.isArray(selected.similarities) && selected.similarities.length > 0) {
+                selected.similarities
+                    .slice()
+                    .sort((a, b) => b.similarity - a.similarity)
+                    .slice(0, 8)
+                    .forEach((candidate) => {
+                        if (candidate.similarity < similarityThreshold) {
+                            return
+                        }
+                        const target = pointsById.get(candidate.target_id)
+                        if (target) {
+                            addConnection(selected, target, candidate.similarity)
+                        }
+                    })
+            } else {
+                getFallbackNeighbors(selected, 4).forEach((candidate) => {
+                    if (candidate.similarity >= similarityThreshold) {
+                        addConnection(selected, candidate.target, candidate.similarity)
+                    }
+                })
+            }
+        }
+
         return lines
-    }, [points, selectedPoint?.entry_id, similarityThreshold, showAllConnections])
+    }, [
+        points,
+        pointsById,
+        selectedPoint,
+        similarityThreshold,
+        showAllConnections,
+        hasBackendSimilarityData,
+    ])
 
     return (
         <>
             {connections.map((connection, index) => (
                 <Line
-                    key={index}
+                    key={`${connection.key}:${index}`}
                     points={[connection.start, connection.end]}
-                    color={connection.strength > 0.7 ? '#44ffaa' : '#4a9eff'}
+                    color={connection.color}
+                    lineWidth={connection.width}
                     transparent
-                    opacity={connection.strength > 0.7 ? 0.8 : 0.4}
+                    opacity={connection.opacity}
                 />
             ))}
         </>
@@ -813,7 +979,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
     const [showConnections, setShowConnections] = useState(true)
     const [showAllConnections, setShowAllConnections] = useState(false)
     const [nodeSize, setNodeSize] = useState(1.15)
-    const [similarityThreshold, setSimilarityThreshold] = useState(0.3)
+    const [similarityThreshold, setSimilarityThreshold] = useState(DEFAULT_CONNECTION_THRESHOLD)
     const [animationSpeed, setAnimationSpeed] = useState(1)
     const [isFullscreen, setIsFullscreen] = useState(false)
     const [showStats, setShowStats] = useState(false)
@@ -901,10 +1067,12 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
         }
 
         if (hasMeaningfulCoordinates(rawPoints)) {
-            return normalizeSemanticPositions(rawPoints)
+            const semanticLayout = normalizeSemanticPositions(rawPoints)
+            return spreadNodesWithRepulsion(semanticLayout, 8.5, 16)
         }
 
-        return buildStableFallbackLayout(rawPoints)
+        const fallbackLayout = buildStableFallbackLayout(rawPoints)
+        return spreadNodesWithRepulsion(fallbackLayout, 9.5, 12)
     }
 
     // Process points when raw points change
@@ -1628,16 +1796,18 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                             </div>
 
                             <div>
-                                <label className="block text-sm font-medium mb-2">Similarity Threshold</label>
+                                <label className="block text-sm font-medium mb-2">Connection Threshold</label>
                                 <Slider
                                     value={[similarityThreshold]}
                                     onValueChange={(value) => setSimilarityThreshold(value[0])}
-                                    min={0.1}
-                                    max={0.9}
-                                    step={0.1}
+                                    min={0.55}
+                                    max={0.95}
+                                    step={0.01}
                                     className="w-full"
                                 />
-                                <div className="text-xs text-muted-foreground mt-1">{(similarityThreshold * 100).toFixed(0)}%</div>
+                                <div className="text-xs text-muted-foreground mt-1">
+                                    {(similarityThreshold * 100).toFixed(0)}% minimum semantic similarity
+                                </div>
                             </div>
 
                             <div>
@@ -1673,7 +1843,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                                 </div>
 
                                 <div className="flex items-center justify-between">
-                                    <label className="text-sm font-medium">All Connections</label>
+                                    <label className="text-sm font-medium">Global Connections</label>
                                     <Switch
                                         checked={showAllConnections}
                                         onCheckedChange={setShowAllConnections}

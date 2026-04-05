@@ -104,7 +104,8 @@ class LLMConfig(BaseModel):
         requested_provider = _parse_provider(env_vars.get("LLM_PROVIDER"))
         preferred_provider = _parse_provider(provider_preference)
 
-        openai_api_key = (env_vars.get("OPENAI_API_KEY") or openai_config.get("api_key") or "").strip() or None
+        # Security: API keys should come from environment variables, not persisted user config files.
+        openai_api_key = (env_vars.get("OPENAI_API_KEY") or "").strip() or None
         openai_model = (env_vars.get("OPENAI_MODEL") or openai_config.get("model") or "gpt-3.5-turbo").strip()
         openai_base_url = (env_vars.get("OPENAI_BASE_URL") or openai_config.get("base_url") or None)
 

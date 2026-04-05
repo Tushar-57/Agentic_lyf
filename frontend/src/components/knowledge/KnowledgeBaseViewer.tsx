@@ -65,6 +65,7 @@ interface KnowledgeBaseViewerProps {
 }
 
 interface DisplayKnowledgeEntry extends KnowledgeEntry {
+  displayTitle: string
   displayType: string
   displayTypeLabel: string
   displayCategory: string
@@ -119,6 +120,49 @@ const resolveEntryType = (entry: KnowledgeEntry, resolvedCategory: string): stri
   }
 
   return String(entry.entry_type || 'memory').toLowerCase()
+}
+
+const shouldUseDerivedTimeEntryTitle = (title: string): boolean => {
+  const normalized = String(title || '').trim().toLowerCase()
+  if (!normalized) {
+    return true
+  }
+
+  return normalized.startsWith('interaction with time entry')
+}
+
+const resolveDisplayTitle = (entry: KnowledgeEntry, displayType: string): string => {
+  if (displayType !== 'time_entry') {
+    return entry.title
+  }
+
+  if (!shouldUseDerivedTimeEntryTitle(entry.title)) {
+    return entry.title
+  }
+
+  const metadata = entry.metadata || {}
+  const context = (metadata.context || {}) as Record<string, any>
+
+  const project = String(context.project_name || '').trim()
+  const activity = String(context.description || context.task_name || '').trim()
+  const rawDuration = Number(context.duration_minutes)
+  const durationSuffix = Number.isFinite(rawDuration) && rawDuration > 0
+    ? ` (${Math.round(rawDuration)}m)`
+    : ''
+
+  let base = ''
+  if (project && activity && project.toLowerCase() !== activity.toLowerCase()) {
+    base = `${project}: ${activity}`
+  } else {
+    base = activity || project
+  }
+
+  if (!base) {
+    return `Time Entry${durationSuffix}`
+  }
+
+  const compact = base.length > 90 ? `${base.slice(0, 87)}...` : base
+  return `Time Entry - ${compact}${durationSuffix}`
 }
 
 type HighlightItem = {
@@ -208,15 +252,26 @@ const toKeyValueRows = (
   record: Record<string, any>,
   preferredKeys: string[],
   limit: number,
+  options?: {
+    allowFallback?: boolean
+    excludeKeys?: string[]
+  },
 ): Array<{ label: string; value: string }> => {
   if (!isRecord(record)) {
     return []
   }
 
+  const allowFallback = options?.allowFallback ?? true
+  const excludedKeys = new Set((options?.excludeKeys || []).map((key) => key.toLowerCase()))
+
   const seenKeys = new Set<string>()
   const rows: Array<{ label: string; value: string }> = []
 
   const addRow = (key: string, value: unknown) => {
+    if (excludedKeys.has(key.toLowerCase())) {
+      return
+    }
+
     if (rows.length >= limit || seenKeys.has(key)) {
       return
     }
@@ -238,6 +293,10 @@ const toKeyValueRows = (
       addRow(key, record[key])
     }
   })
+
+  if (!allowFallback) {
+    return rows
+  }
 
   Object.entries(record).forEach(([key, value]) => {
     if (rows.length >= limit || seenKeys.has(key)) {
@@ -335,66 +394,112 @@ const buildPresentation = (entry: DisplayKnowledgeEntry): EntryPresentation => {
   const durationRaw = pickFirstValue(recordSources, ['duration_minutes', 'duration', 'minutes_spent', 'minutes'])
   const duration = formatDurationMinutes(durationRaw) || null
   const project = pickFirstValue(recordSources, ['project_name', 'project', 'workspace', 'client'])
-  const task = pickFirstValue(recordSources, ['task_name', 'task', 'activity', 'title'])
+  const task = pickFirstValue(recordSources, ['task_name', 'description', 'task', 'activity', 'title'])
   const source = pickFirstValue(recordSources, ['source', 'origin'])
   const sourceAction = pickFirstValue(recordSources, ['source_action', 'action'])
   const confidence = pickFirstValue(recordSources, ['confidence', 'similarity'])
+  const startTime = pickFirstValue(recordSources, ['start_time'])
+  const endTime = pickFirstValue(recordSources, ['end_time'])
+  const billable = pickFirstValue(recordSources, ['billable'])
+  const linkedGoal = pickFirstValue(recordSources, ['linked_goal'])
+  const focusScore = pickFirstValue(recordSources, ['focus_score'])
+  const energyScore = pickFirstValue(recordSources, ['energy_score'])
 
   const highlights: HighlightItem[] = []
 
   if (entry.displayType === 'time_entry') {
+    if (task) {
+      highlights.push({ label: 'What You Did', value: formatValue(task), icon: Brain })
+    }
     if (project) {
       highlights.push({ label: 'Project', value: formatValue(project), icon: Tag })
     }
-    if (task) {
-      highlights.push({ label: 'Activity', value: formatValue(task), icon: Brain })
-    }
     if (duration) {
       highlights.push({ label: 'Duration', value: duration, icon: Clock })
+    }
+    if (entry.tags.length > 0) {
+      highlights.push({ label: 'Tags', value: entry.tags.slice(0, 3).join(', '), icon: Tag })
     }
   } else {
     if (task) {
       highlights.push({ label: 'Focus', value: formatValue(task), icon: Brain })
     }
+
+    if (source) {
+      highlights.push({ label: 'Source', value: formatValue(source), icon: Database })
+    }
+
+    if (sourceAction) {
+      highlights.push({ label: 'Action', value: formatValue(sourceAction), icon: TrendingUp })
+    }
+
+    if (confidence !== null && confidence !== undefined && confidence !== '') {
+      const numericConfidence = Number(confidence)
+      const confidenceValue = Number.isFinite(numericConfidence)
+        ? `${Math.round(numericConfidence * (numericConfidence <= 1 ? 100 : 1))}%`
+        : formatValue(confidence)
+      highlights.push({ label: 'Confidence', value: confidenceValue, icon: BarChart3 })
+    }
   }
 
-  if (source) {
-    highlights.push({ label: 'Source', value: formatValue(source), icon: Database })
-  }
+  const contentRows = entry.displayType === 'time_entry'
+    ? toKeyValueRows(
+        {
+          what_user_did: task,
+          project_name: project,
+          duration_minutes: durationRaw,
+          start_time: startTime,
+          end_time: endTime,
+        },
+        ['what_user_did', 'project_name', 'duration_minutes', 'start_time', 'end_time'],
+        6,
+        { allowFallback: false },
+      )
+    : toKeyValueRows(
+        contentRecord,
+        [
+          'project_name',
+          'task_name',
+          'duration_minutes',
+          'start_time',
+          'end_time',
+          'date',
+          'summary',
+          'notes',
+          'status',
+        ],
+        8,
+      )
 
-  if (sourceAction) {
-    highlights.push({ label: 'Action', value: formatValue(sourceAction), icon: TrendingUp })
-  }
-
-  if (confidence !== null && confidence !== undefined && confidence !== '') {
-    const numericConfidence = Number(confidence)
-    const confidenceValue = Number.isFinite(numericConfidence)
-      ? `${Math.round(numericConfidence * (numericConfidence <= 1 ? 100 : 1))}%`
-      : formatValue(confidence)
-    highlights.push({ label: 'Confidence', value: confidenceValue, icon: BarChart3 })
-  }
-
-  const contentRows = toKeyValueRows(
-    contentRecord,
-    [
-      'project_name',
-      'task_name',
-      'duration_minutes',
-      'start_time',
-      'end_time',
-      'date',
-      'summary',
-      'notes',
-      'status',
-    ],
-    8,
-  )
-
-  const metadataRows = toKeyValueRows(
-    { ...metadataRecord, ...contextRecord },
-    ['source', 'source_action', 'time_entry_id', 'agent', 'confidence'],
-    8,
-  )
+  const metadataRows = entry.displayType === 'time_entry'
+    ? toKeyValueRows(
+        {
+          billable,
+          linked_goal: linkedGoal,
+          focus_score: focusScore,
+          energy_score: energyScore,
+          tag_count: entry.tags.length,
+        },
+        ['billable', 'linked_goal', 'focus_score', 'energy_score', 'tag_count'],
+        5,
+        { allowFallback: false },
+      )
+    : toKeyValueRows(
+        { ...metadataRecord, ...contextRecord },
+        ['agent', 'agent_type', 'confidence', 'timestamp'],
+        8,
+        {
+          excludeKeys: [
+            'context',
+            'source',
+            'source_action',
+            'sync_event_key',
+            'time_entry_id',
+            'user_input_length',
+            'response_length',
+          ],
+        },
+      )
 
   return {
     summary: summary.length > 220 ? `${summary.slice(0, 217)}...` : summary,
@@ -492,9 +597,11 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
   const displayEntries: DisplayKnowledgeEntry[] = entries.map((entry) => {
     const displayCategory = resolveEntryCategory(entry)
     const displayType = resolveEntryType(entry, displayCategory)
+    const displayTitle = resolveDisplayTitle(entry, displayType)
 
     return {
       ...entry,
+      displayTitle,
       displayType,
       displayTypeLabel: toDisplayLabel(displayType),
       displayCategory,
@@ -505,6 +612,7 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
   // Filter entries based on search and filters
   const filteredEntries = displayEntries.filter(entry => {
     const matchesSearch = searchQuery === '' || 
+      entry.displayTitle.toLowerCase().includes(searchQuery.toLowerCase()) ||
       entry.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       entry.content.toLowerCase().includes(searchQuery.toLowerCase()) ||
       entry.tags.some(tag => tag.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -517,6 +625,7 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
 
   const categories = ['all', ...new Set(displayEntries.map((entry) => entry.displayCategory))]
   const types = ['all', ...new Set(displayEntries.map((entry) => entry.displayType))]
+  const totalEntriesCount = displayEntries.length
 
   const preferencesCount = displayEntries.filter((entry) =>
     entry.displayType === 'preference' || entry.displayType === 'user_preference'
@@ -658,7 +767,7 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
                 <Database className="w-5 h-5 text-white" />
               </div>
               <div>
-                <p className="text-2xl font-bold">{stats.total_entries}</p>
+                <p className="text-2xl font-bold">{totalEntriesCount}</p>
                 <p className="text-sm text-muted-foreground">Total Entries</p>
               </div>
             </div>
@@ -799,12 +908,12 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start justify-between mb-2 gap-4">
                         <div className="flex-1 min-w-0">
-                          <h3 className="font-semibold text-lg break-words">{entry.title}</h3>
+                          <h3 className="font-semibold text-lg break-words">{entry.displayTitle}</h3>
                           <div className="flex items-center gap-2 text-sm text-muted-foreground flex-wrap">
                             <Badge variant="secondary" className="text-xs">
                               {entry.displayTypeLabel}
                             </Badge>
-                            {entry.entry_sub_type && (
+                            {entry.entry_sub_type && entry.displayType !== 'time_entry' && (
                               <Badge variant="outline" className="text-xs">
                                 {toDisplayLabel(entry.entry_sub_type)}
                               </Badge>

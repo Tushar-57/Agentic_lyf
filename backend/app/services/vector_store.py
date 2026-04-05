@@ -88,7 +88,39 @@ class VectorStore:
             logger.error(f"Failed to save vector store: {e}")
             raise
     
-    def add_entry(self, entry: KnowledgeEntry, embedding: List[float]) -> None:
+    def _insert_entry_without_persist(self, entry: KnowledgeEntry, embedding: List[float]) -> None:
+        """Insert a single entry into FAISS/index metadata without persisting to disk."""
+        embedding_array = np.array([embedding], dtype=np.float32)
+        faiss.normalize_L2(embedding_array)
+
+        faiss_id = self.next_faiss_id
+        self.index.add(embedding_array)
+
+        self.entry_metadata[faiss_id] = entry
+        self.id_to_faiss_id[entry.entry_id] = faiss_id
+        self.next_faiss_id += 1
+        entry.embedding = embedding
+
+    def _rebuild_from_entries(
+        self,
+        entries_with_embeddings: List[Tuple[KnowledgeEntry, List[float]]],
+        persist: bool = True,
+    ) -> None:
+        """Rebuild the FAISS index from entries and embeddings in a single pass."""
+        self.index = faiss.IndexFlatIP(self.dimension)
+        self.entry_metadata = {}
+        self.id_to_faiss_id = {}
+        self.next_faiss_id = 0
+
+        for entry, embedding in entries_with_embeddings:
+            if not embedding:
+                continue
+            self._insert_entry_without_persist(entry, embedding)
+
+        if persist:
+            self._save_index()
+
+    def add_entry(self, entry: KnowledgeEntry, embedding: List[float], persist: bool = True) -> None:
         """
         Add a knowledge entry with its embedding to the vector store.
         
@@ -97,31 +129,17 @@ class VectorStore:
             embedding: The embedding vector for the entry
         """
         try:
-            # Normalize embedding for cosine similarity
-            embedding_array = np.array([embedding], dtype=np.float32)
-            faiss.normalize_L2(embedding_array)
-            
-            # Add to FAISS index
-            faiss_id = self.next_faiss_id
-            self.index.add(embedding_array)
-            
-            # Store metadata
-            self.entry_metadata[faiss_id] = entry
-            self.id_to_faiss_id[entry.entry_id] = faiss_id
-            self.next_faiss_id += 1
-            
-            # Update entry with embedding
-            entry.embedding = embedding
-            
-            # Save to disk
-            self._save_index()
+            self._insert_entry_without_persist(entry, embedding)
+
+            if persist:
+                self._save_index()
             
             logger.debug(f"Added entry {entry.entry_id} to vector store")
         except Exception as e:
             logger.error(f"Failed to add entry to vector store: {e}")
             raise
     
-    def update_entry(self, entry: KnowledgeEntry, embedding: List[float]) -> None:
+    def update_entry(self, entry: KnowledgeEntry, embedding: List[float], persist: bool = True) -> None:
         """
         Update an existing entry in the vector store.
         
@@ -131,18 +149,19 @@ class VectorStore:
         """
         try:
             if entry.entry_id in self.id_to_faiss_id:
-                # Remove old entry
-                self.remove_entry(entry.entry_id)
+                self.remove_entry(entry.entry_id, persist=False)
             
-            # Add updated entry
-            self.add_entry(entry, embedding)
+            self.add_entry(entry, embedding, persist=False)
+
+            if persist:
+                self._save_index()
             
             logger.debug(f"Updated entry {entry.entry_id} in vector store")
         except Exception as e:
             logger.error(f"Failed to update entry in vector store: {e}")
             raise
     
-    def remove_entry(self, entry_id: str) -> bool:
+    def remove_entry(self, entry_id: str, persist: bool = True) -> bool:
         """
         Remove an entry from the vector store.
         
@@ -155,34 +174,52 @@ class VectorStore:
         try:
             if entry_id not in self.id_to_faiss_id:
                 return False
-            
-            faiss_id = self.id_to_faiss_id[entry_id]
-            
-            # FAISS doesn't support direct removal, so we rebuild the index
-            # This is acceptable for a single-user system with moderate data
-            remaining_entries = []
-            remaining_embeddings = []
-            
-            for fid, entry in self.entry_metadata.items():
-                if fid != faiss_id and entry.embedding:
-                    remaining_entries.append(entry)
-                    remaining_embeddings.append(entry.embedding)
-            
-            # Rebuild index
-            self.index = faiss.IndexFlatIP(self.dimension)
-            self.entry_metadata = {}
-            self.id_to_faiss_id = {}
-            self.next_faiss_id = 0
-            
-            # Re-add remaining entries
-            for entry, embedding in zip(remaining_entries, remaining_embeddings):
-                self.add_entry(entry, embedding)
+
+            ids_to_remove = {entry_id}
+            remaining_entries: List[Tuple[KnowledgeEntry, List[float]]] = []
+            for entry in self.entry_metadata.values():
+                if entry.entry_id in ids_to_remove:
+                    continue
+                if entry.embedding:
+                    remaining_entries.append((entry, entry.embedding))
+
+            self._rebuild_from_entries(remaining_entries, persist=persist)
             
             logger.debug(f"Removed entry {entry_id} from vector store")
             return True
         except Exception as e:
             logger.error(f"Failed to remove entry from vector store: {e}")
             return False
+
+    def remove_entries(self, entry_ids: List[str], persist: bool = True) -> int:
+        """
+        Remove multiple entries from the vector store in a single rebuild pass.
+
+        Args:
+            entry_ids: Entry IDs to remove
+            persist: Whether to persist index to disk after rebuild
+
+        Returns:
+            Number of entries removed
+        """
+        try:
+            ids_to_remove = {entry_id for entry_id in entry_ids if entry_id in self.id_to_faiss_id}
+            if not ids_to_remove:
+                return 0
+
+            remaining_entries: List[Tuple[KnowledgeEntry, List[float]]] = []
+            for entry in self.entry_metadata.values():
+                if entry.entry_id in ids_to_remove:
+                    continue
+                if entry.embedding:
+                    remaining_entries.append((entry, entry.embedding))
+
+            self._rebuild_from_entries(remaining_entries, persist=persist)
+            logger.debug("Removed %d entries from vector store", len(ids_to_remove))
+            return len(ids_to_remove)
+        except Exception as e:
+            logger.error(f"Failed to remove entries from vector store: {e}")
+            return 0
     
     def search(self, query_embedding: List[float], k: int = 10, 
                similarity_threshold: float = 0.7) -> List[KnowledgeSearchResult]:

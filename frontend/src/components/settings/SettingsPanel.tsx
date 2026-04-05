@@ -40,9 +40,12 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   const [isTestingConnection, setIsTestingConnection] = useState(false)
   const [isTestingCurrentProvider, setIsTestingCurrentProvider] = useState(false)
   const [apiKey, setApiKey] = useState('')
+  const [hasStoredOpenAIKey, setHasStoredOpenAIKey] = useState(false)
   const [ollamaEndpoint, setOllamaEndpoint] = useState('http://localhost:11434')
   const [selectedOpenAIModel, setSelectedOpenAIModel] = useState('gpt-3.5-turbo')
   const [localProviderStatus, setLocalProviderStatus] = useState(providerStatus)
+
+  const maskedApiKeyPlaceholder = '••••••••••••••••'
 
   // Available OpenAI models
   const openAIModels = [
@@ -78,7 +81,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         
         // Load OpenAI config (but don't show the actual API key for security)
         if (config.openai?.api_key) {
-          setApiKey('••••••••••••••••') // Show placeholder if key exists
+          setApiKey(maskedApiKeyPlaceholder) // Show placeholder if key exists
+          setHasStoredOpenAIKey(true)
+        } else {
+          setApiKey('')
+          setHasStoredOpenAIKey(false)
         }
         
         // Load OpenAI model selection
@@ -125,9 +132,12 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   const handleProviderSwitch = async (provider: 'openai' | 'ollama') => {
   try {
     setIsTestingCurrentProvider(true)
+
+    const hasFreshOpenAIKey = Boolean(apiKey && apiKey !== maskedApiKeyPlaceholder)
+    const canUseStoredOpenAIKey = hasStoredOpenAIKey && apiKey === maskedApiKeyPlaceholder
     
     // Check if switching to OpenAI without API key
-    if (provider === 'openai' && (!apiKey || apiKey === '••••••••••••••••')) {
+    if (provider === 'openai' && !hasFreshOpenAIKey && !canUseStoredOpenAIKey) {
       toast.error('OpenAI API key required', {
         description: 'Please enter your OpenAI API key first'
       })
@@ -142,10 +152,15 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     }
 
     // Add API key for OpenAI provider
-    if (provider === 'openai' && apiKey && apiKey !== '••••••••••••••••') {
-      requestBody.config = { 
-        api_key: apiKey,
-        model: selectedOpenAIModel 
+    if (provider === 'openai') {
+      requestBody.config = {
+        model: selectedOpenAIModel
+      }
+      if (hasFreshOpenAIKey) {
+        requestBody.config = {
+          ...requestBody.config,
+          api_key: apiKey
+        }
       }
     } else if (provider === 'ollama') {
       requestBody.config = { endpoint: ollamaEndpoint }
@@ -195,6 +210,9 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   const testConnection = async (provider: 'openai' | 'ollama') => {
   try {
     setIsTestingConnection(true)
+
+    const hasFreshOpenAIKey = Boolean(apiKey && apiKey !== maskedApiKeyPlaceholder)
+    const canUseStoredOpenAIKey = hasStoredOpenAIKey && apiKey === maskedApiKeyPlaceholder
     
     const requestBody = {
       provider,
@@ -203,15 +221,20 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
     // Add configuration based on provider
     if (provider === 'openai') {
-      if (!apiKey || apiKey === '••••••••••••••••') {
+      if (!hasFreshOpenAIKey && !canUseStoredOpenAIKey) {
         toast.error('OpenAI API key required', {
           description: 'Please enter your OpenAI API key first'
         })
         return
       }
       requestBody.config = { 
-        api_key: apiKey,
         model: selectedOpenAIModel 
+      }
+      if (hasFreshOpenAIKey) {
+        requestBody.config = {
+          ...requestBody.config,
+          api_key: apiKey
+        }
       }
     } else if (provider === 'ollama') {
       requestBody.config = { endpoint: ollamaEndpoint }
@@ -396,7 +419,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                             variant="outline" 
                             size="sm" 
                             onClick={() => testConnection('openai')}
-                            disabled={isTestingConnection || !apiKey || apiKey === '••••••••••••••••'}
+                            disabled={
+                              isTestingConnection ||
+                              (!(apiKey && apiKey !== maskedApiKeyPlaceholder) && !(hasStoredOpenAIKey && apiKey === maskedApiKeyPlaceholder))
+                            }
                             className="flex-1"
                           >
                             {isTestingConnection ? (
@@ -555,7 +581,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     className="w-full justify-start"
                     onClick={async () => {
                       // Save current configurations
-                      if (apiKey && apiKey !== '••••••••••••••••') {
+                      if (apiKey && apiKey !== maskedApiKeyPlaceholder) {
                         await saveConfiguration('openai', { 
                           api_key: apiKey,
                           model: selectedOpenAIModel 

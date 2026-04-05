@@ -3,6 +3,7 @@ Main Orchestrator Agent - Primary coordinator for the AI agent ecosystem.
 """
 import logging
 import re
+import json
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 from langchain_core.messages import HumanMessage, AIMessage
@@ -96,6 +97,32 @@ class OrchestratorAgent(BaseAgent):
                 r'\b(progress|development|self-improvement|personal growth)\b'
             ]
         }
+
+    def _normalize_completion_text(self, payload: Any) -> str:
+        """Normalize LLM payloads before applying string operations."""
+        if payload is None:
+            return ""
+
+        if isinstance(payload, str):
+            return payload.strip()
+
+        if isinstance(payload, dict):
+            for key in ("content", "response", "message", "text", "output"):
+                if key in payload:
+                    candidate = self._normalize_completion_text(payload.get(key))
+                    if candidate:
+                        return candidate
+            try:
+                return json.dumps(payload)
+            except Exception:
+                return str(payload).strip()
+
+        if isinstance(payload, (list, tuple)):
+            normalized_parts = [self._normalize_completion_text(item) for item in payload]
+            normalized_parts = [part for part in normalized_parts if part]
+            return "\n".join(normalized_parts)
+
+        return str(payload).strip()
     
     async def execute(self, state: AgentState):
         """Execute the orchestrator's main logic. Returns dict to merge into state for LangGraph workflow."""
@@ -420,7 +447,7 @@ class OrchestratorAgent(BaseAgent):
             )
 
             response = await llm_service.chat_completion(request)
-            response_text = response.content.strip()
+            response_text = self._normalize_completion_text(getattr(response, "content", response))
 
             # attempt to parse JSON
             try:
@@ -466,9 +493,8 @@ class OrchestratorAgent(BaseAgent):
             # Create enhanced user prompt with context
             enhanced_user_input = f"""User Query: {user_input}\n\nConversation Context:\n- Conversation ID: {context.get('conversation_id', 'New conversation')}\n- Previous interactions: {len(context.get('conversation_history', []))} messages\n- User timezone: {context.get('timezone', 'Not specified')}\n- Current time: {context.get('current_time', 'Not available')}\n\nPlease provide a comprehensive, helpful response that addresses the user's query directly."""
 
-            # Initialize LLM service if needed
-            if self.llm_service is None:
-                self.llm_service = await get_llm_service()
+            # Always refresh service reference so provider switches are immediately reflected.
+            self.llm_service = await get_llm_service()
 
             # Use the LLM service to generate a rich response
             request = CompletionRequest(
@@ -481,7 +507,7 @@ class OrchestratorAgent(BaseAgent):
             )
             
             response = await self.llm_service.chat_completion(request)
-            response_text = response.content.strip()
+            response_text = self._normalize_completion_text(getattr(response, "content", response))
             
             # Analyze the response to provide better reasoning
             response_analysis = self._analyze_response_quality(user_input, response_text)

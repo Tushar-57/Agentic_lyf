@@ -18,6 +18,7 @@ from enum import Enum
 from langchain_core.messages import HumanMessage, AIMessage
 from .base import BaseAgent, AgentType, AgentCapability, AgentState
 from .prompts import PromptLibrary, get_agent_prompt
+from .prompt_library import OrchestratorPromptLibrary
 from .registry import get_agent_registry
 from .communication import get_communication_protocol, MessageType
 from .react_factory import get_react_agent_factory
@@ -252,6 +253,32 @@ You orchestrate complex workflows by intelligently planning, delegating to speci
 
 You are the intelligent coordinator that makes the AI ecosystem greater than the sum of its parts through strategic orchestration, context management, and specialist coordination."""
 
+    def _normalize_completion_text(self, payload: Any) -> str:
+        """Normalize LLM payloads that can be string/list/dict depending on provider behavior."""
+        if payload is None:
+            return ""
+
+        if isinstance(payload, str):
+            return payload.strip()
+
+        if isinstance(payload, dict):
+            for key in ("content", "response", "message", "text", "output"):
+                if key in payload:
+                    candidate = self._normalize_completion_text(payload.get(key))
+                    if candidate:
+                        return candidate
+            try:
+                return json.dumps(payload)
+            except Exception:
+                return str(payload).strip()
+
+        if isinstance(payload, (list, tuple)):
+            normalized_parts = [self._normalize_completion_text(item) for item in payload]
+            normalized_parts = [part for part in normalized_parts if part]
+            return "\n".join(normalized_parts)
+
+        return str(payload).strip()
+
     async def execute(self, state: Union[AgentState, str, Dict[str, Any]]) -> Dict[str, Any]:
         """Enhanced execute method with deep agent patterns."""
         logger.info("=" * 80)
@@ -260,9 +287,8 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
         logger.debug("EnhancedOrchestrator.execute START")
         
         try:
-            # Initialize LLM service if needed
-            if not self.llm_service:
-                self.llm_service = await get_llm_service()
+            # Always refresh the service reference so provider switches are immediately visible.
+            self.llm_service = await get_llm_service()
             
             # Normalize state input
             normalized_state = self._normalize_state(state)
@@ -275,12 +301,45 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
             
             # Store user message in deep state
             deep_state.add_message("user", user_input)
+
+            # Pull user profile + recent knowledge context so routing reflects real user data.
+            user_preferences_dict: Dict[str, Any] = {}
+            profile_snapshot: Dict[str, Any] = {}
+            try:
+                user_preferences = await self.knowledge_base.get_user_preferences()
+                if hasattr(user_preferences, "model_dump"):
+                    user_preferences_dict = user_preferences.model_dump()
+                elif isinstance(user_preferences, dict):
+                    user_preferences_dict = user_preferences
+                profile_snapshot = self._build_profile_snapshot(user_preferences_dict)
+            except Exception as profile_error:
+                logger.warning("Failed to load user preference snapshot: %s", profile_error)
+
+            routing_context = dict(context or {})
+            try:
+                general_context = await self.knowledge_base.get_contextual_knowledge_for_agent(
+                    user_input=user_input,
+                    agent_type="general",
+                    max_results=5,
+                )
+                if isinstance(general_context, dict):
+                    routing_context["knowledge_context_summary"] = general_context.get("context_summary")
+            except Exception as context_error:
+                logger.warning("Failed to load general knowledge context: %s", context_error)
+
+            if profile_snapshot:
+                routing_context["profile_snapshot"] = profile_snapshot
             
             # Assess task complexity
             complexity = await self._assess_task_complexity(user_input)
             
             # Enhanced intent classification with complexity awareness
-            intent_result = await self._enhanced_intent_classification(user_input, context, complexity)
+            intent_result = await self._enhanced_intent_classification(
+                user_input,
+                routing_context,
+                complexity,
+                profile_snapshot,
+            )
             
             # Create strategic plan for complex tasks
             strategic_plan = None
@@ -300,14 +359,14 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
             if complexity == TaskComplexity.SIMPLE and confidence < 0.8 and target_agent == AgentType.GENERAL:
                 # Only handle directly if low confidence or explicitly GENERAL
                 logger.info("[DELEGATION DEBUG] Taking _handle_simple_task path")
-                response = await self._handle_simple_task(user_input, context, deep_state)
+                response = await self._handle_simple_task(user_input, routing_context, deep_state)
             elif complexity in [TaskComplexity.SIMPLE, TaskComplexity.MODERATE]:
                 # Delegate to specialist for domain-specific tasks
                 logger.info(f"[DELEGATION DEBUG] Taking _delegate_to_specialist path with agent={target_agent}")
                 response = await self._delegate_to_specialist(
                     target_agent,
                     user_input,
-                    context,
+                    routing_context,
                     deep_state
                 )
             else:  # COMPLEX or ADVANCED
@@ -330,7 +389,12 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
                 "complexity": complexity.value,
                 "intent": intent_result,
                 "plan": strategic_plan,
-                "execution_path": self._get_execution_path(complexity, strategic_plan)
+                "execution_path": self._get_execution_path(complexity, strategic_plan),
+                "data_points_used": {
+                    "role": profile_snapshot.get("role"),
+                    "priorities": profile_snapshot.get("priorities", [])[:3],
+                    "knowledge_context_summary": routing_context.get("knowledge_context_summary"),
+                },
             }
             
             return {
@@ -413,7 +477,8 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
         self, 
         user_input: str, 
         context: Dict[str, Any], 
-        complexity: TaskComplexity
+        complexity: TaskComplexity,
+        profile_snapshot: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Enhanced intent classification with LLM support and complexity awareness."""
         try:
@@ -426,7 +491,12 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
                 return pattern_result
             
             # For lower confidence or complex tasks, use LLM classification
-            llm_result = await self._llm_based_classification(user_input, context, complexity)
+            llm_result = await self._llm_based_classification(
+                user_input,
+                context,
+                complexity,
+                profile_snapshot,
+            )
             
             # Combine results: prefer LLM if confidence is higher
             if llm_result["confidence"] > pattern_result["confidence"]:
@@ -514,49 +584,26 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
         self, 
         user_input: str, 
         context: Dict[str, Any],
-        complexity: TaskComplexity
+        complexity: TaskComplexity,
+        profile_snapshot: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """LLM-based intent classification for complex or ambiguous requests."""
         try:
             llm_service = await get_llm_service()
             
-            # Build classification prompt with agent context
-            classification_prompt = PromptLibrary.get_intent_classification_prompt(user_input)
-            
-            # Add available agent types
-            agent_types_info = "\n".join([
-                f"- **{agent.value.upper()}**: {self._get_agent_description(agent)}"
-                for agent in AgentType if agent != AgentType.ORCHESTRATOR
-            ])
-            
-            classification_prompt += f"""
+            agent_descriptions = {
+                agent.value.upper(): self._get_agent_description(agent)
+                for agent in AgentType
+                if agent != AgentType.ORCHESTRATOR
+            }
 
-**Available Specialized Agents:**
-{agent_types_info}
-
-**Task Complexity Level:** {complexity.value}
-
-**Classification Instructions:**
-Analyze the user's request and determine which specialized agent should handle it.
-Consider:
-1. The primary intent and domain of the request
-2. The task complexity and required expertise
-3. Whether multiple agents might be needed (for complex tasks)
-4. User context and conversation history
-
-Return ONLY a JSON object in this exact format:
-{{"agent_type": "PRODUCTIVITY", "confidence": 0.86, "reason": "short explanation"}}
-
-The agent_type must be one of: PRODUCTIVITY, HEALTH, FINANCE, SCHEDULING, JOURNAL, GENERAL"""
-
-            # Add context if available
-            if context:
-                context_items = []
-                for k, v in context.items():
-                    if k not in ['conversation_history', 'state_manager']:  # Skip large objects
-                        context_items.append(f"- {k}: {v}")
-                if context_items:
-                    classification_prompt += f"\n\n**Additional Context:**\n" + "\n".join(context_items)
+            classification_prompt = OrchestratorPromptLibrary.build_intent_classification_prompt(
+                user_input=user_input,
+                complexity=complexity.value,
+                agent_descriptions=agent_descriptions,
+                context=context,
+                profile_snapshot=profile_snapshot,
+            )
 
             # Make LLM request
             request = CompletionRequest(
@@ -572,7 +619,7 @@ The agent_type must be one of: PRODUCTIVITY, HEALTH, FINANCE, SCHEDULING, JOURNA
             )
 
             response = await llm_service.chat_completion(request)
-            response_text = response.content.strip()
+            response_text = self._normalize_completion_text(getattr(response, "content", response))
 
             # Parse JSON response
             try:
@@ -648,6 +695,37 @@ The agent_type must be one of: PRODUCTIVITY, HEALTH, FINANCE, SCHEDULING, JOURNA
             AgentType.GENERAL: "General questions, casual conversation, requests that don't fit specialized domains"
         }
         return descriptions.get(agent_type, "General purpose agent")
+
+    def _build_profile_snapshot(self, user_preferences: Dict[str, Any]) -> Dict[str, Any]:
+        """Build a compact profile snapshot for routing and prompting."""
+        general = user_preferences.get("general", {}) if isinstance(user_preferences, dict) else {}
+        mentor = general.get("mentor", {}) if isinstance(general.get("mentor"), dict) else {}
+
+        active_goals: List[str] = []
+        for section in ("productivity", "health", "finance", "journal"):
+            section_data = user_preferences.get(section, {}) if isinstance(user_preferences, dict) else {}
+            goals = section_data.get("goals", []) if isinstance(section_data, dict) else []
+            for goal in goals[:2]:
+                if isinstance(goal, dict):
+                    title = str(goal.get("title", "")).strip()
+                    if title:
+                        active_goals.append(title)
+
+        priorities = general.get("priorities", []) if isinstance(general, dict) else []
+        if not isinstance(priorities, list):
+            priorities = []
+
+        return {
+            "role": general.get("role"),
+            "priorities": priorities,
+            "preferred_tone": mentor.get("style") or general.get("preferredTone"),
+            "mentor": {
+                "name": mentor.get("name"),
+                "archetype": mentor.get("archetype"),
+                "style": mentor.get("style"),
+            },
+            "active_goals": active_goals,
+        }
 
     async def _create_strategic_plan(
         self, 
@@ -917,7 +995,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
             )
             
             response = await self.llm_service.chat_completion(request)
-            return response.content
+            return self._normalize_completion_text(getattr(response, "content", response))
             
         except Exception as e:
             logger.error(f"Simple task handling failed: {e}")
@@ -1161,7 +1239,7 @@ Please create a comprehensive, well-structured response that:
             )
             
             response = await self.llm_service.chat_completion(request)
-            return response.content
+            return self._normalize_completion_text(getattr(response, "content", response))
             
         except Exception as e:
             logger.error(f"Result synthesis failed: {e}")

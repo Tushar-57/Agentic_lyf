@@ -290,6 +290,10 @@ async def clear_knowledge_base():
 
 class EmbeddingVisualizationData(BaseModel):
     """Data model for embedding visualization."""
+    class SimilarityEdge(BaseModel):
+        target_id: str
+        similarity: float
+
     entry_id: str
     title: str
     content: str
@@ -300,6 +304,7 @@ class EmbeddingVisualizationData(BaseModel):
     position_3d: List[float]  # [x, y, z] coordinates for 3D visualization
     created_at: str
     updated_at: str
+    similarities: List[SimilarityEdge] = Field(default_factory=list)
 
 
 @router.get("/embeddings/visualization", response_model=List[EmbeddingVisualizationData])
@@ -1280,15 +1285,15 @@ async def save_onboarding_data(data: OnboardingData):
     try:
         kb_service = get_knowledge_base_service()
         
-        # First, delete all existing onboarding entries to avoid duplicates
+        # First, delete existing onboarding entries in bulk to avoid repeated index rebuilds.
         all_entries = await kb_service.get_all_entries()
         user_pref_entries = [e for e in all_entries if e.entry_type == KnowledgeEntryType.USER_PREFERENCE]
-        
-        for entry in user_pref_entries:
+
+        if user_pref_entries:
             try:
-                await kb_service.delete_entry(entry.entry_id)
+                await kb_service.delete_entries([entry.entry_id for entry in user_pref_entries])
             except Exception as e:
-                logger.warning("Failed to delete entry %s: %s", entry.entry_id, e)
+                logger.warning("Failed to bulk delete onboarding entries: %s", e)
         
         # Now save new user profile
         profile_entry = await kb_service.create_entry(
@@ -1366,7 +1371,18 @@ async def get_onboarding_profile():
         user_entries = [e for e in all_entries if e.entry_type == KnowledgeEntryType.USER_PREFERENCE]
         
         if not user_entries:
-            raise HTTPException(status_code=404, detail="No onboarding profile found")
+            return {
+                "role": None,
+                "goals": [],
+                "answers": [],
+                "mentor": {},
+                "planner": {},
+                "preferences": [],
+                "preferredTone": None,
+                "coachAvatar": None,
+                "schedule": None,
+                "onboardingCompleted": False,
+            }
         
         # Reconstruct profile from entries
         profile_data = {
@@ -1424,6 +1440,7 @@ async def get_onboarding_profile():
         if profile_data["planner"]:
             profile_data["planner"]["goals"] = profile_data["goals"]
         
+        profile_data["onboardingCompleted"] = profile_data["role"] is not None
         return profile_data
         
     except HTTPException:
