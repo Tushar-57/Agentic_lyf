@@ -768,8 +768,7 @@ function App() {
           >
             {/* Chat Interface */}
             <div className={cn(
-              "min-h-0 flex-1 transition-all duration-300",
-              showDeepAgentPanel && !isMobile ? "mr-96" : ""
+              "min-h-0 min-w-0 flex-1 overflow-hidden transition-all duration-300"
             )}>
               <ChatInterface
                 messages={messages}

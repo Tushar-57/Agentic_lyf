@@ -1065,6 +1065,9 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
     }
 
     const toggleFullscreen = () => {
+        if (isMobileViewport) {
+            return
+        }
         setIsFullscreen(!isFullscreen)
     }
 
@@ -1075,10 +1078,26 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className={`fixed inset-0 bg-black/95 flex z-50 relative ${isFullscreen ? 'p-0' : 'p-0 sm:p-4'}`}
+            className={`fixed inset-0 z-50 flex bg-black/95 ${isMobileViewport ? 'p-0' : isFullscreen ? 'p-0' : 'p-0 sm:p-4'}`}
         >
             {/* Main View Area */}
-            <div className="flex-1 relative">
+            <div className="relative flex-1">
+                {isMobileViewport && (
+                    <div className="absolute inset-x-0 top-0 z-30 flex items-center justify-between px-4 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))]">
+                        <div className="rounded-full border border-white/20 bg-black/50 px-3 py-1 text-xs font-semibold tracking-[0.12em] text-white">
+                            KNOWLEDGE LANDSCAPE
+                        </div>
+                        <Button
+                            variant="secondary"
+                            onClick={onClose}
+                            className="h-9 rounded-full bg-black/55 px-3 text-white hover:bg-black/70"
+                        >
+                            <X className="mr-1 h-4 w-4" />
+                            Close
+                        </Button>
+                    </div>
+                )}
+
                 {isLoading ? (
                     <div className="flex items-center justify-center h-full">
                         <div className="text-center text-white">
@@ -1275,15 +1294,17 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                 )}
 
                 {/* Control Overlay */}
-                <div className="absolute left-3 top-[max(0.75rem,env(safe-area-inset-top))] flex flex-col gap-2 sm:left-4">
-                    <Button
-                        variant="secondary"
-                        size="icon"
-                        onClick={onClose}
-                        className="bg-black/50 hover:bg-black/70 text-white"
-                    >
-                        <X className="w-5 h-5" />
-                    </Button>
+                <div className={`absolute left-3 z-20 flex flex-col gap-2 sm:left-4 ${isMobileViewport ? 'top-[calc(3.75rem+env(safe-area-inset-top))]' : 'top-[max(0.75rem,env(safe-area-inset-top))]'}`}>
+                    {!isMobileViewport && (
+                        <Button
+                            variant="secondary"
+                            size="icon"
+                            onClick={onClose}
+                            className="bg-black/50 hover:bg-black/70 text-white"
+                        >
+                            <X className="w-5 h-5" />
+                        </Button>
+                    )}
 
                     <Button
                         variant="secondary"
@@ -1294,14 +1315,16 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                         <RotateCcw className="w-5 h-5" />
                     </Button>
 
-                    <Button
-                        variant="secondary"
-                        size="icon"
-                        onClick={toggleFullscreen}
-                        className="bg-black/50 hover:bg-black/70 text-white"
-                    >
-                        {isFullscreen ? <Minimize2 className="w-5 h-5" /> : <Maximize2 className="w-5 h-5" />}
-                    </Button>
+                    {!isMobileViewport && (
+                        <Button
+                            variant="secondary"
+                            size="icon"
+                            onClick={toggleFullscreen}
+                            className="bg-black/50 hover:bg-black/70 text-white"
+                        >
+                            {isFullscreen ? <Minimize2 className="w-5 h-5" /> : <Maximize2 className="w-5 h-5" />}
+                        </Button>
+                    )}
 
                     <Button
                         variant="secondary"
@@ -1315,7 +1338,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                 </div>
 
                 {/* Graph/List Toggle - Top Right */}
-                <div className="absolute top-2 right-2 flex gap-2 mb-4 sm:top-4 sm:right-4">
+                <div className={`absolute right-2 z-20 flex gap-2 mb-4 sm:right-4 ${isMobileViewport ? 'top-[calc(3.75rem+env(safe-area-inset-top))]' : 'top-2 sm:top-4'}`}>
                     <div className="bg-black/80 rounded-lg p-1 border border-gray-700">
                         <Button
                             variant="ghost"
@@ -1337,7 +1360,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                 </div>
 
                 {points.length > 0 && (
-                    <div className="absolute left-1/2 top-3 z-20 w-[min(40rem,calc(100vw-2rem))] -translate-x-1/2 px-2 sm:top-4 sm:px-0">
+                    <div className={`absolute left-1/2 z-20 w-[min(40rem,calc(100vw-2rem))] -translate-x-1/2 px-2 sm:px-0 ${isMobileViewport ? 'top-[calc(6.75rem+env(safe-area-inset-top))]' : 'top-3 sm:top-4'}`}>
                         {visualizationHealth.usesFallbackLayout ? (
                             <div className="rounded-lg border border-amber-400/40 bg-amber-950/70 px-3 py-2 text-xs text-amber-100 backdrop-blur-sm sm:text-sm">
                                 <div className="flex items-center gap-2 font-medium">

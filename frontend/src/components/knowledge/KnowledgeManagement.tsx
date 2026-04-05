@@ -149,8 +149,11 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
                 variant="gradient"
               >
                 <Box className="w-5 h-5" />
-                Open Knowledge Landscape
+                Open Immersive Knowledge Landscape
               </Button>
+              <p className="text-xs text-muted-foreground">
+                On mobile, the landscape opens in a fullscreen overlay with dedicated controls.
+              </p>
             </motion.div>
           </TabsContent>
 

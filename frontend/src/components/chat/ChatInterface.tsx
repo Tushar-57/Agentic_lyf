@@ -332,7 +332,7 @@ const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLas
 
       {/* Message Content */}
       <div className={cn(
-        "flex flex-col max-w-[92%] sm:max-w-[80%]",
+        "flex min-w-0 flex-col max-w-[92%] sm:max-w-[80%]",
         isUser ? "items-end" : "items-start"
       )}>
         {/* Agent Name */}
@@ -370,20 +370,20 @@ const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLas
 
         {/* Message Bubble */}
         <Card className={cn(
-          "p-3 shadow-md transition-all duration-200",
+          "max-w-full overflow-hidden p-3 shadow-md transition-all duration-200",
           isUser 
             ? "ml-auto border-primary/30 bg-gradient-to-r from-teal-700 to-cyan-600 text-white" 
             : "border-border/70 bg-card/85 hover:shadow-lg",
           message.isStreaming && "animate-pulse"
         )}>
-          <div className="prose prose-sm max-w-none dark:prose-invert">
+          <div className="prose prose-sm max-w-none break-words overflow-x-hidden dark:prose-invert">
             <ReactMarkdown 
               remarkPlugins={[remarkGfm]}
               components={{
-                p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                p: ({ children }) => <p className="mb-2 break-words last:mb-0">{children}</p>,
                 code: ({ children, className }) => (
                   <code className={cn(
-                    "px-1.5 py-0.5 rounded text-xs font-mono",
+                    "break-all px-1.5 py-0.5 rounded text-xs font-mono",
                     isUser ? "bg-primary-foreground/20" : "bg-muted",
                     className
                   )}>
@@ -392,7 +392,7 @@ const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLas
                 ),
                 pre: ({ children }) => (
                   <pre className={cn(
-                    "p-3 rounded-lg overflow-x-auto text-xs",
+                    "max-w-full whitespace-pre-wrap break-words p-3 rounded-lg overflow-x-auto text-xs",
                     isUser ? "bg-primary-foreground/20" : "bg-muted"
                   )}>
                     {children}
@@ -546,7 +546,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   }
 
   return (
-    <div className={cn("flex h-full min-h-0 flex-col overflow-hidden bg-background/40", className)}>
+    <div className={cn("flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background/40", className)}>
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border/70 bg-white/60 p-3 backdrop-blur-xl dark:bg-slate-950/50 sm:items-center sm:p-4">
         <div className="flex items-center gap-3">
@@ -594,7 +594,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       <div
         ref={messagesContainerRef}
         data-app-scroll-region="true"
-        className="custom-scrollbar min-h-0 flex-1 overflow-y-auto"
+        className="custom-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
       >
         <AnimatePresence mode="popLayout">
           {messages.length === 0 ? (
