@@ -559,7 +559,7 @@ function App() {
 
   return (
     <div className={cn(
-      "relative flex min-h-screen overflow-hidden bg-background text-foreground transition-colors duration-300",
+      "relative flex h-[100dvh] min-h-screen overflow-hidden bg-background text-foreground transition-colors duration-300",
       isDarkMode && "dark"
     )}>
       <div className="pointer-events-none absolute inset-0">
@@ -604,12 +604,12 @@ function App() {
         }}
         transition={{ duration: 0.3, ease: "easeInOut" }}
         className={cn(
-          "relative z-10 flex min-w-0 flex-1 flex-col",
-          isMobile && !isEmbedMode && "pb-16"
+          "relative z-10 flex min-h-0 min-w-0 flex-1 flex-col",
+          isMobile && !isEmbedMode && currentView !== 'chat' && "pb-16"
         )}
       >
         {isMobile && !isEmbedMode && (
-          <div className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border/70 bg-white/80 px-4 backdrop-blur-xl dark:bg-slate-950/75 lg:hidden">
+          <div className="sticky top-0 z-30 flex h-[calc(3.5rem+env(safe-area-inset-top))] items-center justify-between border-b border-border/70 bg-white/80 px-4 pt-[env(safe-area-inset-top)] backdrop-blur-xl dark:bg-slate-950/75 lg:hidden">
             <Button
               variant="ghost"
               size="icon"
@@ -655,10 +655,17 @@ function App() {
 
         {/* Main Content */}
         {currentView === 'chat' && (
-          <div className="relative flex flex-1 px-2 pb-2 pt-2 sm:px-4 sm:pb-4">
+          <div
+            className={cn(
+              "relative mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 px-2 pt-2 sm:px-4",
+              isMobile && !isEmbedMode
+                ? "pb-[calc(4.75rem+env(safe-area-inset-bottom))]"
+                : "pb-2 sm:pb-4"
+            )}
+          >
             {/* Chat Interface */}
             <div className={cn(
-              "flex-1 transition-all duration-300",
+              "min-h-0 flex-1 transition-all duration-300",
               showDeepAgentPanel && !isMobile ? "mr-96" : ""
             )}>
               <ChatInterface
@@ -667,7 +674,7 @@ function App() {
                 isLoading={isLoading}
                 currentAgent={currentAgent}
                 currentProvider={currentProvider}
-                className="h-full rounded-[28px] border border-border/70 bg-card/80 shadow-[0_24px_70px_-50px_rgba(15,23,42,0.7)] backdrop-blur-xl"
+                className="h-full w-full rounded-[28px] border border-border/70 bg-card/80 shadow-[0_24px_70px_-50px_rgba(15,23,42,0.7)] backdrop-blur-xl"
               />
             </div>
             
@@ -677,7 +684,9 @@ function App() {
                 onClick={() => setShowDeepAgentPanel(!showDeepAgentPanel)}
                 className={cn(
                   "fixed right-4 h-11 w-11 p-0 rounded-full shadow-lg z-30 transition-all sm:right-6 sm:h-12 sm:w-12",
-                  isMobile && !isEmbedMode ? "bottom-20" : "bottom-4 sm:bottom-20",
+                  isMobile && !isEmbedMode
+                    ? "bottom-[calc(4.5rem+env(safe-area-inset-bottom))]"
+                    : "bottom-4 sm:bottom-20",
                   "bg-gradient-to-r from-teal-700 to-cyan-600 text-white hover:from-teal-800 hover:to-cyan-700",
                   showDeepAgentPanel && !isMobile ? "right-[25rem]" : "right-4 sm:right-6"
                 )}
@@ -703,11 +712,11 @@ function App() {
                 exit={isMobile ? { y: 80, opacity: 0 } : { x: 384, opacity: 0 }}
                 transition={{ duration: 0.3, ease: "easeInOut" }}
                 className={cn(
-                  "bg-background/95 backdrop-blur-xl supports-[backdrop-filter]:bg-background/70",
+                  "flex h-full flex-col bg-background/95 backdrop-blur-xl supports-[backdrop-filter]:bg-background/70",
                   isMobile
                     ? isEmbedMode
                       ? "fixed inset-0 z-40 w-full border-t"
-                      : "fixed inset-x-0 bottom-16 top-14 z-40 w-full border-t"
+                      : "fixed inset-x-0 bottom-[calc(4rem+env(safe-area-inset-bottom))] top-[calc(3.5rem+env(safe-area-inset-top))] z-40 w-full border-t"
                     : "w-96 rounded-l-3xl border-l border-border/70"
                 )}
               >
@@ -722,7 +731,7 @@ function App() {
                     ✕
                   </Button>
                 </div>
-                <div className="h-[calc(100dvh-8rem)] overflow-y-auto md:h-[calc(100vh-8rem)]">
+                <div className="min-h-0 flex-1 overflow-y-auto">
                   <DeepAgentStatus
                     agentState={deepAgentState}
                     onApprovalResponse={handleApprovalResponse}
@@ -737,14 +746,14 @@ function App() {
         )}
         
         {currentView === 'knowledge' && (
-          <div className="flex-1 px-3 pb-4 pt-3 sm:px-4 sm:pb-5">
-            <KnowledgeManagement className="h-full" />
+          <div className="flex min-h-0 flex-1 px-3 pb-4 pt-3 sm:px-4 sm:pb-5">
+            <KnowledgeManagement className="mx-auto h-full w-full max-w-[1600px]" />
           </div>
         )}
         
         {currentView === 'onboarding' && (
-          <div className="flex-1 px-3 pb-4 pt-3 sm:px-4 sm:pb-5">
-            <div className="panel-surface h-full overflow-hidden">
+          <div className="flex min-h-0 flex-1 px-3 pb-4 pt-3 sm:px-4 sm:pb-5">
+            <div className="panel-surface mx-auto h-full w-full max-w-[1600px] overflow-hidden">
               <ChatOnboarding 
                 onComplete={(data) => {
                   console.log('Onboarding completed:', data);
@@ -756,7 +765,7 @@ function App() {
         )}
         
         {currentView === 'analytics' && (
-          <div className="flex flex-1 items-center justify-center px-3 pb-4 pt-3 sm:px-4 sm:pb-5">
+          <div className="flex min-h-0 flex-1 items-center justify-center px-3 pb-4 pt-3 sm:px-4 sm:pb-5">
             <div className="panel-surface w-full max-w-2xl px-8 py-10 text-center">
               <div className="section-kicker mx-auto mb-3">Insight Studio</div>
               <h2 className="mb-2 text-2xl font-bold">Analytics</h2>
@@ -766,7 +775,7 @@ function App() {
         )}
         
         {currentView === 'activity' && (
-          <div className="flex flex-1 items-center justify-center px-3 pb-4 pt-3 sm:px-4 sm:pb-5">
+          <div className="flex min-h-0 flex-1 items-center justify-center px-3 pb-4 pt-3 sm:px-4 sm:pb-5">
             <div className="panel-surface w-full max-w-2xl px-8 py-10 text-center">
               <div className="section-kicker mx-auto mb-3">Live Feed</div>
               <h2 className="mb-2 text-2xl font-bold">Activity</h2>
@@ -776,8 +785,8 @@ function App() {
         )}
         
         {currentView === 'profile' && (
-          <div className="flex-1 px-3 pb-4 pt-3 sm:px-4 sm:pb-5">
-            <div className="panel-surface h-full overflow-auto">
+          <div className="flex min-h-0 flex-1 px-3 pb-4 pt-3 sm:px-4 sm:pb-5">
+            <div className="panel-surface mx-auto h-full w-full max-w-[1600px] overflow-auto">
               <ProfileWorkspace
                 onStartOnboarding={() => setCurrentView('onboarding')}
                 onContinueToChat={() => setCurrentView('chat')}
@@ -788,7 +797,7 @@ function App() {
       </motion.div>
 
       {isMobile && !isEmbedMode && (
-        <nav className="fixed bottom-0 left-0 right-0 z-30 grid grid-cols-5 border-t border-border/70 bg-white/90 px-1 py-1 backdrop-blur-xl dark:bg-slate-950/85 lg:hidden">
+        <nav className="fixed bottom-0 left-0 right-0 z-30 grid grid-cols-5 border-t border-border/70 bg-white/90 px-1 pb-[max(0.25rem,env(safe-area-inset-bottom))] pt-1 backdrop-blur-xl dark:bg-slate-950/85 lg:hidden">
           {mobileViews.map((view) => {
             const isActive = currentView === view.id
             return (

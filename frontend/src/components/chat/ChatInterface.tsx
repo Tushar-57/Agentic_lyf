@@ -527,7 +527,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   }
 
   return (
-    <div className={cn("flex h-full flex-col overflow-hidden bg-background/40", className)}>
+    <div className={cn("flex h-full min-h-0 flex-col overflow-hidden bg-background/40", className)}>
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border/70 bg-white/60 p-3 backdrop-blur-xl dark:bg-slate-950/50 sm:items-center sm:p-4">
         <div className="flex items-center gap-3">
@@ -572,7 +572,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
       </div>
 
       {/* Messages */}
-      <div className="custom-scrollbar flex-1 overflow-y-auto">
+      <div className="custom-scrollbar min-h-0 flex-1 overflow-y-auto">
         <AnimatePresence mode="popLayout">
           {messages.length === 0 ? (
             <motion.div

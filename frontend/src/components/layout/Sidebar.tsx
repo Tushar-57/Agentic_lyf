@@ -152,7 +152,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       animate={isMobile ? { x: mobileOpen ? 0 : -300, width: 280 } : { width: isCollapsed ? 80 : 280 }}
       transition={{ duration: 0.3, ease: "easeInOut" }}
       className={cn(
-        "relative flex h-full flex-col border-r border-border/70 bg-white/75 backdrop-blur-xl dark:bg-slate-950/70",
+        "relative flex h-[100dvh] flex-col border-r border-border/70 bg-white/75 backdrop-blur-xl dark:bg-slate-950/70",
         isMobile && "fixed inset-y-0 left-0 z-50 shadow-2xl",
         className
       )}
