@@ -235,6 +235,21 @@ async def chat_endpoint(request: ChatRequest):
             logger.info(f"[DEBUG] Unexpected result type: {type(result)} value: {result}")
             response = str(result)
             reasoning = None
+
+        if response is None or (isinstance(response, str) and not response.strip()):
+            response = (
+                "I could not generate a complete response right now. "
+                "Please try again in a moment, or verify your AI provider settings."
+            )
+
+        if isinstance(response, str):
+            lowered = response.lower()
+            if "no healthy providers available" in lowered or "llm service not initialized" in lowered:
+                response = (
+                    "I cannot reach an AI provider right now. "
+                    "Please connect OpenAI in settings or ensure Ollama is running, then retry your message."
+                )
+
         logger.info(f"[DEBUG] Final response type: {type(response)} value: {response}")
         logger.info(f"[DEBUG] Final reasoning type: {type(reasoning)} value: {reasoning}")
         return ChatResponse(
@@ -245,10 +260,19 @@ async def chat_endpoint(request: ChatRequest):
         )
     except Exception as e:
         logging.error("Orchestrator Error: %s", e)
+        error_text = str(e)
+        if "No healthy providers available" in error_text or "LLM service not initialized" in error_text:
+            user_facing_message = (
+                "I cannot reach an AI provider right now. "
+                "Please connect OpenAI in settings or ensure Ollama is running, then retry your message."
+            )
+        else:
+            user_facing_message = f"I'm the orchestrator agent. I encountered an issue: {error_text}."
+
         return ChatResponse(
-            response=f"I'm the orchestrator agent. I encountered an issue: {str(e)}.",
+            response=user_facing_message,
             agent="orchestrator",
-            reasoning=f"Error: {str(e)}",
+            reasoning=f"Error: {error_text}",
             timestamp=datetime.now()
         )
 

@@ -3,6 +3,7 @@ LangGraph workflow for multi-agent orchestration and structured logging.
 """
 import logging
 import json
+from typing import Any
 from langgraph.graph import START, StateGraph, END
 from datetime import datetime
 
@@ -110,12 +111,13 @@ class AgentGraphWorkflow:
             # Extract information from state
             user_input = state.get("user_input", "")
             raw_response = state.get("response", "")
+            raw_response_text = self._normalize_response_text(raw_response)
             reasoning = state.get("reasoning", {})
             context = state.get("context", {})
             conversation_id = state.get("conversation_id", "")
             
             # Don't format if response is already well-formatted or if it's an error
-            if not raw_response or "I apologize" in raw_response:
+            if not raw_response_text or "i apologize" in raw_response_text.lower():
                 return state
             
             # Get the final agent that provided the response
@@ -124,7 +126,7 @@ class AgentGraphWorkflow:
             # Create formatting prompt based on the agent type and context
             formatting_prompt = self._build_formatting_prompt(
                 user_input=user_input,
-                raw_response=raw_response,
+                raw_response=raw_response_text,
                 final_agent=final_agent,
                 reasoning=reasoning,
                 context=context
@@ -137,7 +139,7 @@ class AgentGraphWorkflow:
                 request = CompletionRequest(
                     messages=[
                         ChatMessage(role="system", content=formatting_prompt),
-                        ChatMessage(role="user", content=f"Please enhance and format this response:\n\n{raw_response}")
+                        ChatMessage(role="user", content=f"Please enhance and format this response:\n\n{raw_response_text}")
                     ],
                     max_tokens=800,
                     temperature=0.3
@@ -145,19 +147,11 @@ class AgentGraphWorkflow:
                 
                 formatted_response = await llm_service.chat_completion(request)
                 
-                # Handle various response types from LLM
-                if hasattr(formatted_response, 'content'):
-                    content = formatted_response.content
-                    if isinstance(content, dict):
-                        # If content is dict, try to extract text/message
-                        enhanced_response = content.get('content', content.get('message', str(content)))
-                    elif isinstance(content, str):
-                        enhanced_response = content.strip()
-                    else:
-                        enhanced_response = str(content).strip()
-                else:
-                    # Fallback if no content attribute
-                    enhanced_response = str(formatted_response).strip()
+                content_payload = getattr(formatted_response, "content", formatted_response)
+                enhanced_response = self._normalize_response_text(content_payload)
+
+                if not enhanced_response:
+                    enhanced_response = self._apply_basic_formatting(raw_response_text, final_agent, user_input)
                 
                 # Update the state with the enhanced response
                 state["response"] = enhanced_response
@@ -168,7 +162,7 @@ class AgentGraphWorkflow:
             except Exception as e:
                 logger.warning(f"LLM formatting failed: {e}, using fallback formatting")
                 # Fallback: basic formatting
-                enhanced_response = self._apply_basic_formatting(raw_response, final_agent, user_input)
+                enhanced_response = self._apply_basic_formatting(raw_response_text, final_agent, user_input)
                 state["response"] = enhanced_response
                 state["formatting_applied"] = True
             
@@ -221,6 +215,32 @@ Now enhance the following response:"""
 
         return base_prompt
 
+    def _normalize_response_text(self, payload: Any) -> str:
+        """Normalize arbitrary workflow/LLM payloads to display-safe text."""
+        if payload is None:
+            return ""
+
+        if isinstance(payload, str):
+            return payload.strip()
+
+        if isinstance(payload, dict):
+            for key in ("content", "response", "message", "text", "output"):
+                if key in payload:
+                    candidate = self._normalize_response_text(payload.get(key))
+                    if candidate:
+                        return candidate
+            try:
+                return json.dumps(payload)
+            except Exception:
+                return str(payload).strip()
+
+        if isinstance(payload, list):
+            normalized_parts = [self._normalize_response_text(item) for item in payload]
+            normalized_parts = [part for part in normalized_parts if part]
+            return "\n".join(normalized_parts)
+
+        return str(payload).strip()
+
     def _apply_basic_formatting(self, raw_response: str, final_agent: str, user_input: str) -> str:
         """Apply basic formatting when LLM formatting fails."""
         
@@ -235,16 +255,20 @@ Now enhance the following response:"""
             "general": {"emoji": "🤖", "style": "Helpful and adaptable"}
         }
         
+        raw_text = self._normalize_response_text(raw_response)
+        if not raw_text:
+            raw_text = "I could not generate a response right now."
+
         style = agent_styles.get(final_agent, agent_styles["general"])
         
         # Basic enhancement
-        if len(raw_response.strip()) < 50:
+        if len(raw_text) < 50:
             # Short response - add context
-            enhanced = f"{style['emoji']} {raw_response}\n\nIs there anything else I can help you with?"
+            enhanced = f"{style['emoji']} {raw_text}\n\nIs there anything else I can help you with?"
         else:
             # Longer response - just add emoji and ensure it ends well
-            enhanced = f"{style['emoji']} {raw_response}"
-            if not raw_response.endswith(("?", "!", ".")):
+            enhanced = f"{style['emoji']} {raw_text}"
+            if not raw_text.endswith(("?", "!", ".")):
                 enhanced += "."
             enhanced += "\n\nLet me know if you need any clarification or have other questions!"
         

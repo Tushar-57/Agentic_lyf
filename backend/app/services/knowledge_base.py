@@ -335,91 +335,192 @@ class KnowledgeBaseService:
             User preferences object
         """
         try:
-            if self._user_preferences is None:
-                # Try to load from knowledge base first (onboarding data)
-                try:
-                    all_entries = await self.get_all_entries()
-                    user_entries = [e for e in all_entries if e.entry_type == KnowledgeEntryType.USER_PREFERENCE]
-                    
-                    if user_entries:
-                        # Build preferences from knowledge base entries
-                        prefs_dict = {
-                            "productivity": {},
-                            "health": {},
-                            "finance": {},
-                            "journal": {},
-                            "llm_provider": {},
-                            "general": {}
-                        }
-                        
-                        for entry in user_entries:
-                            if entry.entry_sub_type == KnowledgeEntrySubType.USER_PROFILE:
-                                metadata = entry.metadata or {}
-                                # Add onboarding data to general preferences
-                                prefs_dict["general"]["role"] = metadata.get("role", "professional")
-                                prefs_dict["general"]["priorities"] = metadata.get("preferences", [])
-                                prefs_dict["general"]["mentor"] = metadata.get("mentor", {})
-                                prefs_dict["general"]["onboarding_completed"] = metadata.get("onboarding_completed", True)
-                                
-                            elif entry.entry_sub_type == KnowledgeEntrySubType.GOAL:
-                                metadata = entry.metadata or {}
-                                # Add goals to relevant category
-                                category = metadata.get("category", "general").lower()
-                                if category == "career":
-                                    if "goals" not in prefs_dict["productivity"]:
-                                        prefs_dict["productivity"]["goals"] = []
-                                    prefs_dict["productivity"]["goals"].append({
-                                        "title": entry.title,
-                                        "priority": metadata.get("priority", "Medium"),
-                                        "milestones": metadata.get("milestones", [])
-                                    })
-                                elif category == "health":
-                                    if "goals" not in prefs_dict["health"]:
-                                        prefs_dict["health"]["goals"] = []
-                                    prefs_dict["health"]["goals"].append({
-                                        "title": entry.title,
-                                        "priority": metadata.get("priority", "Medium"),
-                                        "milestones": metadata.get("milestones", [])
-                                    })
-                                    
-                            elif entry.entry_sub_type == KnowledgeEntrySubType.SCHEDULE:
-                                metadata = entry.metadata or {}
-                                availability = metadata.get("availability", {})
-                                prefs_dict["general"]["work_hours"] = f"{availability.get('workHours', {}).get('start', '09:00')}-{availability.get('workHours', {}).get('end', '17:00')}"
-                                prefs_dict["general"]["timezone"] = availability.get("timezone", "UTC")
-                                prefs_dict["journal"]["check_in_time"] = availability.get("checkIn", {}).get("preferredTime", "09:00")
-                        
-                        logger.info(f"Loaded user preferences from knowledge base: {prefs_dict}")
+            if self._user_preferences is not None:
+                return self._user_preferences
+
+            # Try to hydrate preferences from persisted knowledge entries first.
+            try:
+                all_entries = await self.get_all_entries()
+                prefs_dict = UserPreferences().model_dump()
+                loaded_from_knowledge = False
+
+                system_pref_entries = [
+                    entry
+                    for entry in all_entries
+                    if entry.entry_type == KnowledgeEntryType.PREFERENCE
+                    and str(entry.category).strip().lower() == "system"
+                    and str(entry.title).strip().lower() == "user preferences"
+                ]
+
+                if system_pref_entries:
+                    latest_system_entry = max(system_pref_entries, key=lambda entry: entry.updated_at)
+                    try:
+                        snapshot = json.loads(latest_system_entry.content) if latest_system_entry.content else {}
+                        if isinstance(snapshot, dict):
+                            for section, value in snapshot.items():
+                                if (
+                                    section in prefs_dict
+                                    and isinstance(prefs_dict[section], dict)
+                                    and isinstance(value, dict)
+                                ):
+                                    prefs_dict[section].update(value)
+                                else:
+                                    prefs_dict[section] = value
+                            loaded_from_knowledge = True
+                    except Exception as snapshot_error:
+                        logger.warning(f"Failed to parse system preference snapshot: {snapshot_error}")
+
+                user_entries = [
+                    entry
+                    for entry in all_entries
+                    if entry.entry_type == KnowledgeEntryType.USER_PREFERENCE
+                ]
+
+                if user_entries:
+                    loaded_from_knowledge = True
+                    for entry in user_entries:
+                        if entry.entry_sub_type == KnowledgeEntrySubType.USER_PROFILE:
+                            metadata = entry.metadata or {}
+                            prefs_dict["general"]["role"] = metadata.get("role", "professional")
+                            prefs_dict["general"]["priorities"] = metadata.get("preferences", [])
+                            prefs_dict["general"]["mentor"] = metadata.get("mentor", {})
+                            prefs_dict["general"]["onboarding_completed"] = metadata.get("onboarding_completed", True)
+
+                        elif entry.entry_sub_type == KnowledgeEntrySubType.GOAL:
+                            metadata = entry.metadata or {}
+                            category = metadata.get("category", "general").lower()
+                            section_map = {
+                                "career": "productivity",
+                                "work": "productivity",
+                                "productivity": "productivity",
+                                "health": "health",
+                                "wellness": "health",
+                                "finance": "finance",
+                                "financial": "finance",
+                                "money": "finance",
+                                "journal": "journal",
+                                "reflection": "journal",
+                            }
+                            target_section = section_map.get(category, "productivity")
+                            if "goals" not in prefs_dict[target_section]:
+                                prefs_dict[target_section]["goals"] = []
+                            prefs_dict[target_section]["goals"].append({
+                                "title": entry.title,
+                                "priority": metadata.get("priority", "Medium"),
+                                "milestones": metadata.get("milestones", []),
+                            })
+
+                        elif entry.entry_sub_type == KnowledgeEntrySubType.SCHEDULE:
+                            metadata = entry.metadata or {}
+                            availability = metadata.get("availability", {})
+                            prefs_dict["general"]["work_hours"] = (
+                                f"{availability.get('workHours', {}).get('start', '09:00')}-"
+                                f"{availability.get('workHours', {}).get('end', '17:00')}"
+                            )
+                            prefs_dict["general"]["timezone"] = availability.get("timezone", "UTC")
+                            prefs_dict["journal"]["check_in_time"] = availability.get("checkIn", {}).get("preferredTime", "09:00")
+
+                if loaded_from_knowledge:
+                    logger.info(f"Loaded user preferences from knowledge base: {prefs_dict}")
+                    self._user_preferences = UserPreferences(**prefs_dict)
+                    return self._user_preferences
+
+            except Exception as e:
+                logger.warning(f"Failed to load preferences from knowledge base: {e}, trying JSON file")
+
+            # Fallback to JSON file
+            import os
+            prefs_path = os.path.join(os.path.dirname(__file__), "user_preferences.json")
+            try:
+                if os.path.exists(prefs_path):
+                    with open(prefs_path) as f:
+                        data = f.read().strip()
+                        if not data:
+                            raise ValueError("Empty preferences file")
+                        prefs_dict = json.loads(data)
                         self._user_preferences = UserPreferences(**prefs_dict)
                         return self._user_preferences
-                        
-                except Exception as e:
-                    logger.warning(f"Failed to load preferences from knowledge base: {e}, trying JSON file")
-                
-                # Fallback to JSON file
-                import os, json
-                prefs_path = os.path.join(os.path.dirname(__file__), "user_preferences.json")
-                try:
-                    if os.path.exists(prefs_path):
-                        with open(prefs_path) as f:
-                            data = f.read().strip()
-                            if not data:
-                                raise ValueError("Empty preferences file")
-                            prefs_dict = json.loads(data)
-                            self._user_preferences = UserPreferences(**prefs_dict)
-                            return self._user_preferences
-                except Exception as e:
-                    logger.warning(f"Failed to parse stored preferences: {e}. Using defaults.")
-                
-                # Always fallback to defaults
-                self._user_preferences = UserPreferences()
-                return self._user_preferences
-                
+            except Exception as e:
+                logger.warning(f"Failed to parse stored preferences: {e}. Using defaults.")
+
+            self._user_preferences = UserPreferences()
             return self._user_preferences
         except Exception as e:
             logger.error(f"Failed to get user preferences: {e}")
             return UserPreferences()
-                # ...existing code...
+
+    def _is_time_entry_entry(self, entry: KnowledgeEntry) -> bool:
+        """Detect AlterEgo time entries that are persisted as interaction events."""
+        metadata = entry.metadata or {}
+        context = metadata.get("context") if isinstance(metadata.get("context"), dict) else {}
+
+        category = str(entry.category or "").strip().lower()
+        source = str(context.get("source", "")).strip().lower()
+        source_action = str(context.get("source_action", "")).strip().lower()
+        has_time_entry_id = context.get("time_entry_id") is not None
+        has_time_entry_tag = any(str(tag).strip().lower() == "time_entry" for tag in (entry.tags or []))
+
+        return (
+            category == "time_entry"
+            or source == "alterego_timetracker"
+            or "time_entry" in source_action
+            or has_time_entry_id
+            or has_time_entry_tag
+        )
+
+    def _normalize_visual_category(self, entry: KnowledgeEntry) -> str:
+        if self._is_time_entry_entry(entry):
+            return "time_entry"
+
+        category = str(entry.category or "uncategorized").strip().lower()
+        return category if category else "uncategorized"
+
+    def _normalize_visual_type(self, entry: KnowledgeEntry, normalized_category: str) -> str:
+        if normalized_category == "time_entry":
+            return "time_entry"
+
+        if hasattr(entry.entry_type, "value"):
+            return str(entry.entry_type.value)
+
+        return str(entry.entry_type)
+
+    def _infer_interaction_category_and_sub_type(
+        self,
+        agent_type: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> tuple[str, KnowledgeEntrySubType, List[str]]:
+        """Derive interaction grouping so synced events surface in the right knowledge category."""
+        context_payload = context or {}
+        normalized_agent = (agent_type or "general").strip().lower() or "general"
+
+        source = str(context_payload.get("source", "")).strip().lower()
+        source_action = str(context_payload.get("source_action", "")).strip().lower()
+        forced_category = str(context_payload.get("category", "")).strip().lower()
+        has_time_entry_id = context_payload.get("time_entry_id") is not None
+
+        is_time_entry = (
+            forced_category == "time_entry"
+            or source == "alterego_timetracker"
+            or "time_entry" in source_action
+            or has_time_entry_id
+        )
+        if is_time_entry:
+            return (
+                "time_entry",
+                KnowledgeEntrySubType.WORK_INTERACTION,
+                ["interaction", "history", "time_entry", "alterego_sync", normalized_agent],
+            )
+
+        if normalized_agent == "health":
+            sub_type = KnowledgeEntrySubType.HEALTH_INTERACTION
+        elif normalized_agent in {"productivity", "finance", "scheduling"}:
+            sub_type = KnowledgeEntrySubType.WORK_INTERACTION
+        elif normalized_agent in {"journal", "general", "orchestrator"}:
+            sub_type = KnowledgeEntrySubType.PERSONAL_INTERACTION
+        else:
+            sub_type = KnowledgeEntrySubType.MISC_INTERACTION
+
+        return normalized_agent, sub_type, ["interaction", "history", normalized_agent]
     
     async def update_user_preferences(self, preferences: UserPreferences) -> bool:
         """
@@ -597,12 +698,18 @@ class KnowledgeBaseService:
             The created interaction entry
         """
         try:
+            category, entry_sub_type, tags = self._infer_interaction_category_and_sub_type(
+                agent_type=agent_type,
+                context=context,
+            )
+
+            title_source = category.replace("_", " ").title()
             interaction_content = f"User: {user_input}\nAgent ({agent_type}): {agent_response}"
             return await self.create_entry(
                 entry_type=KnowledgeEntryType.INTERACTION,
-                entry_sub_type=KnowledgeEntrySubType.PERSONAL_INTERACTION,
-                category=agent_type,
-                title=f"Interaction with {agent_type}",
+                entry_sub_type=entry_sub_type,
+                category=category,
+                title=f"Interaction with {title_source}",
                 content=interaction_content,
                 metadata={
                     "agent_type": agent_type,
@@ -611,7 +718,7 @@ class KnowledgeBaseService:
                     "user_input_length": len(user_input),
                     "response_length": len(agent_response)
                 },
-                tags=["interaction", "history", agent_type]
+                tags=tags
             )
         except Exception as e:
             logger.error(f"Failed to add interaction history: {e}")
@@ -987,19 +1094,20 @@ class KnowledgeBaseService:
                 
                 # Deterministic fallback layout grouped by category.
                 import math
-                unique_categories = sorted({entry.category for entry in entries_info})
+                unique_categories = sorted({self._normalize_visual_category(entry) for entry in entries_info})
                 category_index = {category: idx for idx, category in enumerate(unique_categories)}
                 category_counts: Dict[str, int] = {}
                 positions_3d = []
 
                 for entry in entries_info:
-                    group_idx = category_index.get(entry.category, 0)
+                    normalized_category = self._normalize_visual_category(entry)
+                    group_idx = category_index.get(normalized_category, 0)
                     group_angle = (group_idx / max(len(unique_categories), 1)) * 2 * math.pi
                     cluster_x = math.cos(group_angle) * 26
                     cluster_z = math.sin(group_angle) * 26
 
-                    local_index = category_counts.get(entry.category, 0)
-                    category_counts[entry.category] = local_index + 1
+                    local_index = category_counts.get(normalized_category, 0)
+                    category_counts[normalized_category] = local_index + 1
 
                     ring = 1 + (local_index // 8)
                     local_angle = ((local_index % 8) / 8) * 2 * math.pi
@@ -1042,8 +1150,8 @@ class KnowledgeBaseService:
                     "entry_id": entry.entry_id,
                     "title": entry.title,
                     "content": entry.content[:200] + "..." if len(entry.content) > 200 else entry.content,
-                    "category": entry.category,
-                    "entry_type": entry.entry_type.value,
+                    "category": self._normalize_visual_category(entry),
+                    "entry_type": self._normalize_visual_type(entry, self._normalize_visual_category(entry)),
                     "tags": entry.tags,
                     "embedding": embeddings[i][:10] if len(embeddings[i]) > 10 else embeddings[i],  # First 10 dims for preview
                     "position_3d": position if isinstance(position, list) else position.tolist(),
@@ -1091,8 +1199,11 @@ class KnowledgeBaseService:
                         "entry_id": result.entry.entry_id,
                         "title": result.entry.title,
                         "similarity_score": result.similarity_score,
-                        "category": result.entry.category,
-                        "entry_type": result.entry.entry_type.value
+                        "category": self._normalize_visual_category(result.entry),
+                        "entry_type": self._normalize_visual_type(
+                            result.entry,
+                            self._normalize_visual_category(result.entry),
+                        )
                     }
                     for result in similar_results
                     if result.entry.entry_id != entry_id
@@ -1105,8 +1216,8 @@ class KnowledgeBaseService:
                     "entry_id": entry.entry_id,
                     "title": entry.title,
                     "content": entry.content,
-                    "category": entry.category,
-                    "entry_type": entry.entry_type.value,
+                    "category": self._normalize_visual_category(entry),
+                    "entry_type": self._normalize_visual_type(entry, self._normalize_visual_category(entry)),
                     "tags": entry.tags,
                     "metadata": entry.metadata,
                     "created_at": entry.created_at.isoformat(),

@@ -43,9 +43,54 @@ const getCategoryColor = (category: string): string => {
         'finance': '#ffb347',
         'journal': '#a855f7',
         'system': '#64748b',
-        'interaction': '#f472b6'
+        'interaction': '#f472b6',
+        'time_entry': '#3b82f6'
     }
     return categoryColors[category] || '#64748b'
+}
+
+const toDisplayLabel = (value: string) =>
+    value
+        .replace(/[_-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/\b\w/g, (letter) => letter.toUpperCase())
+
+const isTimeEntrySignal = (category: string, entryType: string, tags: string[] = []) => {
+    const normalizedCategory = String(category || '').trim().toLowerCase()
+    const normalizedType = String(entryType || '').trim().toLowerCase()
+    const normalizedTags = tags.map((tag) => String(tag || '').trim().toLowerCase())
+
+    if (normalizedCategory === 'time_entry') {
+        return true
+    }
+
+    if (normalizedTags.includes('time_entry')) {
+        return true
+    }
+
+    return normalizedType === 'interaction' && normalizedTags.includes('alterego_sync')
+}
+
+const normalizePointCategory = (category: string, entryType: string, tags: string[] = []) => {
+    if (isTimeEntrySignal(category, entryType, tags)) {
+        return 'time_entry'
+    }
+
+    const normalized = String(category || '').trim().toLowerCase()
+    return normalized || 'uncategorized'
+}
+
+const normalizePointType = (entryType: string, normalizedCategory: string, tags: string[] = []) => {
+    if (
+        normalizedCategory === 'time_entry'
+        || tags.map((tag) => String(tag || '').toLowerCase()).includes('time_entry')
+    ) {
+        return 'time_entry'
+    }
+
+    const normalized = String(entryType || '').trim().toLowerCase()
+    return normalized || 'memory'
 }
 
 interface EmbeddingPoint {
@@ -253,6 +298,7 @@ const EmbeddingNode: React.FC<{
                 const typeColors: Record<string, string> = {
                     'preference': '#4a9eff',
                     'interaction': '#00d084',
+                    'time_entry': '#3b82f6',
                     'insight': '#ffb347',
                     'pattern': '#a855f7'
                 }
@@ -360,7 +406,7 @@ const EmbeddingNode: React.FC<{
                         outlineWidth={0.05}
                         outlineColor="black"
                     >
-                        {point.category.toUpperCase()}
+                        {toDisplayLabel(point.category).toUpperCase()}
                     </Text>
                 </group>
             )}
@@ -766,7 +812,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
     const [showLabels, setShowLabels] = useState(false)
     const [showConnections, setShowConnections] = useState(true)
     const [showAllConnections, setShowAllConnections] = useState(false)
-    const [nodeSize, setNodeSize] = useState(1)
+    const [nodeSize, setNodeSize] = useState(1.15)
     const [similarityThreshold, setSimilarityThreshold] = useState(0.3)
     const [animationSpeed, setAnimationSpeed] = useState(1)
     const [isFullscreen, setIsFullscreen] = useState(false)
@@ -778,8 +824,21 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
     const [isMobileViewport, setIsMobileViewport] = useState(false)
     const hoverStabilityRef = useRef<NodeJS.Timeout | null>(null)
 
+    const clearFocusedSelection = () => {
+        setSelectedPoint(null)
+        setSelectedDetails(null)
+        setHoveredPoint(null)
+    }
+
     // Stable hover handler to prevent flickering
     const handlePointHover = (point: EmbeddingPoint | null) => {
+        if (selectedPoint) {
+            if (point && point.entry_id === selectedPoint.entry_id) {
+                setHoveredPoint(point)
+            }
+            return
+        }
+
         if (hoverStabilityRef.current) {
             clearTimeout(hoverStabilityRef.current)
         }
@@ -893,9 +952,20 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
     }, [filteredPoints])
 
     const applyEmbeddingsPayload = (data: EmbeddingPoint[]) => {
-        setPoints(data)
-        const uniqueCategories = [...new Set(data.map((point) => point.category))] as string[]
-        const uniqueTypes = [...new Set(data.map((point) => point.entry_type))] as string[]
+        const normalizedData = data.map((point) => {
+            const normalizedCategory = normalizePointCategory(point.category, point.entry_type, point.tags)
+            const normalizedType = normalizePointType(point.entry_type, normalizedCategory, point.tags)
+
+            return {
+                ...point,
+                category: normalizedCategory,
+                entry_type: normalizedType,
+            }
+        })
+
+        setPoints(normalizedData)
+        const uniqueCategories = [...new Set(normalizedData.map((point) => point.category))] as string[]
+        const uniqueTypes = [...new Set(normalizedData.map((point) => point.entry_type))] as string[]
         setCategories(uniqueCategories)
         setTypes(uniqueTypes)
     }
@@ -939,12 +1009,47 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
 
     const handlePointClick = async (point: EmbeddingPoint) => {
         setSelectedPoint(point)
+        setHoveredPoint(point)
 
         try {
             const response = await fetch(`/api/knowledge/embeddings/${point.entry_id}/details`)
             if (response.ok) {
                 const details = await response.json()
-                setSelectedDetails(details)
+                const normalizedCategory = normalizePointCategory(
+                    details?.entry?.category,
+                    details?.entry?.entry_type,
+                    details?.entry?.tags || [],
+                )
+                const normalizedType = normalizePointType(
+                    details?.entry?.entry_type,
+                    normalizedCategory,
+                    details?.entry?.tags || [],
+                )
+
+                const normalizedSimilarEntries = Array.isArray(details?.similar_entries)
+                    ? details.similar_entries.map((entry: any) => {
+                        const similarCategory = normalizePointCategory(
+                            entry?.category,
+                            entry?.entry_type,
+                            [],
+                        )
+                        return {
+                            ...entry,
+                            category: similarCategory,
+                            entry_type: normalizePointType(entry?.entry_type, similarCategory, []),
+                        }
+                    })
+                    : []
+
+                setSelectedDetails({
+                    ...details,
+                    entry: {
+                        ...details.entry,
+                        category: normalizedCategory,
+                        entry_type: normalizedType,
+                    },
+                    similar_entries: normalizedSimilarEntries,
+                })
             }
         } catch (error) {
             console.error('Failed to load point details:', error)
@@ -953,9 +1058,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
     }
 
     const resetView = () => {
-        setSelectedPoint(null)
-        setSelectedDetails(null)
-        setHoveredPoint(null)
+        clearFocusedSelection()
         setSearchQuery('')
         setCategoryFilter('all')
         setTypeFilter('all')
@@ -1000,6 +1103,11 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                     <Canvas
                         camera={{ position: [80, 50, 80], fov: 60 }}
                         gl={{ antialias: true, alpha: false }}
+                        onPointerMissed={(event) => {
+                            if (event.type === 'click') {
+                                clearFocusedSelection()
+                            }
+                        }}
                         onCreated={({ gl, scene }) => {
                             gl.setClearColor('#0a0a0a')
                             scene.fog = new THREE.Fog('#0a0a0a', 100, 300)
@@ -1060,10 +1168,10 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                                                     </p>
                                                     <div className="flex flex-wrap gap-1">
                                                         <Badge variant="outline" className="text-xs bg-blue-500/20 text-blue-300 border-blue-500/50">
-                                                            {point.category}
+                                                            {toDisplayLabel(point.category)}
                                                         </Badge>
                                                         <Badge variant="outline" className="text-xs bg-amber-500/20 text-amber-300 border-amber-500/50">
-                                                            {point.entry_type}
+                                                            {toDisplayLabel(point.entry_type)}
                                                         </Badge>
                                                     </div>
                                                 </div>
@@ -1102,11 +1210,11 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                                                 <div className="grid grid-cols-2 gap-2 text-xs">
                                                     <div>
                                                         <span className="text-gray-400">Category:</span>
-                                                        <span className="ml-2 text-blue-300">{selectedDetails.entry.category}</span>
+                                                        <span className="ml-2 text-blue-300">{toDisplayLabel(selectedDetails.entry.category)}</span>
                                                     </div>
                                                     <div>
                                                         <span className="text-gray-400">Type:</span>
-                                                        <span className="ml-2 text-amber-300">{selectedDetails.entry.entry_type}</span>
+                                                        <span className="ml-2 text-amber-300">{toDisplayLabel(selectedDetails.entry.entry_type)}</span>
                                                     </div>
                                                     <div>
                                                         <span className="text-gray-400">Content Length:</span>
@@ -1146,7 +1254,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                                                             <div key={similar.entry_id} className="p-2 bg-gray-800 rounded text-xs">
                                                                 <div className="font-medium">{similar.title}</div>
                                                                 <div className="text-gray-400">
-                                                                    Similarity: {(similar.similarity_score * 100).toFixed(1)}% • {similar.category}
+                                                                    Similarity: {(similar.similarity_score * 100).toFixed(1)}% • {toDisplayLabel(similar.category)}
                                                                 </div>
                                                             </div>
                                                         ))}
@@ -1254,6 +1362,47 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                     </div>
                 )}
 
+                {viewMode === 'graph' && selectedPoint && selectedDetails && (
+                    <div className="absolute bottom-3 left-3 z-20 w-[min(30rem,calc(100vw-1.5rem))] rounded-2xl border border-cyan-300/40 bg-slate-950/85 p-3 text-slate-100 shadow-2xl backdrop-blur-sm sm:bottom-4 sm:left-4 sm:p-4">
+                        <div className="flex items-start justify-between gap-3">
+                            <div>
+                                <p className="text-[11px] uppercase tracking-[0.16em] text-cyan-300">Focused Node</p>
+                                <h4 className="mt-1 text-lg font-semibold leading-snug">{selectedDetails.entry.title}</h4>
+                            </div>
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 px-2 text-slate-200 hover:bg-white/10 hover:text-white"
+                                onClick={clearFocusedSelection}
+                            >
+                                Clear
+                            </Button>
+                        </div>
+
+                        <p className="mt-2 text-sm leading-relaxed text-slate-200">
+                            {selectedDetails.entry.content.length > 240
+                                ? `${selectedDetails.entry.content.substring(0, 240)}...`
+                                : selectedDetails.entry.content}
+                        </p>
+
+                        <div className="mt-3 flex flex-wrap gap-2">
+                            <Badge variant="outline" className="border-cyan-300/40 bg-cyan-950/40 text-cyan-100">
+                                {toDisplayLabel(selectedDetails.entry.category)}
+                            </Badge>
+                            <Badge variant="outline" className="border-amber-300/40 bg-amber-950/35 text-amber-100">
+                                {toDisplayLabel(selectedDetails.entry.entry_type)}
+                            </Badge>
+                            <Badge variant="outline" className="border-slate-300/35 bg-slate-900/50 text-slate-200">
+                                {selectedDetails.statistics.tag_count} tags
+                            </Badge>
+                        </div>
+
+                        <p className="mt-3 text-xs text-slate-300">
+                            Focus stays locked until you click empty space in the graph or press clear.
+                        </p>
+                    </div>
+                )}
+
                 {/* Legend Panel - Only show in graph mode */}
                 {viewMode === 'graph' && (
                     <div className="absolute right-2 top-16 w-[min(18rem,calc(100vw-1rem))] text-white text-sm bg-black/80 rounded-lg p-3 sm:p-4 sm:right-4 sm:w-auto sm:min-w-[200px] border border-gray-700">
@@ -1299,7 +1448,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                                                 className="w-2 h-2 rounded-full"
                                                 style={{ backgroundColor: getCategoryColor(category) }}
                                             ></div>
-                                            <span className="capitalize">{category}</span>
+                                            <span className="capitalize">{toDisplayLabel(category)}</span>
                                         </div>
                                         <span className="text-gray-400">{count}</span>
                                     </div>
@@ -1397,7 +1546,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                                         <SelectItem value="all">All Categories</SelectItem>
                                         {categories.map(category => (
                                             <SelectItem key={category} value={category}>
-                                                {category}
+                                                {toDisplayLabel(category)}
                                             </SelectItem>
                                         ))}
                                     </SelectContent>
@@ -1414,7 +1563,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                                         <SelectItem value="all">All Types</SelectItem>
                                         {types.map(type => (
                                             <SelectItem key={type} value={type}>
-                                                {type}
+                                                {toDisplayLabel(type)}
                                             </SelectItem>
                                         ))}
                                     </SelectContent>
@@ -1522,7 +1671,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
 
                     {/* Selected Point Details */}
                     {selectedPoint && selectedDetails && (
-                        <Card className="p-4">
+                        <Card className="p-4 max-h-[44vh] overflow-y-auto">
                             <h3 className="font-semibold mb-3">Selected Node</h3>
 
                             <div className="space-y-3">
@@ -1537,8 +1686,8 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                                 </div>
 
                                 <div className="flex flex-wrap gap-1">
-                                    <Badge variant="outline">{selectedDetails.entry.category}</Badge>
-                                    <Badge variant="secondary">{selectedDetails.entry.entry_type}</Badge>
+                                    <Badge variant="outline">{toDisplayLabel(selectedDetails.entry.category)}</Badge>
+                                    <Badge variant="secondary">{toDisplayLabel(selectedDetails.entry.entry_type)}</Badge>
                                     {selectedDetails.entry.tags.slice(0, 3).map(tag => (
                                         <Badge key={tag} variant="outline" className="text-xs">{tag}</Badge>
                                     ))}
