@@ -21,6 +21,10 @@ wheels/
 *.egg
 MANIFEST
 
+# Keep frontend source utilities tracked even with generic lib/ ignore above.
+!frontend/src/lib/
+!frontend/src/lib/**
+
 # Virtual environments
 .env
 .venv
