@@ -4,6 +4,7 @@ import os
 import json
 import asyncio
 import logging
+import re
 import urllib.request
 from datetime import datetime
 from contextlib import asynccontextmanager
@@ -76,14 +77,60 @@ def parse_csv_env(name: str, default: str) -> List[str]:
     raw = os.getenv(name, default)
     return [item.strip() for item in raw.split(",") if item.strip()]
 
+
+def normalize_origin(origin: str) -> str:
+    return origin.rstrip("/")
+
+
+def wildcard_origin_to_regex(origin_pattern: str) -> str:
+    escaped = re.escape(normalize_origin(origin_pattern))
+    wildcard_regex = escaped.replace("\\*", ".*")
+    return f"^{wildcard_regex}$"
+
+
+def build_cors_config(origins: List[str], origin_regex: Optional[str]) -> tuple[List[str], Optional[str]]:
+    exact_origins: List[str] = []
+    wildcard_origin_patterns: List[str] = []
+
+    for origin in origins:
+        normalized = normalize_origin(origin)
+        if "*" in normalized:
+            wildcard_origin_patterns.append(normalized)
+        else:
+            exact_origins.append(normalized)
+
+    regex_parts: List[str] = []
+    if origin_regex:
+        cleaned_regex = origin_regex.strip()
+        if cleaned_regex:
+            regex_parts.append(f"(?:{cleaned_regex})")
+
+    regex_parts.extend(wildcard_origin_to_regex(pattern) for pattern in wildcard_origin_patterns)
+
+    # Preserve order while deduplicating exact origins.
+    deduped_exact_origins = list(dict.fromkeys(exact_origins))
+    merged_regex = "|".join(regex_parts) if regex_parts else None
+    return deduped_exact_origins, merged_regex
+
 cors_allowed_origins = parse_csv_env(
     "CORS_ALLOWED_ORIGINS",
-    "http://localhost:3000,http://localhost:5173,http://localhost:8088"
+    "http://localhost:3000,http://localhost:5173,http://localhost:8088,https://agenticlyf.vercel.app"
 )
-cors_allowed_origin_regex = os.getenv(
+raw_cors_allowed_origin_regex = os.getenv(
     "CORS_ALLOWED_ORIGIN_REGEX",
-    r"https://.*\.vercel\.app|https://.*\.netlify\.app"
+    r"^https://.*\.vercel\.app$|^https://.*\.netlify\.app$"
 ).strip() or None
+
+cors_allowed_origins, cors_allowed_origin_regex = build_cors_config(
+    cors_allowed_origins,
+    raw_cors_allowed_origin_regex,
+)
+
+logger.info(
+    "Configured CORS origins=%s origin_regex=%s",
+    cors_allowed_origins,
+    cors_allowed_origin_regex,
+)
 
 # Add CORS middleware
 app.add_middleware(
