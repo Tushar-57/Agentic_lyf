@@ -952,16 +952,30 @@ class KnowledgeBaseService:
             
             if not embeddings:
                 return []
+
+            import numpy as np
             
             # Try to use PCA for dimensionality reduction, fallback to simple projection
             try:
                 from sklearn.decomposition import PCA
-                import numpy as np
                 
                 # Reduce dimensionality to 3D using PCA
-                embeddings_array = np.array(embeddings)
+                embeddings_array = np.array(embeddings, dtype=float)
+
+                if embeddings_array.shape[0] < 3:
+                    raise ValueError("Not enough points for PCA")
+
+                if not np.isfinite(embeddings_array).all():
+                    raise ValueError("Embeddings contain non-finite values")
+
+                if np.allclose(embeddings_array, embeddings_array[0], atol=1e-9):
+                    raise ValueError("Embeddings have near-zero variance")
+
                 pca = PCA(n_components=3)
                 positions_3d = pca.fit_transform(embeddings_array)
+
+                if not np.isfinite(positions_3d).all():
+                    raise ValueError("PCA returned non-finite coordinates")
                 
                 # Normalize positions to a reasonable range for visualization
                 positions_3d = positions_3d * 10  # Scale up for better visualization
@@ -971,20 +985,29 @@ class KnowledgeBaseService:
             except Exception as pca_error:
                 logger.warning(f"PCA failed ({pca_error}), using fallback projection")
                 
-                # Fallback: use first 3 dimensions of embeddings or create simple projection
+                # Deterministic fallback layout grouped by category.
+                import math
+                unique_categories = sorted({entry.category for entry in entries_info})
+                category_index = {category: idx for idx, category in enumerate(unique_categories)}
+                category_counts: Dict[str, int] = {}
                 positions_3d = []
-                for i, embedding in enumerate(embeddings):
-                    # Use first 3 dimensions if available, otherwise create simple 2D projection
-                    if len(embedding) >= 3:
-                        x, y, z = embedding[0] * 50, embedding[1] * 50, embedding[2] * 50
-                    else:
-                        # Create a simple circular arrangement
-                        import math
-                        angle = (i / len(embeddings)) * 2 * math.pi
-                        radius = 20
-                        x = radius * math.cos(angle)
-                        y = radius * math.sin(angle)
-                        z = (i % 5 - 2) * 5  # Vary height
+
+                for entry in entries_info:
+                    group_idx = category_index.get(entry.category, 0)
+                    group_angle = (group_idx / max(len(unique_categories), 1)) * 2 * math.pi
+                    cluster_x = math.cos(group_angle) * 26
+                    cluster_z = math.sin(group_angle) * 26
+
+                    local_index = category_counts.get(entry.category, 0)
+                    category_counts[entry.category] = local_index + 1
+
+                    ring = 1 + (local_index // 8)
+                    local_angle = ((local_index % 8) / 8) * 2 * math.pi
+                    local_radius = ring * 4.5
+
+                    x = cluster_x + math.cos(local_angle) * local_radius
+                    y = ((local_index % 5) - 2) * 3
+                    z = cluster_z + math.sin(local_angle) * local_radius
                     
                     positions_3d.append([x, y, z])
             
@@ -997,14 +1020,22 @@ class KnowledgeBaseService:
                 for j, other_embedding in enumerate(embeddings):
                     if i != j:
                         # Calculate cosine similarity
-                        import numpy as np
-                        similarity = np.dot(current_embedding, other_embedding) / (
-                            np.linalg.norm(current_embedding) * np.linalg.norm(other_embedding)
-                        )
+                        norm_current = np.linalg.norm(current_embedding)
+                        norm_other = np.linalg.norm(other_embedding)
+                        denominator = norm_current * norm_other
+
+                        if denominator <= 1e-12:
+                            continue
+
+                        similarity = float(np.dot(current_embedding, other_embedding) / denominator)
+
+                        if not np.isfinite(similarity):
+                            continue
+
                         if similarity > 0.7:  # Only include high similarity connections
                             similarities.append({
                                 "target_id": entries_info[j].entry_id,
-                                "similarity": float(similarity)
+                                "similarity": similarity
                             })
                 
                 visualization_data = {
