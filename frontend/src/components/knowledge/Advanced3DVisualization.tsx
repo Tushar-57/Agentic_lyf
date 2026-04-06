@@ -1506,7 +1506,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                 </div>
 
                 {/* Graph/List Toggle - Top Right */}
-                <div className={`absolute right-2 z-20 flex gap-2 mb-4 sm:right-4 ${isMobileViewport ? 'top-[calc(3.75rem+env(safe-area-inset-top))]' : 'top-2 sm:top-4'}`}>
+                <div className={`absolute right-2 z-50 flex gap-2 mb-4 pointer-events-auto sm:right-4 ${isMobileViewport ? 'top-[calc(3.75rem+env(safe-area-inset-top))]' : 'top-2 sm:top-4'}`}>
                     <div className="bg-black/80 rounded-lg p-1 border border-gray-700">
                         <Button
                             variant="ghost"
@@ -1528,7 +1528,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                 </div>
 
                 {points.length > 0 && (
-                    <div className={`absolute left-1/2 z-20 w-[min(40rem,calc(100vw-2rem))] -translate-x-1/2 px-2 sm:px-0 ${isMobileViewport ? 'top-[calc(6.75rem+env(safe-area-inset-top))]' : 'top-3 sm:top-4'}`}>
+                    <div className={`absolute left-1/2 z-20 w-[min(40rem,calc(100vw-2rem))] -translate-x-1/2 px-2 pointer-events-none sm:px-0 ${isMobileViewport ? 'top-[calc(6.75rem+env(safe-area-inset-top))]' : 'top-3 sm:top-4'}`}>
                         {visualizationHealth.usesFallbackLayout ? (
                             <div className="rounded-lg border border-amber-400/40 bg-amber-950/70 px-3 py-2 text-xs text-amber-100 backdrop-blur-sm sm:text-sm">
                                 <div className="flex items-center gap-2 font-medium">
@@ -1696,7 +1696,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                 <button
                     type="button"
                     aria-label="Close controls panel"
-                    className="absolute inset-0 z-30 bg-black/40 lg:hidden"
+                    className="absolute inset-y-0 left-0 right-[min(24rem,100vw)] z-30 bg-black/40 lg:hidden"
                     onClick={() => setIsControlPanelOpen(false)}
                 />
             )}
@@ -1704,9 +1704,9 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
             {/* Control Panel */}
             <div
                 className={`bg-background border-l border-border overflow-y-auto transition-all duration-300 ${isMobileViewport
-                        ? `${isFullscreen ? 'w-[min(24rem,100vw)]' : 'w-[min(24rem,100vw)]'} max-w-[100vw] fixed right-0 top-0 z-40 h-full shadow-2xl`
+                        ? `${isFullscreen ? 'w-[min(24rem,100vw)]' : 'w-[min(24rem,100vw)]'} max-w-[100vw] fixed right-0 top-0 z-50 h-full shadow-2xl`
                         : `${isControlPanelOpen ? (isFullscreen ? 'w-80' : 'w-96') : 'w-0'} h-full`
-                    } ${isMobileViewport && !isControlPanelOpen ? 'pointer-events-none translate-x-full' : 'translate-x-0'} ${!isControlPanelOpen && !isMobileViewport ? 'border-l-0' : ''}`}
+                    } ${isMobileViewport && !isControlPanelOpen ? 'pointer-events-none translate-x-full' : 'pointer-events-auto translate-x-0'} ${!isControlPanelOpen && !isMobileViewport ? 'border-l-0' : ''}`}
             >
                 <div className={`space-y-4 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] ${!isControlPanelOpen && !isMobileViewport ? 'hidden' : ''}`}>
                     {/* Search and Filters */}

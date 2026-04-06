@@ -14,8 +14,8 @@ try:
 except ImportError:  # pragma: no cover - handled gracefully in runtime envs
     colorlog = None
 
-# Initialize colorama for cross-platform colored output
-init(autoreset=True)
+# Preserve ANSI sequences in non-TTY deployments (e.g., Render logs) for color visibility.
+init(autoreset=True, strip=False, convert=False)
 
 
 class LogCategory(Enum):
