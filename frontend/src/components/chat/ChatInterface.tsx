@@ -451,8 +451,31 @@ const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLas
     const normalizeReasoningObject = (rawObj: Record<string, any>): AgentThinking | null => {
       const normalized: AgentThinking = {}
 
-      if (Array.isArray(rawObj.steps)) {
-        normalized.steps = rawObj.steps
+      const normalizeStepItems = (rawSteps: any): any[] => {
+        if (typeof rawSteps === 'string') {
+          const singleStep = safeString(rawSteps).trim()
+          return singleStep ? [singleStep] : []
+        }
+
+        if (!Array.isArray(rawSteps)) {
+          return []
+        }
+
+        const looksLikeCharacterArray =
+          rawSteps.length > 12
+          && rawSteps.every((item: any) => typeof item === 'string' && item.length <= 1)
+
+        if (looksLikeCharacterArray) {
+          const joined = rawSteps.join('').trim()
+          return joined ? [joined] : []
+        }
+
+        return rawSteps
+      }
+
+      const normalizedRawSteps = normalizeStepItems(rawObj.steps)
+      if (normalizedRawSteps.length > 0) {
+        normalized.steps = normalizedRawSteps
           .map((step: any) => ({
             agent: normalizeAgentType(step?.agent || step?.from || 'orchestrator') || 'orchestrator',
             action: safeString(step?.action || step?.description || step),
@@ -486,7 +509,11 @@ const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLas
         }
       }
 
-      const executionPath = Array.isArray(rawObj.execution_path) ? rawObj.execution_path : []
+      const executionPath = Array.isArray(rawObj.execution_path)
+        ? rawObj.execution_path
+        : (typeof rawObj.execution_path === 'string' && rawObj.execution_path.trim()
+          ? [rawObj.execution_path]
+          : [])
       if (executionPath.length > 0) {
         const existingSteps = normalized.steps ? [...normalized.steps] : []
         executionPath.forEach((pathStep: any, index: number) => {
@@ -561,10 +588,11 @@ const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLas
           })
         }
 
-        if (normalized.data_points_used.knowledge_context_summary) {
+        const contextSummary = normalized.data_points_used.knowledge_context_summary || ''
+        if (contextSummary && !contextSummary.toLowerCase().startsWith('no previous context found')) {
           knowledgeSources.push({
             type: 'Knowledge Context',
-            content: normalized.data_points_used.knowledge_context_summary,
+            content: contextSummary,
           })
         }
       }

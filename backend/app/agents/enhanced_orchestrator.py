@@ -1600,18 +1600,37 @@ Please create a comprehensive, well-structured response that:
             ])
             return f"Here are the results from your request:\n\n{results_text}"
 
-    def _get_execution_path(self, complexity: TaskComplexity, plan: Optional[Dict[str, Any]]) -> str:
-        """Get human-readable execution path description."""
+    def _get_execution_path(self, complexity: TaskComplexity, plan: Optional[Dict[str, Any]]) -> List[str]:
+        """Get human-readable execution path steps."""
         if complexity == TaskComplexity.SIMPLE:
-            return "Direct response by orchestrator"
-        elif complexity == TaskComplexity.MODERATE:
-            return "Single specialist agent delegation"
-        elif plan:
-            agent_count = len(plan.get('agents_involved', []))
-            step_count = len(plan.get('steps', []))
-            return f"Complex workflow: {step_count} steps across {agent_count} agents"
-        else:
-            return "Fallback to specialist delegation"
+            return ["Direct response by orchestrator"]
+
+        if complexity == TaskComplexity.MODERATE:
+            return ["Single specialist agent delegation"]
+
+        if plan:
+            plan_steps = plan.get("steps", []) if isinstance(plan.get("steps"), list) else []
+            formatted_steps: List[str] = []
+
+            for index, step in enumerate(plan_steps, start=1):
+                if not isinstance(step, dict):
+                    continue
+
+                action = str(step.get("action") or step.get("description") or "").strip()
+                if not action:
+                    continue
+
+                agent = str(step.get("agent") or "orchestrator").strip() or "orchestrator"
+                formatted_steps.append(f"Step {index}: {action} ({agent})")
+
+            if formatted_steps:
+                return formatted_steps
+
+            agent_count = len(plan.get("agents_involved", []))
+            step_count = len(plan_steps)
+            return [f"Complex workflow: {step_count} steps across {agent_count} agents"]
+
+        return ["Fallback to specialist delegation"]
 
 
 # Factory function for getting enhanced orchestrator
