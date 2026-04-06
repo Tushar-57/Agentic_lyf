@@ -29,7 +29,7 @@ from app.utils.logging import get_api_category_logger, get_conversation_category
 from app.services.config_storage import get_config_storage
 from app.services.interaction_recorder import get_interaction_recorder
 from app.services.knowledge_base import get_knowledge_base_service
-from app.auth.user_context import resolve_request_user, set_request_user, reset_request_user
+from app.auth.user_context import get_current_user, resolve_request_user, set_request_user, reset_request_user
 from langgraph.graph import StateGraph, START, END
 
 # Load environment variables from .env file
@@ -76,6 +76,32 @@ def serialize_chat_payload(payload: Any) -> str:
     if API_CHAT_LOG_FULL_TEXT or len(text) <= API_CHAT_LOG_MAX_CHARS:
         return text
     return f"{text[:API_CHAT_LOG_MAX_CHARS - 3]}..."
+
+
+def bind_registry_knowledge_base_for_request(registry) -> str:
+    """Ensure agents use the current request user's knowledge base instance."""
+    resolved_user_id = get_current_user().storage_key
+    request_scoped_kb = get_knowledge_base_service(resolved_user_id)
+
+    rebound_count = 0
+    for agent in registry.get_all_agents():
+        if not hasattr(agent, "knowledge_base"):
+            continue
+
+        if getattr(agent, "knowledge_base", None) is request_scoped_kb:
+            continue
+
+        setattr(agent, "knowledge_base", request_scoped_kb)
+        rebound_count += 1
+
+    if rebound_count:
+        logger.info(
+            "Rebound %d agent knowledge_base references for user=%s",
+            rebound_count,
+            resolved_user_id,
+        )
+
+    return resolved_user_id
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -230,15 +256,18 @@ async def api_health_check():
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
     try:
+        registry = get_agent_registry()
+        resolved_user_id = bind_registry_knowledge_base_for_request(registry)
+
         if API_CHAT_LOG_ENABLED:
             conversation_logger.info(
-                "API_CHAT_REQUEST conversation_id=%s agent=%s message=%s",
+                "API_CHAT_REQUEST user=%s conversation_id=%s agent=%s message=%s",
+                resolved_user_id,
                 request.conversation_id,
                 request.agent,
                 serialize_chat_payload(request.message),
             )
 
-        registry = get_agent_registry()
         # Find orchestrator agent by type
         logger.info(f"{registry.get_agent_ids()}")
         orchestrators = registry.get_agents_by_type(AgentType.ORCHESTRATOR)
@@ -320,7 +349,8 @@ async def chat_endpoint(request: ChatRequest):
 
         if API_CHAT_LOG_ENABLED:
             conversation_logger.info(
-                "API_CHAT_RESPONSE conversation_id=%s agent=%s response=%s reasoning=%s",
+                "API_CHAT_RESPONSE user=%s conversation_id=%s agent=%s response=%s reasoning=%s",
+                resolved_user_id,
                 request.conversation_id,
                 state.get("agent", orchestrator.agent_id),
                 serialize_chat_payload(response),
@@ -351,7 +381,8 @@ async def chat_endpoint(request: ChatRequest):
 
         if API_CHAT_LOG_ENABLED:
             conversation_logger.error(
-                "API_CHAT_ERROR conversation_id=%s agent=%s error=%s",
+                "API_CHAT_ERROR user=%s conversation_id=%s agent=%s error=%s",
+                get_current_user().storage_key,
                 request.conversation_id,
                 request.agent,
                 serialize_chat_payload(error_text),
