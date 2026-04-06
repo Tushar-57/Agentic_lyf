@@ -82,13 +82,16 @@ class JournalAgent(BaseAgent):
             else:
                 response = await self._handle_general_journaling(user_input, merged_context)
             
-            # Intelligently record interaction if valuable
+            # Create pending interaction for explicit user approval.
             recorder = get_interaction_recorder()
-            await recorder.record_if_valuable(
-                user_input=user_input,
-                agent_response=response,
-                agent_type="journal"
-            )
+            if recorder:
+                interaction_id = await recorder.create_pending_interaction(
+                    user_input=user_input,
+                    agent_response=response,
+                    agent_type="journal"
+                )
+                if interaction_id:
+                    logger.info("Created pending interaction %s for journal approval", interaction_id)
             
             return {
                 "response": response,

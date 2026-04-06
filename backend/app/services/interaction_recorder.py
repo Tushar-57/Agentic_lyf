@@ -335,31 +335,43 @@ _recorders_by_user: Dict[str, InteractionRecorder] = {}
 def get_interaction_recorder(knowledge_base_service=None, llm_service=None, user_id: Optional[str] = None):
     """Get or create a user-scoped interaction recorder instance."""
     from app.auth.user_context import get_current_user_id, normalize_user_storage_key
+    from app.services.knowledge_base import get_knowledge_base_service
 
     resolved_user_id = normalize_user_storage_key(user_id or get_current_user_id())
     recorder = _recorders_by_user.get(resolved_user_id)
+    resolved_kb_service = knowledge_base_service or get_knowledge_base_service(resolved_user_id)
 
     logger.info(
         "Getting interaction recorder for user=%s current instance=%s kb_service=%s llm_service=%s",
         resolved_user_id,
         id(recorder) if recorder else None,
-        knowledge_base_service is not None,
+        resolved_kb_service is not None,
         llm_service is not None,
     )
 
     if recorder is None:
         try:
-            from app.services.knowledge_base import get_knowledge_base_service
             from app.llm import service as llm_service_module
 
-            kb_service = knowledge_base_service or get_knowledge_base_service(resolved_user_id)
             llm_svc = llm_service or llm_service_module._llm_service
 
-            recorder = InteractionRecorder(kb_service, llm_svc)
+            recorder = InteractionRecorder(resolved_kb_service, llm_svc)
             _recorders_by_user[resolved_user_id] = recorder
             logger.info("Created new interaction recorder instance for user=%s id=%s", resolved_user_id, id(recorder))
         except Exception as e:
             logger.error("Failed to initialize interaction recorder for user=%s: %s", resolved_user_id, str(e))
             return None
+    else:
+        # Keep existing pending approvals, but refresh dependencies after KB force-reset.
+        if recorder.knowledge_base is not resolved_kb_service:
+            logger.info(
+                "Rebinding interaction recorder knowledge base for user=%s recorder=%s",
+                resolved_user_id,
+                id(recorder),
+            )
+            recorder.knowledge_base = resolved_kb_service
+
+        if llm_service is not None and recorder.llm_service is not llm_service:
+            recorder.llm_service = llm_service
 
     return recorder

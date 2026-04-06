@@ -18,6 +18,8 @@ from app.models.knowledge import (
     KnowledgeEntrySubType
 )
 from app.services.knowledge_base import get_knowledge_base_service
+from app.services.knowledge_base import reset_knowledge_base_service
+from app.auth.user_context import get_current_user
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 logger = logging.getLogger(__name__)
@@ -275,6 +277,34 @@ async def get_knowledge_stats():
         return stats
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}")
+
+
+@router.post("/refresh")
+async def force_refresh_knowledge_state():
+    """Force reload user-scoped knowledge data from persisted storage files."""
+    try:
+        request_user = get_current_user()
+        kb_service = reset_knowledge_base_service()
+        stats = await kb_service.get_stats()
+
+        return {
+            "success": True,
+            "user_scope": {
+                "storage_key": request_user.storage_key,
+                "source": request_user.source,
+                "authenticated": request_user.authenticated,
+            },
+            "stats": {
+                "total_entries": stats.total_entries,
+                "entries_by_category": stats.entries_by_category,
+                "entries_by_type": stats.entries_by_type,
+                "last_updated": stats.last_updated.isoformat(),
+                "embedding_model": stats.embedding_model,
+            },
+            "refreshed_at": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to refresh knowledge state: {str(e)}")
 
 
 @router.delete("/clear")

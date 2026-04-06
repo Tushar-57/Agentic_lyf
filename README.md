@@ -1,127 +1,88 @@
-# Agentic Lyf: Multi-Agent AI Assistant System
+# Agentic Lyf
 
-Agentic Lyf is a personal AI operating layer built with specialist agents, orchestration workflows, knowledge retrieval, and configurable LLM providers.
+Agentic Lyf is a multi-agent AI layer with persistent knowledge, approval-based memory capture, and cross-app ingestion from AlterEgo Time Tracking.
 
-The goal is to deliver practical, context-aware assistance across productivity, health, finance, scheduling, and journaling while remaining deployable in real-world cloud environments.
+It is designed for practical, context-aware assistance across productivity, health, finance, scheduling, and journaling.
 
-## Why This Repository Stands Out
+## Current Platform Scope
 
-- Multi-agent architecture with an orchestrator and domain-specific specialists.
-- RAG-style knowledge services for preferences, onboarding context, and retrieval-driven responses.
-- Provider flexibility: OpenAI and Ollama with runtime switching.
-- Production integration with AlterEgo frontend through coach embedding and API bridge routing.
-
-## Core Capabilities
-
-### Orchestrated assistant experience
-- Central orchestrator routes requests to specialist agents.
-- Domain agents for productivity, health, finance, scheduling, and journaling.
-- Unified chat endpoint with structured reasoning payloads.
+### Multi-agent orchestration
+- Enhanced orchestrator with specialist delegation.
+- Domain specialists: health, productivity, finance, scheduling, journal.
+- Structured reasoning payload returned with chat responses.
 
 ### Knowledge and personalization
-- Knowledge APIs for entries, preferences, onboarding profile, and embeddings.
-- Persistent local knowledge artifacts under `data/`.
-- Preference-aware response behavior across sessions.
+- User-scoped FAISS vector storage and knowledge entries.
+- Onboarding profile, goals, planner preferences, interaction history.
+- Embeddings visualization and analytics endpoints.
 
-### Reliability and ops readiness
-- `/health` and `/api/health` endpoints for service checks.
-- Configurable CORS for local and hosted frontends.
-- Cloud-friendly frontend API routing rewrite layer.
+### Approval-first interaction memory
+- Specialist responses are staged as pending interactions.
+- User approval endpoints decide whether staged interactions persist into the knowledge base.
+- Supports safer personalization and prevents low-value memory pollution.
+
+### Force refresh and cache coherence
+- Dedicated knowledge refresh endpoint to rebuild user-scoped in-memory services from persisted index files.
+- Frontend refresh uses cache-busting and no-store fetches for entries, preferences, stats, and onboarding profile.
+
+### AlterEgo bridge
+- Ingests onboarding snapshots.
+- Ingests time-entry interaction events (including backfill pathways).
+- Ingests habit snapshot events.
 
 ## Architecture
 
-### Agent orchestration map
+### High-level flow
 
 ```mermaid
 flowchart TD
-    U[User Prompt] --> FE[Agentic Frontend]
-    FE --> CHAT[/api/chat/]
-    CHAT --> ORCH[Orchestrator Agent]
+  U[User] --> FE[Agentic Frontend]
+  FE --> API[/api/chat]
+  API --> ORCH[Enhanced Orchestrator]
+  ORCH --> PROD[Productivity Agent]
+  ORCH --> HEAL[Health Agent]
+  ORCH --> FIN[Finance Agent]
+  ORCH --> SCHED[Scheduling Agent]
+  ORCH --> JOUR[Journal Agent]
 
-    ORCH --> PROD[Productivity Agent]
-    ORCH --> HEALTH[Health Agent]
-    ORCH --> FIN[Finance Agent]
-    ORCH --> SCHED[Scheduling Agent]
-    ORCH --> JOUR[Journal Agent]
-    ORCH --> GEN[General Agent]
+  PROD --> KB[(Knowledge Base Service)]
+  HEAL --> KB
+  FIN --> KB
+  SCHED --> KB
+  JOUR --> KB
 
-    PROD --> KB[(Knowledge Service)]
-    HEALTH --> KB
-    FIN --> KB
-    SCHED --> KB
-    JOUR --> KB
-    GEN --> KB
-
-    KB --> RESP[Context-Enriched Response]
-    RESP --> FE
+  KB --> API
+  API --> FE
 ```
 
-### Request lifecycle
+### Knowledge lifecycle
 
 ```mermaid
 sequenceDiagram
-    participant UI as React Frontend
-    participant API as FastAPI /api/chat
-    participant WF as LangGraph Workflow
-    participant AG as Specialist Agent
-    participant KB as Knowledge Base
+  participant Agent as Specialist Agent
+  participant Recorder as Interaction Recorder
+  participant Approval as Approval API
+  participant KB as Knowledge Base
 
-    UI->>API: message, conversation_id
-    API->>WF: initialize state
-    WF->>AG: delegate by intent/classification
-    AG->>KB: retrieve context/preferences
-    KB-->>AG: relevant memory snippets
-    AG-->>WF: structured response + reasoning
-    WF-->>API: final state output
-    API-->>UI: response payload
+  Agent->>Recorder: create_pending_interaction(...)
+  Recorder-->>Approval: pending interaction listed
+  Approval->>Recorder: approve or reject
+  Recorder->>KB: add_interaction_history(...) on approve
 ```
 
-### Cross-app deployment bridge (AlterEgo + Agentic)
-
-```mermaid
-graph LR
-    subgraph Vercel Frontends
-      AFE[Agentic Frontend]
-      TFE[AlterEgo Frontend]
-    end
-
-    subgraph Render APIs
-      ABE[Agentic Backend]
-      TBE[AlterEgo Backend]
-    end
-
-    TFE -->|/coach iframe| AFE
-    AFE -->|/api, /ws via env routing| ABE
-    TFE -->|/agentic-api| ABE
-    TFE -->|/api| TBE
-    TBE -->|sync events| ABE
-```
-
-## Technology Stack
-
-| Layer | Technologies |
-|---|---|
-| Frontend | React 18, TypeScript, Vite, Tailwind CSS, Framer Motion |
-| Backend | FastAPI, Pydantic, Uvicorn |
-| Agent runtime | LangChain, LangGraph |
-| LLM providers | OpenAI, Ollama |
-| Retrieval/data | FAISS, local knowledge storage |
-| Testing | pytest, Vitest |
-
-## Repository Structure
+## Repository Layout
 
 ```text
 Agentic_lyf/
 ├── backend/
-│   ├── app/agents/                # specialist and orchestrator agents
-│   ├── app/api/                   # knowledge and approval APIs
-│   ├── app/services/              # knowledge base and service layer
-│   └── main.py                    # FastAPI app entrypoint
+│   ├── app/agents/                # orchestrator and specialist agents
+│   ├── app/api/                   # chat, knowledge, approval APIs
+│   ├── app/services/              # knowledge, recorder, vector store
+│   └── main.py                    # FastAPI entrypoint
 ├── frontend/
-│   ├── src/components/            # chat, onboarding, knowledge UI
-│   ├── src/lib/installApiRouting.ts
-│   └── vite.config.ts
-├── data/                          # vector indexes and runtime data files
+│   ├── src/components/            # chat and knowledge management UIs
+│   └── src/lib/                   # routing and runtime helpers
+├── data/                          # persisted vector/index artifacts
 └── README.md
 ```
 
@@ -132,7 +93,7 @@ Agentic_lyf/
 - Node.js 18+
 - npm
 
-### 1) Backend setup
+### Backend
 
 ```bash
 cd backend
@@ -142,9 +103,7 @@ pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Backend default: `http://localhost:8000`
-
-### 2) Frontend setup
+### Frontend
 
 ```bash
 cd frontend
@@ -152,45 +111,55 @@ npm install
 npm run dev
 ```
 
-Frontend default: `http://localhost:3000`
+Defaults:
+- Backend: http://localhost:8000
+- Frontend: http://localhost:3000
 
-## Configuration
+## Key Environment Variables
 
-### Root environment (`.env.example`)
+### Backend
+- LLM_PROVIDER
+- OPENAI_API_KEY
+- OLLAMA_ENDPOINT
+- OLLAMA_MODEL
+- JWT_SECRET
+- AGENTIC_BRIDGE_SECRET
 
-Key variables:
-- `LLM_PROVIDER`
-- `OPENAI_API_KEY`
-- `OLLAMA_ENDPOINT`
-- `OLLAMA_MODEL`
-- `LANGSMITH_API_KEY` (optional)
-- `TELEGRAM_BOT_TOKEN` (optional)
+### Frontend
+- VITE_AGENTIC_API_ORIGIN
+- VITE_AGENTIC_WS_ORIGIN
+- VITE_AGENTIC_API_PREFIX
+- VITE_BASE_PATH
 
-### Frontend environment (`frontend/.env.example`)
+## API Summary
 
-- `VITE_AGENTIC_API_ORIGIN`
-- `VITE_AGENTIC_WS_ORIGIN`
-- `VITE_BASE_PATH`
-- `VITE_AGENTIC_API_PREFIX`
+### Health and chat
+- GET /health
+- GET /api/health
+- POST /api/chat
 
-## API Surface
+### Knowledge
+- GET, POST, PUT, DELETE /api/knowledge/entries
+- GET /api/knowledge/stats
+- GET /api/knowledge/preferences
+- GET /api/knowledge/onboarding/profile
+- POST /api/knowledge/interactions
+- POST /api/knowledge/refresh
 
-- `GET /health`
-- `GET /api/health`
-- `POST /api/chat`
-- `GET /api/agents/status`
-- `GET/POST/PUT/DELETE /api/knowledge/...`
-- `POST /api/llm/switch-provider`
+### Approval workflow
+- GET /api/approval/pending
+- POST /api/approval/approve
+- GET /api/approval/stats
+- POST /api/approval/bulk-approve
 
-## Production Notes
+## Operational Notes
 
-- Agentic backend is API-first and is expected to run behind Render.
-- Agentic frontend is expected to run on Vercel and route API calls through environment-driven rewrites.
-- For AlterEgo embedding scenarios, set the coach iframe source to Agentic frontend URL (not backend API URL).
+- Knowledge storage is user-scoped using request context identity.
+- Pending approvals are held in memory; approve promptly when running non-persistent local environments.
+- Use /api/knowledge/refresh when you suspect stale in-memory state after external sync events.
 
-## Engineering Highlights For Hiring Managers
+## Integration Notes (AlterEgo)
 
-- Designed and shipped a multi-agent orchestration surface with practical API contracts.
-- Integrated RAG-style knowledge workflows into product UX, not just backend demos.
-- Solved deployment edge cases across CORS, environment-driven routing, and split frontend/backend hosting.
-- Kept architecture extensible for upcoming Telegram and mobile surfaces.
+- Onboarding snapshots are ingested via /api/knowledge/onboarding.
+- Time and habit events are ingested via /api/knowledge/interactions.
+- Sync payload context fields drive category inference and deduplication behavior in the knowledge layer.

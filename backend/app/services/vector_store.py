@@ -388,3 +388,16 @@ def get_vector_store(user_id: Optional[str] = None) -> VectorStore:
         )
 
     return _vector_stores_by_user[resolved_user_id]
+
+
+def reset_vector_store(user_id: Optional[str] = None) -> VectorStore:
+    """Force reload a user-scoped vector store from persisted index files."""
+    from app.auth.user_context import get_current_user_id, normalize_user_storage_key
+
+    resolved_user_id = normalize_user_storage_key(user_id or get_current_user_id())
+    _vector_stores_by_user.pop(resolved_user_id, None)
+    _vector_stores_by_user[resolved_user_id] = VectorStore(
+        index_path=_resolve_index_path_for_user(resolved_user_id)
+    )
+
+    return _vector_stores_by_user[resolved_user_id]

@@ -7,8 +7,7 @@ import {
   Edit3, 
   Trash2, 
   Plus, 
-  ChevronDown,
-  ChevronUp,
+  RefreshCcw,
   Tag,
   Calendar,
   Clock,
@@ -55,6 +54,18 @@ interface KnowledgeStats {
   entries_by_category: Record<string, number>
   last_updated: string
   embedding_model: string
+}
+
+interface OnboardingProfileSnapshot {
+  role?: string | null
+  mentor?: {
+    name?: string
+    archetype?: string
+    style?: string
+  }
+  goals?: Array<{ id?: string; title?: string }>
+  preferredTone?: string | null
+  onboardingCompleted?: boolean
 }
 
 interface KnowledgeBaseViewerProps {
@@ -518,36 +529,54 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
   const [entries, setEntries] = useState<KnowledgeEntry[]>([])
   const [preferences, setPreferences] = useState<UserPreferences | null>(null)
   const [stats, setStats] = useState<KnowledgeStats | null>(null)
+  const [profileSnapshot, setProfileSnapshot] = useState<OnboardingProfileSnapshot | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<string>('all')
   const [selectedType, setSelectedType] = useState<string>('all')
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null)
-  const [expandedEntries, setExpandedEntries] = useState<Record<string, boolean>>({})
+  const [refreshScope, setRefreshScope] = useState<string | null>(null)
 
   // Load data on component mount
   useEffect(() => {
     void loadKnowledgeData()
   }, [refreshKey])
 
-  const loadKnowledgeData = async () => {
+  const loadKnowledgeData = async (forceRefresh = false) => {
     setIsLoading(true)
     setError(null)
     
     try {
+      const cacheBust = Date.now().toString()
+
       const requestOptions: RequestInit = {
         cache: 'no-store',
         headers: {
           'Cache-Control': 'no-cache',
+          Pragma: 'no-cache',
         },
       }
 
+      if (forceRefresh) {
+        const refreshResponse = await fetch(`/api/knowledge/refresh?ts=${cacheBust}`, {
+          method: 'POST',
+          ...requestOptions,
+        }).catch(() => null)
+
+        if (refreshResponse && refreshResponse.ok) {
+          const refreshData = await refreshResponse.json()
+          const scope = refreshData?.user_scope?.storage_key
+          setRefreshScope(typeof scope === 'string' && scope.trim() ? scope : null)
+        }
+      }
+
       // Load entries, preferences, and stats in parallel
-      const [entriesRes, preferencesRes, statsRes] = await Promise.all([
-        fetch('/api/knowledge/entries', requestOptions).catch(() => null),
-        fetch('/api/knowledge/preferences', requestOptions).catch(() => null),
-        fetch('/api/knowledge/stats', requestOptions).catch(() => null)
+      const [entriesRes, preferencesRes, statsRes, profileRes] = await Promise.all([
+        fetch(`/api/knowledge/entries?ts=${cacheBust}`, requestOptions).catch(() => null),
+        fetch(`/api/knowledge/preferences?ts=${cacheBust}`, requestOptions).catch(() => null),
+        fetch(`/api/knowledge/stats?ts=${cacheBust}`, requestOptions).catch(() => null),
+        fetch(`/api/knowledge/onboarding/profile?ts=${cacheBust}`, requestOptions).catch(() => null),
       ])
 
       if (entriesRes && entriesRes.ok) {
@@ -571,6 +600,13 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
         setStats(null)
       }
 
+      if (profileRes && profileRes.ok) {
+        const profileData = await profileRes.json()
+        setProfileSnapshot(profileData)
+      } else {
+        setProfileSnapshot(null)
+      }
+
       setLastSyncedAt(new Date().toISOString())
     } catch (err) {
       console.error('Failed to load knowledge data:', err)
@@ -589,6 +625,7 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
       
       // Set empty preferences as fallback
       setPreferences(null)
+      setProfileSnapshot(null)
     } finally {
       setIsLoading(false)
     }
@@ -666,11 +703,26 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
     }
   }
 
-  const toggleExpandedEntry = (entryId: string) => {
-    setExpandedEntries((prev) => ({
-      ...prev,
-      [entryId]: !prev[entryId],
-    }))
+  const getEntryTileStyle = (type: string) => {
+    switch (type) {
+      case 'preference':
+      case 'user_preference':
+        return 'border-teal-200/70 bg-gradient-to-br from-teal-50/60 via-white to-cyan-50/40 dark:border-teal-900/60 dark:from-teal-950/25 dark:to-slate-900/55'
+      case 'goal':
+        return 'border-violet-200/70 bg-gradient-to-br from-violet-50/65 via-white to-fuchsia-50/40 dark:border-violet-900/60 dark:from-violet-950/20 dark:to-slate-900/55'
+      case 'time_entry':
+        return 'border-indigo-200/70 bg-gradient-to-br from-indigo-50/65 via-white to-blue-50/45 dark:border-indigo-900/60 dark:from-indigo-950/20 dark:to-slate-900/55'
+      case 'interaction':
+        return 'border-emerald-200/70 bg-gradient-to-br from-emerald-50/65 via-white to-green-50/40 dark:border-emerald-900/60 dark:from-emerald-950/20 dark:to-slate-900/55'
+      case 'pattern':
+        return 'border-sky-200/70 bg-gradient-to-br from-sky-50/65 via-white to-cyan-50/45 dark:border-sky-900/60 dark:from-sky-950/20 dark:to-slate-900/55'
+      case 'insight':
+        return 'border-amber-200/70 bg-gradient-to-br from-amber-50/70 via-white to-orange-50/45 dark:border-amber-900/60 dark:from-amber-950/20 dark:to-slate-900/55'
+      case 'memory':
+        return 'border-slate-300/70 bg-gradient-to-br from-slate-50/75 via-white to-slate-100/45 dark:border-slate-800/80 dark:from-slate-900/65 dark:to-slate-950/70'
+      default:
+        return 'border-border/70 bg-white/75 dark:bg-slate-900/60'
+    }
   }
 
   if (isLoading) {
@@ -698,17 +750,22 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
               Last synced: {new Date(lastSyncedAt).toLocaleTimeString()}
             </p>
           )}
+          {refreshScope && (
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Active storage scope: {refreshScope}
+            </p>
+          )}
         </div>
         <div className="flex gap-2 flex-shrink-0 flex-wrap">
           <Button 
-            onClick={loadKnowledgeData} 
+            onClick={() => void loadKnowledgeData(true)} 
             variant="ghost" 
             size="icon"
             disabled={isLoading}
             className="gap-2"
-            title="Refresh data"
+            title="Force refresh data"
           >
-            <Database className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+            <RefreshCcw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
           </Button>
           <Button onClick={onAddPreference} variant="outline" className="gap-2">
             <Plus className="w-4 h-4" />
@@ -723,7 +780,7 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
         </div>
       </div>
 
-      {preferences && (
+      {(preferences || profileSnapshot) && (
         <Card className="border-border/70 bg-white/75 p-4 shadow-sm dark:bg-slate-900/60">
           <div className="mb-2 flex items-center justify-between">
             <h3 className="text-sm font-semibold">Preference Snapshot</h3>
@@ -731,22 +788,30 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
               Live Preferences
             </Badge>
           </div>
-          <div className="grid grid-cols-1 gap-3 text-xs text-muted-foreground sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-6">
             <div>
               <p className="font-medium text-slate-700 dark:text-slate-200">Primary Provider</p>
-              <p>{String(preferences.llm_provider?.provider || 'not set')}</p>
+              <p>{String(preferences?.llm_provider?.provider || 'not set')}</p>
             </div>
             <div>
               <p className="font-medium text-slate-700 dark:text-slate-200">Timezone</p>
-              <p>{String(preferences.general?.timezone || 'not set')}</p>
+              <p>{String(preferences?.general?.timezone || 'not set')}</p>
             </div>
             <div>
               <p className="font-medium text-slate-700 dark:text-slate-200">Work Hours</p>
-              <p>{String(preferences.productivity?.work_hours || preferences.general?.work_hours || 'not set')}</p>
+              <p>{String(preferences?.productivity?.work_hours || preferences?.general?.work_hours || 'not set')}</p>
             </div>
             <div>
               <p className="font-medium text-slate-700 dark:text-slate-200">Check-In Time</p>
-              <p>{String(preferences.journal?.check_in_time || 'not set')}</p>
+              <p>{String(preferences?.journal?.check_in_time || 'not set')}</p>
+            </div>
+            <div>
+              <p className="font-medium text-slate-700 dark:text-slate-200">Role</p>
+              <p>{String(profileSnapshot?.role || 'not set')}</p>
+            </div>
+            <div>
+              <p className="font-medium text-slate-700 dark:text-slate-200">Mentor</p>
+              <p>{String(profileSnapshot?.mentor?.name || 'not set')}</p>
             </div>
           </div>
         </Card>
@@ -885,8 +950,8 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
           {filteredEntries.map((entry, index) => {
             const Icon = getEntryIcon(entry.displayType)
             const colorClass = getEntryColor(entry.displayType)
+            const tileStyle = getEntryTileStyle(entry.displayType)
             const presentation = buildPresentation(entry)
-            const isExpanded = Boolean(expandedEntries[entry.entry_id])
             
             return (
               <motion.div
@@ -896,7 +961,10 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
                 exit={{ opacity: 0, y: -20 }}
                 transition={{ delay: index * 0.1 }}
               >
-                <Card className="border-border/70 bg-white/75 p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md dark:bg-slate-900/60">
+                <Card className={cn(
+                  'p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md',
+                  tileStyle,
+                )}>
                   <div className="flex items-start gap-4">
                     <div className={cn(
                       "w-10 h-10 rounded-xl flex items-center justify-center bg-gradient-to-br",
@@ -924,18 +992,9 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
                             <span>{new Date(entry.created_at).toLocaleDateString()}</span>
                           </div>
                         </div>
-                        
-                        <div className="flex gap-1 flex-shrink-0">
-                          <Button 
-                            variant="ghost" 
-                            size="sm"
-                            className="h-8 px-2"
-                            onClick={() => toggleExpandedEntry(entry.entry_id)}
-                          >
-                            <span className="mr-1 text-xs">{isExpanded ? 'Hide' : 'Details'}</span>
-                            {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                          </Button>
-                          {(entry.displayType === 'preference' || entry.displayType === 'user_preference') && onEditPreferences && (
+
+                        {(entry.displayType === 'preference' || entry.displayType === 'user_preference') && onEditPreferences && (
+                          <div className="flex gap-1 flex-shrink-0">
                             <Button
                               variant="ghost"
                               size="icon"
@@ -944,8 +1003,8 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
                             >
                               <Edit3 className="w-4 h-4" />
                             </Button>
-                          )}
-                        </div>
+                          </div>
+                        )}
                       </div>
                       
                       <p className="text-muted-foreground mb-3 break-words whitespace-pre-wrap text-sm leading-relaxed">
@@ -970,42 +1029,6 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
                               </div>
                             )
                           })}
-                        </div>
-                      )}
-
-                      {isExpanded && (
-                        <div className="mb-3 space-y-3 rounded-xl border border-border/60 bg-muted/20 p-3">
-                          {presentation.contentRows.length > 0 && (
-                            <div>
-                              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                                Entry Details
-                              </p>
-                              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                                {presentation.contentRows.map((row, rowIndex) => (
-                                  <div key={`${entry.entry_id}-content-row-${rowIndex}`} className="rounded-md bg-background/70 px-2 py-1.5">
-                                    <p className="text-[11px] text-muted-foreground">{row.label}</p>
-                                    <p className="text-xs font-medium break-words">{row.value}</p>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          {presentation.metadataRows.length > 0 && (
-                            <div>
-                              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                                Metadata
-                              </p>
-                              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                                {presentation.metadataRows.map((row, rowIndex) => (
-                                  <div key={`${entry.entry_id}-metadata-row-${rowIndex}`} className="rounded-md bg-background/70 px-2 py-1.5">
-                                    <p className="text-[11px] text-muted-foreground">{row.label}</p>
-                                    <p className="text-xs font-medium break-words">{row.value}</p>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
                         </div>
                       )}
                       

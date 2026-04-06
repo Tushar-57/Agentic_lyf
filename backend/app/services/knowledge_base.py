@@ -1643,3 +1643,18 @@ def get_knowledge_base_service(user_id: Optional[str] = None) -> KnowledgeBaseSe
         _knowledge_base_services[resolved_user_id] = KnowledgeBaseService(resolved_user_id)
 
     return _knowledge_base_services[resolved_user_id]
+
+
+def reset_knowledge_base_service(user_id: Optional[str] = None) -> KnowledgeBaseService:
+    """Force rebuild the user-scoped knowledge service and reload persisted vector data."""
+    from app.auth.user_context import get_current_user_id, normalize_user_storage_key
+    from .vector_store import reset_vector_store
+
+    resolved_user_id = normalize_user_storage_key(user_id or get_current_user_id())
+
+    # Reload vector index from disk first, then rebuild service-level caches.
+    reset_vector_store(resolved_user_id)
+    _knowledge_base_services.pop(resolved_user_id, None)
+    _knowledge_base_services[resolved_user_id] = KnowledgeBaseService(resolved_user_id)
+
+    return _knowledge_base_services[resolved_user_id]
