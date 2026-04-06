@@ -29,6 +29,7 @@ class OpenAIProvider(BaseLLMProvider):
         self, 
         api_key: str, 
         model: str = "gpt-3.5-turbo",
+        embedding_model: str = "text-embedding-3-small",
         base_url: Optional[str] = None,
         max_tokens: int = 4000,
         temperature: float = 0.7
@@ -36,6 +37,7 @@ class OpenAIProvider(BaseLLMProvider):
         super().__init__(LLMProviderType.OPENAI)
         self.api_key = api_key
         self.model = model
+        self.embedding_model = embedding_model
         self.base_url = base_url
         self.max_tokens = max_tokens
         self.temperature = temperature
@@ -84,6 +86,7 @@ class OpenAIProvider(BaseLLMProvider):
             # Initialize embeddings model
             embedding_kwargs = {
                 "openai_api_key": self.api_key,
+                "model": self.embedding_model,
             }
             if self.base_url:
                 embedding_kwargs["openai_api_base"] = self.base_url
@@ -196,7 +199,7 @@ class OpenAIProvider(BaseLLMProvider):
 
                 return EmbeddingResponse(
                     embedding=embedding,
-                    model="text-embedding-ada-002"
+                    model=self.embedding_model
                 )
             except Exception as e:
                 last_error = e

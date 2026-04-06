@@ -13,5 +13,21 @@ services:
         value: https://.*\\.vercel\\.app|https://.*\\.netlify\\.app
       - key: OPENAI_API_KEY
         sync: false
+      - key: OPENAI_EMBEDDING_MODEL
+        value: text-embedding-3-small
+      - key: AGENTIC_DATA_DIR
+        value: /app/data
+      - key: LOG_LEVEL
+        value: INFO
+      - key: LOG_COLOR_ENABLED
+        value: "true"
+      - key: EMBEDDING_LOG_ENABLED
+        value: "true"
+      - key: EMBEDDING_LOG_FULL_TEXT
+        value: "true"
+      - key: AI_CONVERSATION_LOG_ENABLED
+        value: "true"
+      - key: AI_CONVERSATION_LOG_FULL_TEXT
+        value: "true"
       - key: OLLAMA_ENDPOINT
         sync: false

@@ -25,7 +25,7 @@ from app.llm.service import get_llm_service
 from app.llm.base import LLMProviderType
 from app.llm.config import LLMConfig
 from app.llm.ollama_provider import OllamaProvider
-from app.utils.logging import get_api_category_logger
+from app.utils.logging import get_api_category_logger, get_conversation_category_logger
 from app.services.config_storage import get_config_storage
 from app.services.interaction_recorder import get_interaction_recorder
 from app.services.knowledge_base import get_knowledge_base_service
@@ -37,6 +37,45 @@ load_dotenv()
 
 # Use enhanced logging
 logger = get_api_category_logger("main")
+conversation_logger = get_conversation_category_logger("app.conversation.api")
+
+
+def parse_bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def parse_positive_int_env(name: str, default: int, minimum: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return max(minimum, int(raw))
+    except (TypeError, ValueError):
+        return default
+
+
+API_CHAT_LOG_ENABLED = parse_bool_env("AI_CONVERSATION_LOG_ENABLED", True)
+API_CHAT_LOG_FULL_TEXT = parse_bool_env("AI_CONVERSATION_LOG_FULL_TEXT", True)
+API_CHAT_LOG_MAX_CHARS = parse_positive_int_env("AI_CONVERSATION_LOG_MAX_CHARS", 64000, 500)
+
+
+def serialize_chat_payload(payload: Any) -> str:
+    if payload is None:
+        return ""
+    if isinstance(payload, str):
+        text = payload
+    else:
+        try:
+            text = json.dumps(payload, ensure_ascii=False, default=str)
+        except Exception:
+            text = str(payload)
+
+    if API_CHAT_LOG_FULL_TEXT or len(text) <= API_CHAT_LOG_MAX_CHARS:
+        return text
+    return f"{text[:API_CHAT_LOG_MAX_CHARS - 3]}..."
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -191,6 +230,14 @@ async def api_health_check():
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_endpoint(request: ChatRequest):
     try:
+        if API_CHAT_LOG_ENABLED:
+            conversation_logger.info(
+                "API_CHAT_REQUEST conversation_id=%s agent=%s message=%s",
+                request.conversation_id,
+                request.agent,
+                serialize_chat_payload(request.message),
+            )
+
         registry = get_agent_registry()
         # Find orchestrator agent by type
         logger.info(f"{registry.get_agent_ids()}")
@@ -270,6 +317,16 @@ async def chat_endpoint(request: ChatRequest):
 
         logger.info(f"[DEBUG] Final response type: {type(response)} value: {response}")
         logger.info(f"[DEBUG] Final reasoning type: {type(reasoning)} value: {reasoning}")
+
+        if API_CHAT_LOG_ENABLED:
+            conversation_logger.info(
+                "API_CHAT_RESPONSE conversation_id=%s agent=%s response=%s reasoning=%s",
+                request.conversation_id,
+                state.get("agent", orchestrator.agent_id),
+                serialize_chat_payload(response),
+                serialize_chat_payload(reasoning),
+            )
+
         return ChatResponse(
             response=response,
             agent=state.get("agent", orchestrator.agent_id),
@@ -291,6 +348,14 @@ async def chat_endpoint(request: ChatRequest):
             )
         else:
             user_facing_message = f"I'm the orchestrator agent. I encountered an issue: {error_text}."
+
+        if API_CHAT_LOG_ENABLED:
+            conversation_logger.error(
+                "API_CHAT_ERROR conversation_id=%s agent=%s error=%s",
+                request.conversation_id,
+                request.agent,
+                serialize_chat_payload(error_text),
+            )
 
         return ChatResponse(
             response=user_facing_message,
@@ -371,6 +436,10 @@ async def switch_provider(request: ProviderSwitchRequest):
             provided_model = str((request.config or {}).get("model", "")).strip()
             if provided_model:
                 merged_openai["model"] = provided_model
+
+            provided_embedding_model = str((request.config or {}).get("embedding_model", "")).strip()
+            if provided_embedding_model:
+                merged_openai["embedding_model"] = provided_embedding_model
 
             provided_base_url = str((request.config or {}).get("base_url", "")).strip()
             if provided_base_url:
@@ -664,6 +733,8 @@ async def get_config():
             openai_config["api_key"] = "***configured***"
         if not openai_config.get("model"):
             openai_config["model"] = effective_config.openai_model
+        if not openai_config.get("embedding_model"):
+            openai_config["embedding_model"] = effective_config.openai_embedding_model
         
         return {
             "openai": openai_config,

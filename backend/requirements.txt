@@ -13,6 +13,7 @@ python-telegram-bot==21.0.1
 
 # Enhanced Logging and UI
 colorama==0.4.6
+colorlog==6.9.0
 
 # LangChain and LangGraph Ecosystem (Latest versions)
 langchain==0.3.27

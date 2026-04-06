@@ -109,6 +109,7 @@ class LLMProviderFactory:
                 provider = provider_cls(
                     api_key=provider_config_dict["api_key"],
                     model=provider_config_dict["model"],
+                    embedding_model=provider_config_dict["embedding_model"],
                     max_tokens=provider_config_dict["max_tokens"],
                     temperature=provider_config_dict["temperature"],
                     base_url=provider_config_dict["base_url"]

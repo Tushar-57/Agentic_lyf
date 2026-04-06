@@ -44,6 +44,7 @@ class LLMConfig(BaseModel):
     # OpenAI configuration
     openai_api_key: Optional[str] = None
     openai_model: str = "gpt-3.5-turbo"
+    openai_embedding_model: str = "text-embedding-3-small"
     openai_base_url: Optional[str] = None
     
     # Ollama configuration
@@ -67,6 +68,7 @@ class LLMConfig(BaseModel):
             return {
                 "api_key": self.openai_api_key,
                 "model": self.openai_model,
+                "embedding_model": self.openai_embedding_model,
                 "base_url": self.openai_base_url,
                 "max_tokens": self.max_tokens,
                 "temperature": self.temperature
@@ -107,6 +109,12 @@ class LLMConfig(BaseModel):
         # Security: API keys should come from environment variables, not persisted user config files.
         openai_api_key = (env_vars.get("OPENAI_API_KEY") or "").strip() or None
         openai_model = (env_vars.get("OPENAI_MODEL") or openai_config.get("model") or "gpt-3.5-turbo").strip()
+        openai_embedding_model = (
+            env_vars.get("OPENAI_EMBEDDING_MODEL")
+            or openai_config.get("embedding_model")
+            or "text-embedding-3-small"
+        )
+        openai_embedding_model = str(openai_embedding_model).strip()
         openai_base_url = (env_vars.get("OPENAI_BASE_URL") or openai_config.get("base_url") or None)
 
         ollama_endpoint = (
@@ -158,6 +166,7 @@ class LLMConfig(BaseModel):
             # Allow deployment env vars to override persisted config.
             openai_api_key=openai_api_key,
             openai_model=openai_model,
+            openai_embedding_model=openai_embedding_model,
             openai_base_url=openai_base_url,
             
             ollama_endpoint=ollama_endpoint,

@@ -11,6 +11,7 @@ import faiss
 from datetime import datetime
 
 from ..models.knowledge import KnowledgeEntry, KnowledgeSearchResult
+from .storage_paths import resolve_data_path
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 class VectorStore:
     """FAISS-based vector store for storing and retrieving embeddings."""
     
-    def __init__(self, dimension: int = 1536, index_path: str = "data/vector_index"):
+    def __init__(self, dimension: int = 1536, index_path: Optional[str] = None):
         """
         Initialize the vector store.
         
@@ -26,6 +27,9 @@ class VectorStore:
             dimension: Dimension of the embeddings (1536 for standardized embeddings across providers)
             index_path: Path to store the FAISS index and metadata
         """
+        if not index_path:
+            index_path = resolve_data_path("vector_index")
+
         self.dimension = dimension
         self.index_path = index_path
         self.metadata_path = f"{index_path}_metadata.pkl"
@@ -372,9 +376,9 @@ _vector_stores_by_user: Dict[str, VectorStore] = {}
 
 def _resolve_index_path_for_user(user_id: str) -> str:
     if user_id == "single_user":
-        return "data/vector_index"
+        return resolve_data_path("vector_index")
 
-    return f"data/users/{user_id}/vector_index"
+    return resolve_data_path("users", user_id, "vector_index")
 
 
 def get_vector_store(user_id: Optional[str] = None) -> VectorStore:

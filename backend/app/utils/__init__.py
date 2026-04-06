@@ -7,10 +7,18 @@ This module contains utility functions and helpers for:
 - Configuration utilities
 """
 
-from .logging import get_agent_logger, setup_logging, LogCategory
+from .logging import (
+    LogCategory,
+    get_agent_logger,
+    get_conversation_category_logger,
+    get_embedding_category_logger,
+    setup_logging,
+)
 
 __all__ = [
     "get_agent_logger",
+    "get_conversation_category_logger",
+    "get_embedding_category_logger",
     "setup_logging", 
     "LogCategory",
 ]

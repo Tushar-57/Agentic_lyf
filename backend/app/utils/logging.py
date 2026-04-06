@@ -1,19 +1,18 @@
-"""
-Enhanced Logging System with Colored Output and Category-Based Loggers
-
-This module provides:
-- Colored console output for different log levels and categories
-- Category-based loggers (AGENT, LLM, API, etc.)
-- Timestamp formatting and additional context
-- Centralized logging configuration
-"""
+"""Enhanced logging configuration with category-aware colored output."""
 
 import logging
+import os
 import sys
 from datetime import datetime
 from enum import Enum
 from typing import Optional, Dict, Any
+
 from colorama import Fore, Back, Style, init
+
+try:
+    import colorlog
+except ImportError:  # pragma: no cover - handled gracefully in runtime envs
+    colorlog = None
 
 # Initialize colorama for cross-platform colored output
 init(autoreset=True)
@@ -30,6 +29,8 @@ class LogCategory(Enum):
     KNOWLEDGE = "KNOWLEDGE"
     FACTORY = "FACTORY"
     REGISTRY = "REGISTRY"
+    EMBEDDING = "EMBEDDING"
+    CONVERSATION = "CONVERSATION"
     SYSTEM = "SYSTEM"
 
 
@@ -56,6 +57,8 @@ class ColoredFormatter(logging.Formatter):
         LogCategory.KNOWLEDGE: Fore.LIGHTBLUE_EX,
         LogCategory.FACTORY: Fore.LIGHTGREEN_EX,
         LogCategory.REGISTRY: Fore.LIGHTMAGENTA_EX,
+        LogCategory.EMBEDDING: Fore.LIGHTCYAN_EX,
+        LogCategory.CONVERSATION: Fore.LIGHTYELLOW_EX,
         LogCategory.SYSTEM: Fore.LIGHTWHITE_EX,
     }
     
@@ -122,6 +125,71 @@ class ColoredFormatter(logging.Formatter):
         return " ".join(parts)
 
 
+class ColorlogCategoryFormatter(logging.Formatter):
+    """Category-aware formatter backed by colorlog when available."""
+
+    CATEGORY_ANSI = {
+        LogCategory.AGENT: "\033[34m",
+        LogCategory.LLM: "\033[35m",
+        LogCategory.API: "\033[32m",
+        LogCategory.SERVICE: "\033[36m",
+        LogCategory.WORKFLOW: "\033[33m",
+        LogCategory.COMMUNICATION: "\033[37m",
+        LogCategory.KNOWLEDGE: "\033[94m",
+        LogCategory.FACTORY: "\033[92m",
+        LogCategory.REGISTRY: "\033[95m",
+        LogCategory.EMBEDDING: "\033[96m",
+        LogCategory.CONVERSATION: "\033[93m",
+        LogCategory.SYSTEM: "\033[97m",
+    }
+
+    def __init__(self, include_timestamp: bool = True, include_category: bool = True):
+        self.include_timestamp = include_timestamp
+        self.include_category = include_category
+
+        fmt_parts = []
+        if include_timestamp:
+            fmt_parts.append("%(white)s[%(asctime)s]%(reset)s")
+        fmt_parts.append("%(log_color)s[%(levelname)-8s]%(reset)s")
+        if include_category:
+            fmt_parts.append("%(category_color)s[%(category_display)-12s]%(reset)s")
+        fmt_parts.append("%(white)s%(name)s:%(reset)s")
+        fmt_parts.append("%(message)s")
+
+        if colorlog is None:
+            super().__init__(fmt=" ".join(fmt_parts), datefmt="%H:%M:%S")
+            self._fallback = True
+        else:
+            self._formatter = colorlog.ColoredFormatter(
+                fmt=" ".join(fmt_parts),
+                datefmt="%H:%M:%S",
+                log_colors={
+                    "DEBUG": "cyan",
+                    "INFO": "green",
+                    "WARNING": "yellow",
+                    "ERROR": "red",
+                    "CRITICAL": "bold_red,bg_white",
+                },
+                reset=True,
+            )
+            self._fallback = False
+
+    def format(self, record: logging.LogRecord) -> str:
+        category_value = getattr(record, "category", LogCategory.SYSTEM)
+        if isinstance(category_value, LogCategory):
+            category = category_value
+        else:
+            normalized = str(category_value or "SYSTEM").strip().upper()
+            category = LogCategory.__members__.get(normalized, LogCategory.SYSTEM)
+
+        record.category_display = category.value
+        record.category_color = self.CATEGORY_ANSI.get(category, "\033[97m")
+
+        if self._fallback:
+            return super().format(record)
+        return self._formatter.format(record)
+
+
 class CategoryLogger:
     """Logger wrapper that adds category information."""
     
@@ -136,36 +204,36 @@ class CategoryLogger:
         self.logger = logger
         self.category = category
     
-    def debug(self, message: str, **kwargs):
+    def debug(self, message: str, *args, **kwargs):
         """Log a debug message."""
-        self._log(logging.DEBUG, message, **kwargs)
+        self._log(logging.DEBUG, message, *args, **kwargs)
     
-    def info(self, message: str, **kwargs):
+    def info(self, message: str, *args, **kwargs):
         """Log an info message."""
-        self._log(logging.INFO, message, **kwargs)
+        self._log(logging.INFO, message, *args, **kwargs)
     
-    def warning(self, message: str, **kwargs):
+    def warning(self, message: str, *args, **kwargs):
         """Log a warning message."""
-        self._log(logging.WARNING, message, **kwargs)
+        self._log(logging.WARNING, message, *args, **kwargs)
     
-    def error(self, message: str, **kwargs):
+    def error(self, message: str, *args, **kwargs):
         """Log an error message."""
-        self._log(logging.ERROR, message, **kwargs)
+        self._log(logging.ERROR, message, *args, **kwargs)
     
-    def critical(self, message: str, **kwargs):
+    def critical(self, message: str, *args, **kwargs):
         """Log a critical message."""
-        self._log(logging.CRITICAL, message, **kwargs)
+        self._log(logging.CRITICAL, message, *args, **kwargs)
     
-    def _log(self, level: int, message: str, **kwargs):
+    def _log(self, level: int, message: str, *args, **kwargs):
         """Internal logging method that adds category and context."""
         extra = {"category": self.category}
         
         # Add context from kwargs
-        for key, value in kwargs.items():
-            if key in ["agent_id", "execution_time", "request_id"]:
-                extra[key] = value
-        
-        self.logger.log(level, message, extra=extra)
+        for key in ["agent_id", "execution_time", "request_id"]:
+            if key in kwargs:
+                extra[key] = kwargs.pop(key)
+
+        self.logger.log(level, message, *args, extra=extra, **kwargs)
 
 
 # Global logger registry
@@ -187,6 +255,13 @@ def setup_logging(
         include_category: Whether to include categories
         format_style: The format style ("colored" or "plain")
     """
+    env_level = os.getenv("LOG_LEVEL", "").strip().upper()
+    if env_level:
+        level = getattr(logging, env_level, level)
+
+    color_enabled_raw = os.getenv("LOG_COLOR_ENABLED", "true").strip().lower()
+    color_enabled = color_enabled_raw in {"1", "true", "yes", "on"}
+
     # Get the root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
@@ -200,11 +275,17 @@ def setup_logging(
     handler.setLevel(level)
     
     # Set formatter based on style
-    if format_style == "colored":
-        formatter = ColoredFormatter(
-            include_timestamp=include_timestamp,
-            include_category=include_category
-        )
+    if format_style == "colored" and color_enabled:
+        if colorlog is not None:
+            formatter = ColorlogCategoryFormatter(
+                include_timestamp=include_timestamp,
+                include_category=include_category,
+            )
+        else:
+            formatter = ColoredFormatter(
+                include_timestamp=include_timestamp,
+                include_category=include_category,
+            )
     else:
         # Plain formatter
         format_str = ""
@@ -325,6 +406,16 @@ def get_registry_category_logger(name: str = "app.registry") -> CategoryLogger:
 def get_system_category_logger(name: str = "app.system") -> CategoryLogger:
     """Get a system category logger."""
     return get_agent_logger(name, LogCategory.SYSTEM)
+
+
+def get_embedding_category_logger(name: str = "app.embedding") -> CategoryLogger:
+    """Get an embedding category logger."""
+    return get_agent_logger(name, LogCategory.EMBEDDING)
+
+
+def get_conversation_category_logger(name: str = "app.conversation") -> CategoryLogger:
+    """Get a conversation category logger."""
+    return get_agent_logger(name, LogCategory.CONVERSATION)
 
 
 # Example usage and testing function

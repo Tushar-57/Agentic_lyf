@@ -1,6 +1,7 @@
 """
 Knowledge base service providing CRUD operations and RAG functionality.
 """
+import os
 import hashlib
 import json
 import uuid
@@ -21,13 +22,57 @@ from ..models.knowledge import (
 )
 from ..llm.service import get_llm_service
 from ..llm.base import EmbeddingRequest
+from ..utils.logging import get_embedding_category_logger
 from .vector_store import get_vector_store
 
 logger = logging.getLogger(__name__)
+embedding_logger = get_embedding_category_logger("app.embedding.knowledge")
 
 
 EMBEDDING_CACHE_KEY_FIELD = "_embedding_cache_key"
 EMBEDDING_PROVIDER_COOLDOWN_SECONDS = 30.0
+
+
+def _parse_bool_env(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+
+    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_positive_int_env(name: str, default: int, minimum: int) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+
+    try:
+        return max(minimum, int(raw_value))
+    except (TypeError, ValueError):
+        return default
+
+
+EMBEDDING_MAX_CHARS_PER_CHUNK = _parse_positive_int_env(
+    "EMBEDDING_MAX_CHARS_PER_CHUNK",
+    default=1200,
+    minimum=400,
+)
+EMBEDDING_CHUNK_OVERLAP_CHARS = min(
+    EMBEDDING_MAX_CHARS_PER_CHUNK // 2,
+    _parse_positive_int_env("EMBEDDING_CHUNK_OVERLAP_CHARS", default=180, minimum=0),
+)
+EMBEDDING_MAX_CHUNKS_PER_ENTRY = _parse_positive_int_env(
+    "EMBEDDING_MAX_CHUNKS_PER_ENTRY",
+    default=8,
+    minimum=1,
+)
+EMBEDDING_LOG_ENABLED = _parse_bool_env("EMBEDDING_LOG_ENABLED", default=True)
+EMBEDDING_LOG_FULL_TEXT = _parse_bool_env("EMBEDDING_LOG_FULL_TEXT", default=True)
+EMBEDDING_LOG_MAX_TEXT_CHARS = _parse_positive_int_env(
+    "EMBEDDING_LOG_MAX_TEXT_CHARS",
+    default=32000,
+    minimum=200,
+)
 
 
 class KnowledgeBaseService:
@@ -78,6 +123,67 @@ class KnowledgeBaseService:
         if len(text) <= limit:
             return text
         return f"{text[:limit - 3]}..."
+
+    def _prepare_embedding_log_text(self, text: str) -> str:
+        normalized = str(text or "")
+        if EMBEDDING_LOG_FULL_TEXT:
+            return normalized
+
+        return self._truncate_for_log(normalized, limit=EMBEDDING_LOG_MAX_TEXT_CHARS)
+
+    def _log_embedding_payload(
+        self,
+        *,
+        action: str,
+        embedding_key: str,
+        embedding_text: str,
+        chunks: List[str],
+        entry_id: Optional[str] = None,
+        category: Optional[str] = None,
+    ) -> None:
+        if not EMBEDDING_LOG_ENABLED:
+            return
+
+        prepared_text = self._prepare_embedding_log_text(embedding_text)
+        embedding_logger.info(
+            "EMBEDDING_INPUT action=%s user=%s entry_id=%s category=%s key=%s chars=%d chunks=%d text=%s",
+            action,
+            self.user_id,
+            entry_id or "pending",
+            category or "unknown",
+            embedding_key,
+            len(embedding_text),
+            len(chunks),
+            prepared_text,
+        )
+
+        for index, chunk in enumerate(chunks, start=1):
+            prepared_chunk = self._prepare_embedding_log_text(chunk)
+            chunk_key = self._build_chunk_embedding_cache_key(chunk)
+            embedding_logger.info(
+                "EMBEDDING_CHUNK action=%s user=%s entry_id=%s chunk=%d/%d key=%s chars=%d text=%s",
+                action,
+                self.user_id,
+                entry_id or "pending",
+                index,
+                len(chunks),
+                chunk_key,
+                len(chunk),
+                prepared_chunk,
+            )
+
+    def _log_query_embedding_input(self, query_text: str, query_key: str) -> None:
+        if not EMBEDDING_LOG_ENABLED:
+            return
+
+        prepared_text = self._prepare_embedding_log_text(query_text)
+        embedding_logger.info(
+            "EMBEDDING_QUERY_INPUT user=%s key=%s chars=%d text=%s",
+            self.user_id,
+            query_key,
+            len(query_text),
+            prepared_text,
+        )
     
     async def _generate_embedding(self, text: str) -> List[float]:
         """Generate embedding for text using the configured LLM provider."""
@@ -114,12 +220,300 @@ class KnowledgeBaseService:
             logger.warning(f"Embedding generation failed: {e}")
             return self._generate_fallback_embedding(text)
 
-    def _build_embedding_text(self, title: str, content: str, tags: Optional[List[str]] = None) -> str:
-        return f"{title or ''} {content or ''} {' '.join(tags or [])}".strip()
+    def _normalize_embedding_label(self, value: Any) -> str:
+        if hasattr(value, "value"):
+            value = value.value
+
+        return " ".join(str(value or "").split()).strip().lower()
+
+    def _stringify_embedding_value(
+        self,
+        value: Any,
+        max_items: int = 8,
+        max_chars: int = 220,
+    ) -> str:
+        if value is None:
+            return ""
+
+        if isinstance(value, bool):
+            return "true" if value else "false"
+
+        if isinstance(value, (int, float)):
+            return str(value)
+
+        if isinstance(value, str):
+            normalized = " ".join(value.split()).strip()
+            if len(normalized) <= max_chars:
+                return normalized
+            return f"{normalized[:max_chars - 3]}..."
+
+        if isinstance(value, list):
+            normalized_items = []
+            for item in value[:max_items]:
+                item_text = self._stringify_embedding_value(item, max_items=max_items, max_chars=max_chars)
+                if item_text:
+                    normalized_items.append(item_text)
+            return " | ".join(normalized_items)
+
+        if isinstance(value, dict):
+            normalized_pairs = []
+            for key in sorted(value.keys())[:max_items]:
+                item_text = self._stringify_embedding_value(value.get(key), max_items=max_items, max_chars=max_chars)
+                if item_text:
+                    normalized_pairs.append(f"{key}={item_text}")
+            return " | ".join(normalized_pairs)
+
+        return self._stringify_embedding_value(str(value), max_items=max_items, max_chars=max_chars)
+
+    def _extract_embedding_metadata_signals(
+        self,
+        category: str,
+        metadata: Optional[Dict[str, Any]],
+    ) -> List[str]:
+        metadata_payload = metadata if isinstance(metadata, dict) else {}
+        normalized_category = self._normalize_embedding_label(category)
+        context_payload = metadata_payload.get("context") if isinstance(metadata_payload.get("context"), dict) else {}
+
+        signals: Dict[str, str] = {}
+
+        def add_signal(label: str, value: Any) -> None:
+            if label in signals:
+                return
+
+            text = self._stringify_embedding_value(value)
+            if not text:
+                return
+
+            signals[label] = text
+
+        # Always include high-value semantic fields when available.
+        add_signal("role", metadata_payload.get("role"))
+        add_signal("preferences", metadata_payload.get("preferences"))
+        add_signal("priority", metadata_payload.get("priority"))
+        add_signal("milestones", metadata_payload.get("milestones"))
+        add_signal("mentor", metadata_payload.get("mentor"))
+        add_signal("coach_preferences", metadata_payload.get("coach_preferences"))
+        add_signal("domain_preferences", metadata_payload.get("domain_preferences"))
+        add_signal("preference_profile", metadata_payload.get("preference_profile"))
+        add_signal("availability", metadata_payload.get("availability"))
+        add_signal("notifications", metadata_payload.get("notifications"))
+        add_signal("integrations", metadata_payload.get("integrations"))
+        add_signal("agent_type", metadata_payload.get("agent_type"))
+
+        add_signal("source", context_payload.get("source"))
+        add_signal("source_action", context_payload.get("source_action"))
+        add_signal("description", context_payload.get("description"))
+        add_signal("task_name", context_payload.get("task_name"))
+        add_signal("project_name", context_payload.get("project_name"))
+        add_signal("duration_minutes", context_payload.get("duration_minutes"))
+        add_signal("billable", context_payload.get("billable"))
+        add_signal("linked_goal", context_payload.get("linked_goal"))
+        add_signal("focus_score", context_payload.get("focus_score"))
+        add_signal("energy_score", context_payload.get("energy_score"))
+        add_signal("blockers", context_payload.get("blockers"))
+        add_signal("context_notes", context_payload.get("context_notes"))
+        add_signal("ai_detail", context_payload.get("ai_detail"))
+        add_signal("habits", context_payload.get("habits"))
+        add_signal("summary", context_payload.get("summary"))
+        add_signal("daily_completion_counts", context_payload.get("daily_completion_counts"))
+
+        ignored_metadata_keys = {
+            EMBEDDING_CACHE_KEY_FIELD,
+            "timestamp",
+            "created",
+            "created_at",
+            "updated_at",
+            "last_updated",
+            "approved_at",
+            "sync_event_key",
+            "user_id",
+            "user_email",
+            "context",
+        }
+
+        ignored_context_keys = {
+            "sync_event_key",
+            "time_entry_id",
+            "project_id",
+            "tag_ids",
+            "user_id",
+            "user_email",
+            "start_time",
+            "end_time",
+            "position_top",
+            "position_left",
+            "weekday",
+            "hour_of_day",
+        }
+
+        for key in sorted(metadata_payload.keys()):
+            if key in ignored_metadata_keys:
+                continue
+            add_signal(f"meta_{key}", metadata_payload.get(key))
+
+        for key in sorted(context_payload.keys()):
+            if key in ignored_context_keys:
+                continue
+            add_signal(f"context_{key}", context_payload.get(key))
+
+        if normalized_category == "time_entry" and "duration_minutes" not in signals:
+            add_signal("duration_minutes", context_payload.get("duration_seconds"))
+
+        return [f"{label}: {value}" for label, value in sorted(signals.items())]
+
+    def _build_embedding_text(
+        self,
+        title: str,
+        content: str,
+        tags: Optional[List[str]] = None,
+        category: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        entry_type: Optional[Any] = None,
+        entry_sub_type: Optional[Any] = None,
+    ) -> str:
+        normalized_title = " ".join(str(title or "").split()).strip()
+        normalized_content = str(content or "").strip()
+        normalized_tags = [" ".join(str(tag).split()).strip() for tag in (tags or []) if str(tag).strip()]
+        normalized_category = self._normalize_embedding_label(category or "uncategorized")
+        normalized_entry_type = self._normalize_embedding_label(entry_type or "unknown")
+        normalized_entry_sub_type = self._normalize_embedding_label(entry_sub_type or "unknown")
+
+        parts = [
+            f"entry_type: {normalized_entry_type}",
+            f"entry_sub_type: {normalized_entry_sub_type}",
+            f"category: {normalized_category}",
+            f"title: {normalized_title}",
+        ]
+
+        if normalized_tags:
+            parts.append(f"tags: {', '.join(normalized_tags)}")
+
+        if normalized_content:
+            parts.append(f"content:\n{normalized_content}")
+
+        metadata_signals = self._extract_embedding_metadata_signals(normalized_category, metadata)
+        if metadata_signals:
+            parts.append("metadata_signals:\n" + "\n".join(f"- {signal}" for signal in metadata_signals))
+
+        return "\n\n".join(part for part in parts if part).strip()
 
     def _build_embedding_cache_key(self, embedding_text: str) -> str:
         normalized_text = " ".join(str(embedding_text or "").split()).strip().lower() or "empty"
         return hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
+
+    def _build_chunk_embedding_cache_key(self, chunk_text: str) -> str:
+        chunk_hash = self._build_embedding_cache_key(chunk_text)
+        return f"chunk::{chunk_hash}"
+
+    def _chunk_embedding_text(self, embedding_text: str) -> List[str]:
+        normalized_text = " ".join(str(embedding_text or "").split()).strip()
+        if not normalized_text:
+            return ["empty"]
+
+        if len(normalized_text) <= EMBEDDING_MAX_CHARS_PER_CHUNK:
+            return [normalized_text]
+
+        chunks: List[str] = []
+        cursor = 0
+
+        while cursor < len(normalized_text) and len(chunks) < EMBEDDING_MAX_CHUNKS_PER_ENTRY:
+            max_end = min(len(normalized_text), cursor + EMBEDDING_MAX_CHARS_PER_CHUNK)
+            split_end = max_end
+
+            if max_end < len(normalized_text):
+                preferred_break = normalized_text.rfind(". ", cursor + EMBEDDING_MAX_CHARS_PER_CHUNK // 2, max_end)
+                if preferred_break == -1:
+                    preferred_break = normalized_text.rfind(" ", cursor + EMBEDDING_MAX_CHARS_PER_CHUNK // 2, max_end)
+                if preferred_break > cursor:
+                    split_end = preferred_break + 1
+
+            chunk = normalized_text[cursor:split_end].strip()
+            if chunk:
+                chunks.append(chunk)
+
+            if split_end >= len(normalized_text):
+                break
+
+            next_cursor = max(cursor + 1, split_end - EMBEDDING_CHUNK_OVERLAP_CHARS)
+            if next_cursor <= cursor:
+                next_cursor = split_end
+            cursor = next_cursor
+
+        if cursor < len(normalized_text) and len(chunks) >= EMBEDDING_MAX_CHUNKS_PER_ENTRY:
+            tail = normalized_text[cursor:].strip()
+            if tail:
+                chunks[-1] = f"{chunks[-1]} {tail}".strip()
+
+        return chunks or [normalized_text]
+
+    def _fit_embedding_dimension(self, embedding: List[float]) -> List[float]:
+        target_dimension = self.vector_store.dimension
+        if len(embedding) == target_dimension:
+            return list(embedding)
+
+        if len(embedding) > target_dimension:
+            return list(embedding[:target_dimension])
+
+        return list(embedding) + [0.0] * (target_dimension - len(embedding))
+
+    async def _resolve_query_embedding(self, query_text: str) -> List[float]:
+        query_key = f"query::{self._build_embedding_cache_key(query_text)}"
+        self._log_query_embedding_input(query_text, query_key)
+
+        cached_embedding = self._embedding_cache.get(query_key)
+        if cached_embedding:
+            if EMBEDDING_LOG_ENABLED:
+                embedding_logger.info(
+                    "EMBEDDING_QUERY_CACHE_HIT user=%s key=%s",
+                    self.user_id,
+                    query_key,
+                )
+            return list(cached_embedding)
+
+        generated_embedding = await self._generate_embedding(query_text)
+        self._cache_embedding_value(query_key, generated_embedding)
+        if EMBEDDING_LOG_ENABLED:
+            embedding_logger.info(
+                "EMBEDDING_QUERY_GENERATED user=%s key=%s dimension=%d",
+                self.user_id,
+                query_key,
+                len(generated_embedding),
+            )
+        return generated_embedding
+
+    async def _generate_embedding_for_text(self, embedding_text: str) -> List[float]:
+        chunks = self._chunk_embedding_text(embedding_text)
+        if len(chunks) == 1:
+            return await self._generate_embedding(chunks[0])
+
+        weighted_embedding = [0.0] * self.vector_store.dimension
+        total_weight = 0.0
+
+        for chunk in chunks:
+            chunk_key = self._build_chunk_embedding_cache_key(chunk)
+            chunk_embedding = self._embedding_cache.get(chunk_key)
+            if chunk_embedding:
+                resolved_chunk_embedding = list(chunk_embedding)
+            else:
+                resolved_chunk_embedding = await self._generate_embedding(chunk)
+                self._cache_embedding_value(chunk_key, resolved_chunk_embedding)
+
+            normalized_chunk_embedding = self._fit_embedding_dimension(resolved_chunk_embedding)
+            chunk_weight = float(max(1, len(chunk)))
+            total_weight += chunk_weight
+
+            for idx, value in enumerate(normalized_chunk_embedding):
+                weighted_embedding[idx] += value * chunk_weight
+
+        if total_weight <= 0:
+            return await self._generate_embedding(embedding_text)
+
+        averaged_embedding = [value / total_weight for value in weighted_embedding]
+        norm = sum(value * value for value in averaged_embedding) ** 0.5
+        if norm > 0:
+            averaged_embedding = [value / norm for value in averaged_embedding]
+
+        return averaged_embedding
 
     def _extract_embedding_cache_key(self, entry: KnowledgeEntry) -> str:
         metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
@@ -127,7 +521,15 @@ class KnowledgeBaseService:
         if cached_key:
             return cached_key
 
-        fallback_text = self._build_embedding_text(entry.title, entry.content, entry.tags)
+        fallback_text = self._build_embedding_text(
+            title=entry.title,
+            content=entry.content,
+            tags=entry.tags,
+            category=entry.category,
+            metadata=entry.metadata,
+            entry_type=entry.entry_type,
+            entry_sub_type=entry.entry_sub_type,
+        )
         return self._build_embedding_cache_key(fallback_text)
 
     def _cache_embedding_value(self, embedding_key: str, embedding: Optional[List[float]]) -> None:
@@ -175,7 +577,7 @@ class KnowledgeBaseService:
         if cached_embedding:
             return list(cached_embedding)
 
-        generated_embedding = await self._generate_embedding(embedding_text)
+        generated_embedding = await self._generate_embedding_for_text(embedding_text)
         self._cache_embedding_value(embedding_key, generated_embedding)
         return generated_embedding
 
@@ -183,7 +585,7 @@ class KnowledgeBaseService:
         """Search for relevant knowledge entries based on a query."""
         try:
             # Generate embedding for the query
-            query_embedding = await self._generate_embedding(query)
+            query_embedding = await self._resolve_query_embedding(query)
             
             # Search the vector store
             results = self.vector_store.search(query_embedding, limit)
@@ -191,10 +593,11 @@ class KnowledgeBaseService:
             # Format results
             formatted_results = []
             for result in results:
+                entry = result.entry if hasattr(result, "entry") else None
                 formatted_results.append({
-                    "content": result.get("content", ""),
-                    "score": result.get("score", 0.0),
-                    "metadata": result.get("metadata", {})
+                    "content": getattr(entry, "content", ""),
+                    "score": float(getattr(result, "similarity_score", 0.0)),
+                    "metadata": getattr(entry, "metadata", {}) if entry else {},
                 })
             
             return formatted_results
@@ -229,8 +632,26 @@ class KnowledgeBaseService:
         try:
             metadata_payload = dict(metadata or {})
 
-            embedding_text = self._build_embedding_text(title, content, tags)
+            embedding_text = self._build_embedding_text(
+                title=title,
+                content=content,
+                tags=tags,
+                category=category,
+                metadata=metadata_payload,
+                entry_type=entry_type,
+                entry_sub_type=entry_sub_type,
+            )
             embedding_key = self._build_embedding_cache_key(embedding_text)
+            metadata_payload[EMBEDDING_CACHE_KEY_FIELD] = embedding_key
+
+            entry_chunks = self._chunk_embedding_text(embedding_text)
+            self._log_embedding_payload(
+                action="create",
+                embedding_key=embedding_key,
+                embedding_text=embedding_text,
+                chunks=entry_chunks,
+                category=category,
+            )
 
             embedding = await self._resolve_embedding(embedding_text, embedding_key)
 
@@ -305,6 +726,9 @@ class KnowledgeBaseService:
             
             # Update fields
             updated_entry = existing_entry.model_copy()
+            if not isinstance(updated_entry.metadata, dict):
+                updated_entry.metadata = {}
+
             if title is not None:
                 updated_entry.title = title
             if content is not None:
@@ -314,15 +738,27 @@ class KnowledgeBaseService:
             if tags is not None:
                 updated_entry.tags = tags
 
-            if not isinstance(updated_entry.metadata, dict):
-                updated_entry.metadata = {}
-
             embedding_text = self._build_embedding_text(
-                updated_entry.title,
-                updated_entry.content,
-                updated_entry.tags,
+                title=updated_entry.title,
+                content=updated_entry.content,
+                tags=updated_entry.tags,
+                category=updated_entry.category,
+                metadata=updated_entry.metadata,
+                entry_type=updated_entry.entry_type,
+                entry_sub_type=updated_entry.entry_sub_type,
             )
             embedding_key = self._build_embedding_cache_key(embedding_text)
+            updated_entry.metadata[EMBEDDING_CACHE_KEY_FIELD] = embedding_key
+
+            entry_chunks = self._chunk_embedding_text(embedding_text)
+            self._log_embedding_payload(
+                action="update",
+                embedding_key=embedding_key,
+                embedding_text=embedding_text,
+                chunks=entry_chunks,
+                entry_id=updated_entry.entry_id,
+                category=updated_entry.category,
+            )
             
             updated_entry.updated_at = datetime.utcnow()
             
@@ -398,7 +834,7 @@ class KnowledgeBaseService:
         """
         try:
             # Generate embedding for query
-            query_embedding = await self._generate_embedding(query.query_text)
+            query_embedding = await self._resolve_query_embedding(query.query_text)
             
             # Search vector store
             results = self.vector_store.search(

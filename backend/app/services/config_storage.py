@@ -6,12 +6,14 @@ import json
 from typing import Dict, Any, Optional
 from pathlib import Path
 
+from .storage_paths import resolve_data_path
+
 
 class ConfigStorage:
     """Simple file-based configuration storage."""
     
-    def __init__(self, config_dir: str = "data/config"):
-        self.config_dir = Path(config_dir)
+    def __init__(self, config_dir: Optional[str] = None):
+        self.config_dir = Path(config_dir or resolve_data_path("config"))
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.config_file = self.config_dir / "user_config.json"
         self._config: Dict[str, Any] = self._load_config()
@@ -74,9 +76,9 @@ _instances_by_user: Dict[str, ConfigStorage] = {}
 
 def _resolve_config_dir_for_user(user_id: str) -> str:
     if user_id == "single_user":
-        return "data/config"
+        return resolve_data_path("config")
 
-    return f"data/users/{user_id}/config"
+    return resolve_data_path("users", user_id, "config")
 
 
 def get_config_storage(user_id: Optional[str] = None) -> ConfigStorage:

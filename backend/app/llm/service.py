@@ -3,6 +3,7 @@ LLM service that provides a high-level interface to the LLM providers.
 """
 
 import os
+import json
 from typing import AsyncGenerator, Dict, List, Optional
 
 from .base import (
@@ -15,9 +16,72 @@ from .base import (
 )
 from .config import LLMConfig
 from .factory import LLMProviderFactory
-from ..utils.logging import get_llm_category_logger
+from ..utils.logging import get_conversation_category_logger, get_llm_category_logger
 
 logger = get_llm_category_logger(__name__)
+conversation_logger = get_conversation_category_logger("app.conversation.llm")
+
+
+def _parse_bool_env(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+
+    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_positive_int_env(name: str, default: int, minimum: int) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+
+    try:
+        return max(minimum, int(raw_value))
+    except (TypeError, ValueError):
+        return default
+
+
+AI_CONVERSATION_LOG_ENABLED = _parse_bool_env("AI_CONVERSATION_LOG_ENABLED", default=True)
+AI_CONVERSATION_LOG_FULL_TEXT = _parse_bool_env("AI_CONVERSATION_LOG_FULL_TEXT", default=True)
+AI_CONVERSATION_LOG_MAX_CHARS = _parse_positive_int_env(
+    "AI_CONVERSATION_LOG_MAX_CHARS",
+    default=64000,
+    minimum=500,
+)
+
+
+def _normalize_log_payload(payload) -> str:
+    if payload is None:
+        return ""
+
+    if isinstance(payload, str):
+        return payload
+
+    try:
+        return json.dumps(payload, ensure_ascii=False, default=str)
+    except Exception:
+        return str(payload)
+
+
+def _prepare_conversation_text_for_log(payload) -> str:
+    text = _normalize_log_payload(payload)
+    if AI_CONVERSATION_LOG_FULL_TEXT:
+        return text
+
+    if len(text) <= AI_CONVERSATION_LOG_MAX_CHARS:
+        return text
+
+    return f"{text[:AI_CONVERSATION_LOG_MAX_CHARS - 3]}..."
+
+
+def _serialize_request_messages(request: CompletionRequest):
+    return [
+        {
+            "role": message.role,
+            "content": message.content,
+        }
+        for message in request.messages
+    ]
 
 
 def _normalize_provider_exception(error: Exception) -> Exception:
@@ -123,7 +187,27 @@ class LLMService:
         """Generate a chat completion using the active provider."""
         try:
             provider = await self._resolve_provider()
-            return await provider.chat_completion(request)
+            provider_name = str(provider.provider_type.value)
+
+            if AI_CONVERSATION_LOG_ENABLED:
+                conversation_logger.info(
+                    "CHAT_COMPLETION_REQUEST provider=%s messages=%s",
+                    provider_name,
+                    _prepare_conversation_text_for_log(_serialize_request_messages(request)),
+                )
+
+            response = await provider.chat_completion(request)
+
+            if AI_CONVERSATION_LOG_ENABLED:
+                conversation_logger.info(
+                    "CHAT_COMPLETION_RESPONSE provider=%s model=%s usage=%s content=%s",
+                    provider_name,
+                    response.model or "unknown",
+                    _prepare_conversation_text_for_log(response.usage or {}),
+                    _prepare_conversation_text_for_log(response.content),
+                )
+
+            return response
         except Exception as e:
             logger.error(f"Chat completion failed: {e}")
             normalized = _normalize_provider_exception(e)
@@ -133,8 +217,26 @@ class LLMService:
         """Generate a streaming chat completion using the active provider."""
         try:
             provider = await self._resolve_provider()
+            provider_name = str(provider.provider_type.value)
+
+            if AI_CONVERSATION_LOG_ENABLED:
+                conversation_logger.info(
+                    "CHAT_COMPLETION_STREAM_REQUEST provider=%s messages=%s",
+                    provider_name,
+                    _prepare_conversation_text_for_log(_serialize_request_messages(request)),
+                )
+
+            streamed_parts: List[str] = []
             async for chunk in provider.chat_completion_stream(request):
+                streamed_parts.append(chunk)
                 yield chunk
+
+            if AI_CONVERSATION_LOG_ENABLED:
+                conversation_logger.info(
+                    "CHAT_COMPLETION_STREAM_RESPONSE provider=%s content=%s",
+                    provider_name,
+                    _prepare_conversation_text_for_log("".join(streamed_parts)),
+                )
         except Exception as e:
             logger.error(f"Streaming chat completion failed: {e}")
             normalized = _normalize_provider_exception(e)

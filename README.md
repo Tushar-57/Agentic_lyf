@@ -120,10 +120,22 @@ Defaults:
 ### Backend
 - LLM_PROVIDER
 - OPENAI_API_KEY
+- OPENAI_MODEL
+- OPENAI_EMBEDDING_MODEL
 - OLLAMA_ENDPOINT
 - OLLAMA_MODEL
 - JWT_SECRET
 - AGENTIC_BRIDGE_SECRET
+- AGENTIC_DATA_DIR
+- EMBEDDING_MAX_CHARS_PER_CHUNK
+- EMBEDDING_CHUNK_OVERLAP_CHARS
+- EMBEDDING_MAX_CHUNKS_PER_ENTRY
+- LOG_LEVEL
+- LOG_COLOR_ENABLED
+- EMBEDDING_LOG_ENABLED
+- EMBEDDING_LOG_FULL_TEXT
+- AI_CONVERSATION_LOG_ENABLED
+- AI_CONVERSATION_LOG_FULL_TEXT
 
 ### Frontend
 - VITE_AGENTIC_API_ORIGIN
@@ -157,6 +169,7 @@ Defaults:
 - Knowledge storage is user-scoped using request context identity.
 - Pending approvals are held in memory; approve promptly when running non-persistent local environments.
 - Use /api/knowledge/refresh when you suspect stale in-memory state after external sync events.
+- If persistent disks are unavailable on Render, use AGENTIC_DATA_DIR=/app/data for instance-local storage (survives within a running instance but can reset on full redeploy/recreate).
 
 ## Integration Notes (AlterEgo)
 
