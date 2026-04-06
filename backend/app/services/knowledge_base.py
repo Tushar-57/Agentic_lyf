@@ -96,7 +96,14 @@ class KnowledgeBaseService:
             return self._generate_fallback_embedding(text)
         except Exception as e:
             error_text = str(e).lower()
-            if "no healthy providers available" in error_text or "provider_unavailable" in error_text:
+            if (
+                "no healthy providers available" in error_text
+                or "provider_unavailable" in error_text
+                or "connection error" in error_text
+                or "timed out" in error_text
+                or "timeout" in error_text
+                or "api connection" in error_text
+            ):
                 self._embedding_provider_cooldown_until = monotonic() + EMBEDDING_PROVIDER_COOLDOWN_SECONDS
             logger.warning(f"Embedding generation failed: {e}")
             return self._generate_fallback_embedding(text)

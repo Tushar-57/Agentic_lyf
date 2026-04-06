@@ -41,6 +41,11 @@ class OpenAIProvider(BaseLLMProvider):
         self.temperature = temperature
         self.health_check_mode = os.getenv("OPENAI_HEALTH_CHECK_MODE", "config_only").strip().lower()
         self.health_check_timeout_seconds = float(os.getenv("OPENAI_HEALTH_CHECK_TIMEOUT", "8"))
+        self.embedding_max_attempts = max(1, int(os.getenv("OPENAI_EMBEDDING_MAX_ATTEMPTS", "3")))
+        self.embedding_retry_backoff_seconds = max(
+            0.0,
+            float(os.getenv("OPENAI_EMBEDDING_RETRY_BACKOFF_SECONDS", "0.35"))
+        )
         
         # LangChain components
         self._chat_model: Optional[ChatOpenAI] = None
@@ -183,17 +188,46 @@ class OpenAIProvider(BaseLLMProvider):
         if not self._is_initialized or not self._embeddings_model:
             raise Exception("Provider not initialized")
         
-        try:
-            # Generate embedding
-            embedding = await self._embeddings_model.aembed_query(request.text)
-            
-            return EmbeddingResponse(
-                embedding=embedding,
-                model="text-embedding-ada-002"  # Default OpenAI embedding model
-            )
-            
-        except Exception as e:
-            raise Exception(f"OpenAI embedding generation failed: {str(e)}")
+        last_error: Optional[Exception] = None
+
+        for attempt in range(1, self.embedding_max_attempts + 1):
+            try:
+                embedding = await self._embeddings_model.aembed_query(request.text)
+
+                return EmbeddingResponse(
+                    embedding=embedding,
+                    model="text-embedding-ada-002"
+                )
+            except Exception as e:
+                last_error = e
+                error_text = str(e).lower()
+                is_retryable = any(
+                    token in error_text
+                    for token in (
+                        "connection error",
+                        "timed out",
+                        "timeout",
+                        "temporarily unavailable",
+                        "connection reset",
+                        "api connection",
+                        "rate limit",
+                        "429",
+                        "500",
+                        "502",
+                        "503",
+                        "504",
+                    )
+                )
+
+                if is_retryable and attempt < self.embedding_max_attempts:
+                    delay = self.embedding_retry_backoff_seconds * attempt
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+                    continue
+
+                break
+
+        raise Exception(f"OpenAI embedding generation failed: {str(last_error)}")
     
     async def health_check(self) -> HealthCheckResult:
         """Check OpenAI provider health."""
