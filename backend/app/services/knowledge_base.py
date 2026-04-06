@@ -7,9 +7,10 @@ import json
 import uuid
 import logging
 import re
+import math
 from time import monotonic
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 
 from ..models.knowledge import (
     KnowledgeEntry,
@@ -52,6 +53,19 @@ def _parse_positive_int_env(name: str, default: int, minimum: int) -> int:
         return default
 
 
+def _parse_float_env(name: str, default: float, minimum: float, maximum: float) -> float:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+
+    try:
+        parsed = float(raw_value)
+    except (TypeError, ValueError):
+        return default
+
+    return min(maximum, max(minimum, parsed))
+
+
 EMBEDDING_MAX_CHARS_PER_CHUNK = _parse_positive_int_env(
     "EMBEDDING_MAX_CHARS_PER_CHUNK",
     default=1200,
@@ -73,6 +87,37 @@ EMBEDDING_LOG_MAX_TEXT_CHARS = _parse_positive_int_env(
     default=32000,
     minimum=200,
 )
+
+RAG_PRIMARY_SIMILARITY_THRESHOLD = _parse_float_env(
+    "RAG_PRIMARY_SIMILARITY_THRESHOLD",
+    default=0.58,
+    minimum=0.0,
+    maximum=1.0,
+)
+RAG_RELAXED_SIMILARITY_THRESHOLD = _parse_float_env(
+    "RAG_RELAXED_SIMILARITY_THRESHOLD",
+    default=0.32,
+    minimum=0.0,
+    maximum=1.0,
+)
+RAG_MIN_CONTEXT_RESULTS = _parse_positive_int_env(
+    "RAG_MIN_CONTEXT_RESULTS",
+    default=3,
+    minimum=1,
+)
+RAG_RECENT_FALLBACK_LIMIT = _parse_positive_int_env(
+    "RAG_RECENT_FALLBACK_LIMIT",
+    default=4,
+    minimum=1,
+)
+RAG_LEXICAL_FALLBACK_ENABLED = _parse_bool_env("RAG_LEXICAL_FALLBACK_ENABLED", default=True)
+
+LEXICAL_FALLBACK_STOPWORDS: Set[str] = {
+    "the", "and", "for", "with", "that", "this", "from", "what", "should", "would", "could",
+    "there", "have", "been", "about", "your", "you", "our", "their", "into", "just", "more",
+    "than", "then", "when", "where", "which", "while", "were", "will", "also", "right",
+    "today", "now", "next", "need", "want", "help", "please", "show", "tell", "give", "make",
+}
 
 
 class KnowledgeBaseService:
@@ -1582,6 +1627,217 @@ class KnowledgeBaseService:
             logger.error(f"Failed to extract preferences: {e}")
             return []
 
+    def _merge_ranked_results(
+        self,
+        *result_groups: List[KnowledgeSearchResult],
+        limit: Optional[int] = None,
+    ) -> List[KnowledgeSearchResult]:
+        """Merge result groups by keeping the highest score per entry and sorting globally."""
+        best_by_entry: Dict[str, KnowledgeSearchResult] = {}
+
+        for group in result_groups:
+            for result in group or []:
+                entry = getattr(result, "entry", None)
+                entry_id = getattr(entry, "entry_id", None)
+                if not entry_id:
+                    continue
+
+                existing = best_by_entry.get(entry_id)
+                if existing is None or float(result.similarity_score) > float(existing.similarity_score):
+                    best_by_entry[entry_id] = result
+
+        merged = sorted(
+            best_by_entry.values(),
+            key=lambda item: (
+                float(item.similarity_score),
+                getattr(getattr(item, "entry", None), "updated_at", datetime.min),
+            ),
+            reverse=True,
+        )
+
+        if limit is not None:
+            return merged[:limit]
+        return merged
+
+    def _tokenize_for_lexical_fallback(self, text: str) -> Set[str]:
+        tokens = re.findall(r"[a-zA-Z0-9_]+", str(text or "").lower())
+        return {
+            token
+            for token in tokens
+            if len(token) >= 3 and token not in LEXICAL_FALLBACK_STOPWORDS
+        }
+
+    def _build_entry_retrieval_text(self, entry: KnowledgeEntry) -> str:
+        metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+        context_payload = metadata.get("context") if isinstance(metadata.get("context"), dict) else {}
+
+        context_fragments = []
+        for key in (
+            "description",
+            "task_name",
+            "project_name",
+            "priority",
+            "summary",
+            "notes",
+            "focus_target",
+            "tomorrow_focus",
+            "role",
+            "source_action",
+        ):
+            value = context_payload.get(key, metadata.get(key))
+            normalized = self._stringify_embedding_value(value)
+            if normalized:
+                context_fragments.append(normalized)
+
+        parts = [
+            str(entry.title or ""),
+            str(entry.content or ""),
+            str(entry.category or ""),
+            " ".join(str(tag) for tag in (entry.tags or [])),
+            " ".join(context_fragments),
+        ]
+
+        return " ".join(part for part in parts if part).strip()
+
+    def _score_entry_lexical_relevance(self, query_tokens: Set[str], entry: KnowledgeEntry) -> float:
+        if not query_tokens:
+            return 0.0
+
+        entry_tokens = self._tokenize_for_lexical_fallback(self._build_entry_retrieval_text(entry))
+        if not entry_tokens:
+            return 0.0
+
+        overlap = query_tokens.intersection(entry_tokens)
+        if not overlap:
+            return 0.0
+
+        coverage = len(overlap) / max(len(query_tokens), 1)
+        density = len(overlap) / max(len(entry_tokens), 1)
+        density_weight = min(0.25, 0.06 + (len(query_tokens) * 0.02))
+        score = (coverage * (1.0 - density_weight)) + (density * density_weight)
+
+        if self._is_time_entry_entry(entry):
+            score += 0.03
+
+        return min(0.95, max(0.0, score))
+
+    def _entry_matches_query_filters(
+        self,
+        entry: KnowledgeEntry,
+        *,
+        categories: Optional[List[str]] = None,
+        entry_types: Optional[List[KnowledgeEntryType]] = None,
+        tags: Optional[List[str]] = None,
+    ) -> bool:
+        if categories and entry.category not in categories:
+            return False
+
+        if entry_types and entry.entry_type not in entry_types:
+            return False
+
+        if tags and not any(tag in entry.tags for tag in tags):
+            return False
+
+        return True
+
+    async def _build_lexical_fallback_results(
+        self,
+        *,
+        query_text: str,
+        limit: int,
+        exclude_entry_ids: Optional[Set[str]] = None,
+        categories: Optional[List[str]] = None,
+        entry_types: Optional[List[KnowledgeEntryType]] = None,
+        tags: Optional[List[str]] = None,
+    ) -> List[KnowledgeSearchResult]:
+        if not RAG_LEXICAL_FALLBACK_ENABLED:
+            return []
+
+        query_tokens = self._tokenize_for_lexical_fallback(query_text)
+        if not query_tokens:
+            return []
+
+        excluded_ids = exclude_entry_ids or set()
+        all_entries = await self.get_all_entries()
+
+        candidates: List[KnowledgeSearchResult] = []
+        for entry in all_entries:
+            if entry.entry_id in excluded_ids:
+                continue
+
+            if not self._entry_matches_query_filters(
+                entry,
+                categories=categories,
+                entry_types=entry_types,
+                tags=tags,
+            ):
+                continue
+
+            lexical_score = self._score_entry_lexical_relevance(query_tokens, entry)
+            if lexical_score < 0.16:
+                continue
+
+            candidates.append(
+                KnowledgeSearchResult(
+                    entry=entry,
+                    similarity_score=float(round(lexical_score, 4)),
+                    relevance_explanation="lexical_fallback",
+                )
+            )
+
+        candidates.sort(
+            key=lambda item: (float(item.similarity_score), item.entry.updated_at),
+            reverse=True,
+        )
+        return candidates[:limit]
+
+    def _is_action_planning_query(self, user_input: str, agent_type: str) -> bool:
+        normalized_input = str(user_input or "").lower()
+        normalized_agent = str(agent_type or "").strip().lower()
+
+        if normalized_agent not in {"general", "productivity", "scheduling"}:
+            return False
+
+        planning_keywords = {
+            "prioritize", "priority", "focus", "next", "work", "today", "plan", "planning", "task", "tasks", "schedule", "do now",
+        }
+        return any(keyword in normalized_input for keyword in planning_keywords)
+
+    async def _build_recent_history_fallback_results(
+        self,
+        *,
+        limit: int,
+        exclude_entry_ids: Optional[Set[str]] = None,
+    ) -> List[KnowledgeSearchResult]:
+        excluded_ids = exclude_entry_ids or set()
+        interaction_entries = await self.get_all_entries(entry_type=KnowledgeEntryType.INTERACTION)
+
+        time_entries = [
+            entry
+            for entry in interaction_entries
+            if entry.entry_id not in excluded_ids and self._is_time_entry_entry(entry)
+        ]
+        time_entries.sort(key=lambda entry: entry.updated_at, reverse=True)
+
+        fallback_results: List[KnowledgeSearchResult] = []
+        now = datetime.utcnow()
+
+        for index, entry in enumerate(time_entries[:limit]):
+            age_hours = max(0.0, (now - entry.updated_at).total_seconds() / 3600.0)
+            recency_penalty = min(0.18, math.log1p(age_hours) * 0.035)
+            base_score = 0.46 - (index * 0.04)
+            score = max(0.18, base_score - recency_penalty)
+
+            fallback_results.append(
+                KnowledgeSearchResult(
+                    entry=entry,
+                    similarity_score=float(round(score, 4)),
+                    relevance_explanation="recent_history_fallback",
+                )
+            )
+
+        return fallback_results
+
     async def get_contextual_knowledge_for_agent(self, 
                                                 user_input: str,
                                                 agent_type: str,
@@ -1601,38 +1857,126 @@ class KnowledgeBaseService:
             # Get user preferences for this agent type
             preferences = await self.get_user_preferences()
             agent_preferences = getattr(preferences, agent_type.lower(), {})
-            
-            # Search for relevant interactions
-            search_query = KnowledgeQuery(
-                query_text=user_input,
-                categories=[agent_type],
-                entry_types=[KnowledgeEntryType.INTERACTION, KnowledgeEntryType.PREFERENCE, KnowledgeEntryType.PATTERN],
-                limit=max_results,
-                similarity_threshold=0.6
-            )
-            
-            search_results = await self.search(search_query)
-            
-            # Search for cross-category relevant information
-            general_search = KnowledgeQuery(
-                query_text=user_input,
-                limit=max_results,
-                similarity_threshold=0.6
-            )
-            
-            general_results = await self.search(general_search)
 
-            # Merge agent-specific and general results while preserving ranking order.
-            combined_results: List[KnowledgeSearchResult] = []
-            seen_entry_ids = set()
-            for result_group in (search_results, general_results):
-                for result in result_group:
-                    entry_id = getattr(result.entry, "entry_id", None)
-                    if entry_id and entry_id in seen_entry_ids:
-                        continue
-                    if entry_id:
-                        seen_entry_ids.add(entry_id)
-                    combined_results.append(result)
+            context_entry_types = [
+                KnowledgeEntryType.INTERACTION,
+                KnowledgeEntryType.PREFERENCE,
+                KnowledgeEntryType.USER_PREFERENCE,
+                KnowledgeEntryType.PATTERN,
+                KnowledgeEntryType.INSIGHT,
+            ]
+
+            retrieval_limit = max(max_results * 2, max_results)
+            max_combined_results = max(retrieval_limit, max_results + RAG_MIN_CONTEXT_RESULTS)
+            fallback_modes: List[str] = []
+
+            # Stage 1: strict semantic retrieval.
+            search_results = await self.search(
+                KnowledgeQuery(
+                    query_text=user_input,
+                    categories=[agent_type],
+                    entry_types=context_entry_types,
+                    limit=retrieval_limit,
+                    similarity_threshold=RAG_PRIMARY_SIMILARITY_THRESHOLD,
+                )
+            )
+
+            general_results = await self.search(
+                KnowledgeQuery(
+                    query_text=user_input,
+                    entry_types=context_entry_types,
+                    limit=retrieval_limit,
+                    similarity_threshold=RAG_PRIMARY_SIMILARITY_THRESHOLD,
+                )
+            )
+
+            combined_results = self._merge_ranked_results(
+                search_results,
+                general_results,
+                limit=max_combined_results,
+            )
+
+            seen_entry_ids: Set[str] = {
+                result.entry.entry_id
+                for result in combined_results
+                if getattr(result, "entry", None) and getattr(result.entry, "entry_id", None)
+            }
+
+            # Stage 2: relaxed semantic retrieval when strict retrieval is sparse.
+            if len(combined_results) < RAG_MIN_CONTEXT_RESULTS:
+                relaxed_agent_results = await self.search(
+                    KnowledgeQuery(
+                        query_text=user_input,
+                        categories=[agent_type],
+                        entry_types=context_entry_types,
+                        limit=retrieval_limit,
+                        similarity_threshold=RAG_RELAXED_SIMILARITY_THRESHOLD,
+                    )
+                )
+                relaxed_general_results = await self.search(
+                    KnowledgeQuery(
+                        query_text=user_input,
+                        entry_types=context_entry_types,
+                        limit=retrieval_limit,
+                        similarity_threshold=RAG_RELAXED_SIMILARITY_THRESHOLD,
+                    )
+                )
+
+                previous_count = len(combined_results)
+                combined_results = self._merge_ranked_results(
+                    combined_results,
+                    relaxed_agent_results,
+                    relaxed_general_results,
+                    limit=max_combined_results,
+                )
+                if len(combined_results) > previous_count:
+                    fallback_modes.append("relaxed_similarity")
+
+                seen_entry_ids.update(
+                    result.entry.entry_id
+                    for result in combined_results
+                    if getattr(result, "entry", None) and getattr(result.entry, "entry_id", None)
+                )
+
+            # Stage 3: lexical retrieval fallback to avoid empty-context generic responses.
+            if len(combined_results) < RAG_MIN_CONTEXT_RESULTS:
+                lexical_results = await self._build_lexical_fallback_results(
+                    query_text=user_input,
+                    limit=max_combined_results,
+                    exclude_entry_ids=seen_entry_ids,
+                    entry_types=context_entry_types,
+                )
+
+                previous_count = len(combined_results)
+                combined_results = self._merge_ranked_results(
+                    combined_results,
+                    lexical_results,
+                    limit=max_combined_results,
+                )
+                if len(combined_results) > previous_count:
+                    fallback_modes.append("lexical")
+
+                seen_entry_ids.update(
+                    result.entry.entry_id
+                    for result in combined_results
+                    if getattr(result, "entry", None) and getattr(result.entry, "entry_id", None)
+                )
+
+            # Stage 4: prioritization-specific recent history fallback for planning queries.
+            if len(combined_results) < RAG_MIN_CONTEXT_RESULTS and self._is_action_planning_query(user_input, agent_type):
+                recent_fallback_results = await self._build_recent_history_fallback_results(
+                    limit=max(RAG_RECENT_FALLBACK_LIMIT, min(max_results, 6)),
+                    exclude_entry_ids=seen_entry_ids,
+                )
+
+                previous_count = len(combined_results)
+                combined_results = self._merge_ranked_results(
+                    combined_results,
+                    recent_fallback_results,
+                    limit=max_combined_results,
+                )
+                if len(combined_results) > previous_count:
+                    fallback_modes.append("recent_history")
 
             interaction_results = [
                 result
@@ -1642,7 +1986,7 @@ class KnowledgeBaseService:
             preference_results = [
                 result
                 for result in combined_results
-                if result.entry.entry_type == KnowledgeEntryType.PREFERENCE
+                if result.entry.entry_type in [KnowledgeEntryType.PREFERENCE, KnowledgeEntryType.USER_PREFERENCE]
             ]
             pattern_results = [
                 result
@@ -1651,6 +1995,21 @@ class KnowledgeBaseService:
             ]
 
             recent_time_entries = self._extract_recent_time_entries(interaction_results)
+            if not recent_time_entries:
+                fallback_time_results = await self._build_recent_history_fallback_results(
+                    limit=RAG_RECENT_FALLBACK_LIMIT,
+                    exclude_entry_ids=set(),
+                )
+                recent_time_entries = self._extract_recent_time_entries(
+                    fallback_time_results,
+                    limit=RAG_RECENT_FALLBACK_LIMIT,
+                )
+                if recent_time_entries and "recent_history" not in fallback_modes:
+                    fallback_modes.append("recent_time_entries_only")
+
+            context_summary = self._generate_context_summary(user_input, agent_type, combined_results)
+            if fallback_modes:
+                context_summary = f"{context_summary} Retrieval fallback: {', '.join(fallback_modes)}."
             
             # Organize results by type
             context = {
@@ -1684,7 +2043,7 @@ class KnowledgeBaseService:
                     for result in pattern_results
                 ][:3],
                 "recent_time_entries": recent_time_entries,
-                "context_summary": self._generate_context_summary(user_input, agent_type, combined_results)
+                "context_summary": context_summary
             }
 
             top_matches = [
@@ -1697,7 +2056,7 @@ class KnowledgeBaseService:
             ]
 
             logger.info(
-                "[RAG_CONTEXT] agent=%s query=%s total=%d interactions=%d preferences=%d patterns=%d recent_time_entries=%d top_matches=%s",
+                "[RAG_CONTEXT] agent=%s query=%s total=%d interactions=%d preferences=%d patterns=%d recent_time_entries=%d fallback=%s top_matches=%s",
                 agent_type,
                 self._truncate_for_log(user_input, 150),
                 len(combined_results),
@@ -1705,6 +2064,7 @@ class KnowledgeBaseService:
                 len(preference_results),
                 len(pattern_results),
                 len(recent_time_entries),
+                fallback_modes or ["none"],
                 top_matches,
             )
             
@@ -1814,7 +2174,7 @@ class KnowledgeBaseService:
                 query_text=query,
                 categories=[agent_type] if agent_type else None,
                 limit=max_results,
-                similarity_threshold=0.6
+                similarity_threshold=RAG_PRIMARY_SIMILARITY_THRESHOLD
             )
             
             return await self.search(search_query)
