@@ -1086,18 +1086,55 @@ async def run_morning_checkup(request: DailyCheckupRequest):
         top_goals = context_snapshot.get("topGoals", []) if isinstance(context_snapshot.get("topGoals"), list) else []
         top_goals_text = ", ".join(str(goal) for goal in top_goals[:3]) if top_goals else "none"
 
+        focus_tasks_raw = context_snapshot.get("focusTasks") if isinstance(context_snapshot.get("focusTasks"), list) else []
+        focus_tasks = [item for item in focus_tasks_raw if isinstance(item, dict)]
+        focus_task_titles = [
+            str(item.get("title") or "").strip()
+            for item in focus_tasks
+            if str(item.get("title") or "").strip()
+        ][:3]
+
+        upcoming_deadlines_raw = (
+            context_snapshot.get("upcomingDeadlines")
+            if isinstance(context_snapshot.get("upcomingDeadlines"), list)
+            else []
+        )
+        upcoming_deadlines = [item for item in upcoming_deadlines_raw if isinstance(item, dict)]
+        upcoming_deadlines_count = len(upcoming_deadlines)
+
+        habit_metrics = context_snapshot.get("habitMetrics", {}) if isinstance(context_snapshot.get("habitMetrics"), dict) else {}
+        habits_total = int(_safe_float(habit_metrics.get("totalHabits"), default=0.0))
+        habits_completed_today = int(_safe_float(habit_metrics.get("completedToday"), default=0.0))
+        habits_avg_streak = _safe_float(habit_metrics.get("avgStreak"), default=0.0)
+        habits_completion_rate_7d = _safe_float(habit_metrics.get("completionRate7d"), default=0.0)
+
+        time_metrics = context_snapshot.get("timeMetrics", {}) if isinstance(context_snapshot.get("timeMetrics"), dict) else {}
+        tracked_time_spent_minutes = _safe_float(time_metrics.get("totalTimeSpentMinutes"), default=0.0)
+        tracked_estimated_minutes = _safe_float(time_metrics.get("totalEstimatedMinutes"), default=0.0)
+        deep_work_coverage_ratio = _safe_float(time_metrics.get("deepWorkCoverageRatio"), default=0.0)
+
         fallback_lines = [
             f"Primary focus: {focus_target}",
             f"Anchor check-in time: {check_in_time}",
             f"Suggested work window: {work_hours}",
             f"Last 7-day average logged work: {_format_minutes(avg_daily_minutes)}",
         ]
+        if focus_task_titles:
+            fallback_lines.append(f"Focus tasks: {', '.join(focus_task_titles)}")
         if overdue_tasks > 0:
             fallback_lines.append(f"Overdue tasks to clear first: {overdue_tasks}")
         if due_today_tasks > 0:
             fallback_lines.append(f"Tasks due today: {due_today_tasks}")
+        if upcoming_deadlines_count > 0:
+            fallback_lines.append(f"Upcoming deadlines (7d): {upcoming_deadlines_count}")
+        if habits_total > 0:
+            fallback_lines.append(
+                f"Habits today: {habits_completed_today}/{habits_total} complete ({round(habits_completion_rate_7d, 1)}% over 7d)"
+            )
         if planned_deep_work_minutes > 0:
             fallback_lines.append(f"Planned deep work: {_format_minutes(planned_deep_work_minutes)}")
+        if tracked_time_spent_minutes > 0:
+            fallback_lines.append(f"Tracked task time so far: {_format_minutes(tracked_time_spent_minutes)}")
         if confidence_score > 0:
             fallback_lines.append(f"Self-reported confidence: {round(confidence_score, 1)}/10")
         if top_projects:
@@ -1116,13 +1153,22 @@ async def run_morning_checkup(request: DailyCheckupRequest):
             f"Average daily logged minutes: {round(avg_daily_minutes, 1)}\n"
             f"Top projects: {', '.join(top_projects) if top_projects else 'none'}\n"
             f"Top goals from context: {top_goals_text}\n"
+            f"Focus tasks from context: {', '.join(focus_task_titles) if focus_task_titles else 'none'}\n"
             f"Overdue tasks: {overdue_tasks}\n"
             f"Due today tasks: {due_today_tasks}\n"
+            f"Upcoming deadlines (7d): {upcoming_deadlines_count}\n"
+            f"Habit completion today: {habits_completed_today}/{habits_total}\n"
+            f"Habit avg streak: {round(habits_avg_streak, 1)}\n"
+            f"Habit completion rate 7d: {round(habits_completion_rate_7d, 1)}\n"
+            f"Tracked estimated task minutes: {round(tracked_estimated_minutes, 1)}\n"
+            f"Tracked spent task minutes: {round(tracked_time_spent_minutes, 1)}\n"
+            f"Deep work coverage ratio from context: {round(deep_work_coverage_ratio, 2)}\n"
             f"Planned deep work minutes: {planned_deep_work_minutes}\n"
             f"User confidence: {confidence_score if confidence_score > 0 else 'n/a'}\n"
             f"Today existing entries: {len(today_entries)}\n"
-            "Create a practical morning checkup with: 1) one focus sentence, "
-            "2) three action bullets, 3) one accountability question."
+            "Create an immersive morning checkup with: 1) one focus sentence, "
+            "2) three action bullets tied to goals/deadlines/habits, "
+            "3) one accountability question, 4) one short journaling prompt."
         )
 
         llm_message = await _generate_checkup_message(llm_prompt, style_directive=style_directive)
@@ -1144,8 +1190,37 @@ async def run_morning_checkup(request: DailyCheckupRequest):
             "decision_metrics": {
                 "overdue_tasks": overdue_tasks,
                 "due_today_tasks": due_today_tasks,
+                "upcoming_deadlines_7d": upcoming_deadlines_count,
                 "planned_deep_work_minutes": round(planned_deep_work_minutes, 1),
+                "tracked_spent_task_minutes": round(tracked_time_spent_minutes, 1),
+                "tracked_estimated_task_minutes": round(tracked_estimated_minutes, 1),
+                "deep_work_coverage_ratio": round(deep_work_coverage_ratio, 2),
+                "habits_total": habits_total,
+                "habits_completed_today": habits_completed_today,
+                "habits_avg_streak": round(habits_avg_streak, 1),
+                "habits_completion_rate_7d": round(habits_completion_rate_7d, 1),
                 "confidence": round(confidence_score, 1) if confidence_score > 0 else None,
+            },
+            "journaling": {
+                "intent_prompt": (
+                    "What one behavior will make today a win, even if everything else changes?"
+                ),
+                "accountability_prompt": "What will you protect first if your schedule compresses?",
+                "focus_commitment": {
+                    "priority_focus": focus_target,
+                    "focus_tasks": focus_task_titles,
+                    "goal_anchors": top_goals[:3],
+                    "deadline_pressure": {
+                        "overdue": overdue_tasks,
+                        "due_today": due_today_tasks,
+                        "upcoming_7d": upcoming_deadlines_count,
+                    },
+                    "habit_anchor": {
+                        "completed_today": habits_completed_today,
+                        "total": habits_total,
+                        "avg_streak": round(habits_avg_streak, 1),
+                    },
+                },
             },
             "perspective": perspective,
             "context_snapshot": context_snapshot,
@@ -1251,6 +1326,33 @@ async def run_evening_checkup(request: DailyCheckupRequest):
         due_today_tasks = int(_safe_float(deadline_tasks.get("dueToday"), default=0.0))
         completed_tasks_today = int(_safe_float(context_snapshot.get("completedTasksToday"), default=0.0))
 
+        focus_tasks_raw = context_snapshot.get("focusTasks") if isinstance(context_snapshot.get("focusTasks"), list) else []
+        focus_tasks = [item for item in focus_tasks_raw if isinstance(item, dict)]
+        focus_task_titles = [
+            str(item.get("title") or "").strip()
+            for item in focus_tasks
+            if str(item.get("title") or "").strip()
+        ][:3]
+
+        upcoming_deadlines_raw = (
+            context_snapshot.get("upcomingDeadlines")
+            if isinstance(context_snapshot.get("upcomingDeadlines"), list)
+            else []
+        )
+        upcoming_deadlines = [item for item in upcoming_deadlines_raw if isinstance(item, dict)]
+        upcoming_deadlines_count = len(upcoming_deadlines)
+
+        habit_metrics = context_snapshot.get("habitMetrics", {}) if isinstance(context_snapshot.get("habitMetrics"), dict) else {}
+        habits_total = int(_safe_float(habit_metrics.get("totalHabits"), default=0.0))
+        habits_completed_today = int(_safe_float(habit_metrics.get("completedToday"), default=0.0))
+        habits_avg_streak = _safe_float(habit_metrics.get("avgStreak"), default=0.0)
+        habits_completion_rate_7d = _safe_float(habit_metrics.get("completionRate7d"), default=0.0)
+
+        time_metrics = context_snapshot.get("timeMetrics", {}) if isinstance(context_snapshot.get("timeMetrics"), dict) else {}
+        tracked_time_spent_minutes = _safe_float(time_metrics.get("totalTimeSpentMinutes"), default=0.0)
+        tracked_estimated_minutes = _safe_float(time_metrics.get("totalEstimatedMinutes"), default=0.0)
+        deep_work_coverage_ratio = _safe_float(time_metrics.get("deepWorkCoverageRatio"), default=0.0)
+
         planned_deep_work_minutes = _safe_float(
             perspective.get("plannedDeepWorkMinutes"),
             default=_safe_float(context_snapshot.get("plannedDeepWorkMinutes"), default=0.0),
@@ -1311,8 +1413,18 @@ async def run_evening_checkup(request: DailyCheckupRequest):
             fallback_lines.append(f"Average energy: {avg_energy}/10")
         if subjective_score is not None:
             fallback_lines.append(f"Self-assessment: {subjective_score}/10")
+        if focus_task_titles:
+            fallback_lines.append(f"Focus tasks reviewed: {', '.join(focus_task_titles)}")
         if overdue_tasks > 0:
             fallback_lines.append(f"Overdue tasks carried: {overdue_tasks}")
+        if upcoming_deadlines_count > 0:
+            fallback_lines.append(f"Upcoming deadlines (7d): {upcoming_deadlines_count}")
+        if habits_total > 0:
+            fallback_lines.append(
+                f"Habits completed: {habits_completed_today}/{habits_total} ({round(habits_completion_rate_7d, 1)}% over 7d)"
+            )
+        if tracked_time_spent_minutes > 0:
+            fallback_lines.append(f"Tracked task effort: {_format_minutes(tracked_time_spent_minutes)}")
         fallback_lines.extend([f"Tomorrow: {item}" for item in tomorrow_focus])
 
         communication_profile = _extract_communication_profile(all_entries)
@@ -1329,14 +1441,23 @@ async def run_evening_checkup(request: DailyCheckupRequest):
             f"Avg focus: {avg_focus if avg_focus is not None else 'n/a'}\n"
             f"Avg energy: {avg_energy if avg_energy is not None else 'n/a'}\n"
             f"Blockers: {', '.join(blockers) if blockers else 'none'}\n"
+            f"Focus tasks from context: {', '.join(focus_task_titles) if focus_task_titles else 'none'}\n"
             f"Overdue tasks: {overdue_tasks}\n"
             f"Due today tasks: {due_today_tasks}\n"
+            f"Upcoming deadlines (7d): {upcoming_deadlines_count}\n"
             f"Completed tasks today: {completed_tasks_today}\n"
+            f"Habits completed today: {habits_completed_today}/{habits_total}\n"
+            f"Habit avg streak: {round(habits_avg_streak, 1)}\n"
+            f"Habit completion rate 7d: {round(habits_completion_rate_7d, 1)}\n"
+            f"Tracked estimated task minutes: {round(tracked_estimated_minutes, 1)}\n"
+            f"Tracked spent task minutes: {round(tracked_time_spent_minutes, 1)}\n"
+            f"Deep work coverage ratio from context: {round(deep_work_coverage_ratio, 2)}\n"
             f"Planned deep work minutes: {planned_deep_work_minutes}\n"
             f"Self-rating: {subjective_score if subjective_score is not None else 'n/a'}\n"
             f"Objective score: {objective_score}/10\n"
-            "Provide an evening checkup with: 1) one recap sentence, "
-            "2) two wins, 3) two concrete tomorrow actions."
+            "Provide an immersive evening checkup with: 1) one recap sentence, "
+            "2) two evidence-based wins, 3) two concrete tomorrow actions tied to deadlines/habits, "
+            "4) one short reflection prompt."
         )
 
         llm_message = await _generate_checkup_message(llm_prompt, style_directive=style_directive)
@@ -1379,11 +1500,46 @@ async def run_evening_checkup(request: DailyCheckupRequest):
                 "completed_tasks_today": completed_tasks_today,
                 "top_priority_completed": top_priority_completed,
             },
+            "decision_metrics": {
+                "overdue_tasks": overdue_tasks,
+                "due_today_tasks": due_today_tasks,
+                "upcoming_deadlines_7d": upcoming_deadlines_count,
+                "focus_tasks_count": len(focus_task_titles),
+                "habits_total": habits_total,
+                "habits_completed_today": habits_completed_today,
+                "habits_avg_streak": round(habits_avg_streak, 1),
+                "habits_completion_rate_7d": round(habits_completion_rate_7d, 1),
+                "tracked_spent_task_minutes": round(tracked_time_spent_minutes, 1),
+                "tracked_estimated_task_minutes": round(tracked_estimated_minutes, 1),
+                "deep_work_coverage_ratio": round(deep_work_coverage_ratio, 2),
+            },
             "perspective": perspective,
             "context_snapshot": context_snapshot,
             "wins": wins,
             "blockers": blockers,
             "tomorrow_focus": tomorrow_focus,
+            "reflection_journal": {
+                "recap_prompt": "What moved your day forward the most, and why?",
+                "wins": wins,
+                "friction_points": blockers,
+                "tomorrow_commitments": tomorrow_focus,
+                "evidence": {
+                    "top_projects": top_projects,
+                    "focus_tasks": focus_task_titles,
+                    "deadline_pressure": {
+                        "overdue": overdue_tasks,
+                        "due_today": due_today_tasks,
+                        "upcoming_7d": upcoming_deadlines_count,
+                    },
+                    "habit_state": {
+                        "completed_today": habits_completed_today,
+                        "total": habits_total,
+                        "avg_streak": round(habits_avg_streak, 1),
+                    },
+                    "deep_work_coverage_ratio": round(deep_work_coverage_ratio, 2),
+                },
+                "tomorrow_prompt": "What will you do differently in the first 30 minutes tomorrow?",
+            },
             "timeline": timeline,
             "style_profile": _public_style_profile(communication_profile),
             "coach_message": coach_message,
