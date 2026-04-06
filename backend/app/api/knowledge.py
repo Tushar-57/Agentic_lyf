@@ -371,12 +371,21 @@ class OnboardingData(BaseModel):
     mentor: Dict[str, Any]
     planner: Dict[str, Any]
     preferredTone: Optional[str] = None
+    coach_preferences: Optional[Dict[str, Any]] = None
+    domain_preferences: Optional[Dict[str, Dict[str, Any]]] = None
+    preference_profile: Optional[Dict[str, Dict[str, Any]]] = None
+    coachPreferences: Optional[Dict[str, Any]] = None
+    domainPreferences: Optional[Dict[str, Dict[str, Any]]] = None
+    preferenceProfile: Optional[Dict[str, Dict[str, Any]]] = None
 
 
 class DailyCheckupRequest(BaseModel):
     """Request model for morning/evening checkup APIs."""
     date: Optional[str] = None
     note: Optional[str] = None
+    perspective: Optional[Dict[str, Any]] = None
+    context_snapshot: Optional[Dict[str, Any]] = None
+    contextSnapshot: Optional[Dict[str, Any]] = None
 
 
 def _resolve_date_range(time_range: str) -> int:
@@ -995,6 +1004,10 @@ async def run_morning_checkup(request: DailyCheckupRequest):
         kb_service = get_knowledge_base_service()
         checkup_date = _parse_requested_date(request.date)
         note = (request.note or "").strip()
+        perspective = request.perspective if isinstance(request.perspective, dict) else {}
+        context_snapshot = request.context_snapshot if isinstance(request.context_snapshot, dict) else {}
+        if not context_snapshot and isinstance(request.contextSnapshot, dict):
+            context_snapshot = request.contextSnapshot
 
         all_entries = await kb_service.get_all_entries()
         time_entries: List[Dict[str, Any]] = []
@@ -1058,9 +1071,20 @@ async def run_morning_checkup(request: DailyCheckupRequest):
             else "09:00"
         ) or "09:00"
 
-        priority_focus = str(priorities[0]).strip() if priorities else ""
+        priority_focus = str(context_snapshot.get("priorityFocus") or "").strip()
+        if not priority_focus:
+            priority_focus = str(priorities[0]).strip() if priorities else ""
         project_focus = top_projects[0] if top_projects else ""
         focus_target = note or priority_focus or project_focus or "Most important task"
+
+        deadline_tasks = context_snapshot.get("deadlineTasks", {}) if isinstance(context_snapshot.get("deadlineTasks"), dict) else {}
+        overdue_tasks = int(_safe_float(deadline_tasks.get("overdue"), default=0.0))
+        due_today_tasks = int(_safe_float(deadline_tasks.get("dueToday"), default=0.0))
+        planned_deep_work_minutes = _safe_float(perspective.get("plannedDeepWorkMinutes"), default=0.0)
+        confidence_score = _safe_float(perspective.get("confidence"), default=0.0)
+
+        top_goals = context_snapshot.get("topGoals", []) if isinstance(context_snapshot.get("topGoals"), list) else []
+        top_goals_text = ", ".join(str(goal) for goal in top_goals[:3]) if top_goals else "none"
 
         fallback_lines = [
             f"Primary focus: {focus_target}",
@@ -1068,6 +1092,14 @@ async def run_morning_checkup(request: DailyCheckupRequest):
             f"Suggested work window: {work_hours}",
             f"Last 7-day average logged work: {_format_minutes(avg_daily_minutes)}",
         ]
+        if overdue_tasks > 0:
+            fallback_lines.append(f"Overdue tasks to clear first: {overdue_tasks}")
+        if due_today_tasks > 0:
+            fallback_lines.append(f"Tasks due today: {due_today_tasks}")
+        if planned_deep_work_minutes > 0:
+            fallback_lines.append(f"Planned deep work: {_format_minutes(planned_deep_work_minutes)}")
+        if confidence_score > 0:
+            fallback_lines.append(f"Self-reported confidence: {round(confidence_score, 1)}/10")
         if top_projects:
             fallback_lines.append(f"Keep momentum on: {', '.join(top_projects)}")
         if avg_focus_score is not None:
@@ -1083,6 +1115,11 @@ async def run_morning_checkup(request: DailyCheckupRequest):
             f"Last 7 days logged minutes: {round(total_week_minutes, 1)}\n"
             f"Average daily logged minutes: {round(avg_daily_minutes, 1)}\n"
             f"Top projects: {', '.join(top_projects) if top_projects else 'none'}\n"
+            f"Top goals from context: {top_goals_text}\n"
+            f"Overdue tasks: {overdue_tasks}\n"
+            f"Due today tasks: {due_today_tasks}\n"
+            f"Planned deep work minutes: {planned_deep_work_minutes}\n"
+            f"User confidence: {confidence_score if confidence_score > 0 else 'n/a'}\n"
             f"Today existing entries: {len(today_entries)}\n"
             "Create a practical morning checkup with: 1) one focus sentence, "
             "2) three action bullets, 3) one accountability question."
@@ -1104,6 +1141,14 @@ async def run_morning_checkup(request: DailyCheckupRequest):
                 "avg_daily_minutes": round(avg_daily_minutes, 1),
                 "avg_focus_score": avg_focus_score,
             },
+            "decision_metrics": {
+                "overdue_tasks": overdue_tasks,
+                "due_today_tasks": due_today_tasks,
+                "planned_deep_work_minutes": round(planned_deep_work_minutes, 1),
+                "confidence": round(confidence_score, 1) if confidence_score > 0 else None,
+            },
+            "perspective": perspective,
+            "context_snapshot": context_snapshot,
             "style_profile": _public_style_profile(communication_profile),
             "coach_message": coach_message,
             "generated_with": "llm" if llm_message else "fallback",
@@ -1141,6 +1186,10 @@ async def run_evening_checkup(request: DailyCheckupRequest):
         kb_service = get_knowledge_base_service()
         checkup_date = _parse_requested_date(request.date)
         note = (request.note or "").strip()
+        perspective = request.perspective if isinstance(request.perspective, dict) else {}
+        context_snapshot = request.context_snapshot if isinstance(request.context_snapshot, dict) else {}
+        if not context_snapshot and isinstance(request.contextSnapshot, dict):
+            context_snapshot = request.contextSnapshot
 
         all_entries = await kb_service.get_all_entries()
         today_entries: List[Dict[str, Any]] = []
@@ -1197,6 +1246,38 @@ async def run_evening_checkup(request: DailyCheckupRequest):
         avg_focus = round(sum(focus_scores) / len(focus_scores), 2) if focus_scores else None
         avg_energy = round(sum(energy_scores) / len(energy_scores), 2) if energy_scores else None
 
+        deadline_tasks = context_snapshot.get("deadlineTasks", {}) if isinstance(context_snapshot.get("deadlineTasks"), dict) else {}
+        overdue_tasks = int(_safe_float(deadline_tasks.get("overdue"), default=0.0))
+        due_today_tasks = int(_safe_float(deadline_tasks.get("dueToday"), default=0.0))
+        completed_tasks_today = int(_safe_float(context_snapshot.get("completedTasksToday"), default=0.0))
+
+        planned_deep_work_minutes = _safe_float(
+            perspective.get("plannedDeepWorkMinutes"),
+            default=_safe_float(context_snapshot.get("plannedDeepWorkMinutes"), default=0.0),
+        )
+        self_rating = _safe_float(perspective.get("selfRating"), default=0.0)
+
+        top_priority_raw = perspective.get("topPriorityCompleted")
+        if isinstance(top_priority_raw, bool):
+            top_priority_completed = top_priority_raw
+        else:
+            top_priority_completed = str(top_priority_raw).strip().lower() in {"1", "true", "yes", "done"}
+
+        baseline_minutes = planned_deep_work_minutes if planned_deep_work_minutes > 0 else 120.0
+        minutes_score = min(4.0, (total_minutes / max(1.0, baseline_minutes)) * 4.0)
+        focus_component = min(3.0, ((avg_focus or 0.0) / 10.0) * 3.0)
+        task_denominator = max(1, due_today_tasks + overdue_tasks)
+        tasks_component = min(2.0, (completed_tasks_today / task_denominator) * 2.0) if task_denominator > 0 else 0.0
+        priority_component = 1.0 if top_priority_completed else 0.0
+
+        objective_score = round(min(10.0, minutes_score + focus_component + tasks_component + priority_component), 2)
+        subjective_score = round(max(0.0, min(10.0, self_rating)), 2) if self_rating > 0 else None
+        performance_score = round(
+            (objective_score * 0.65)
+            + ((subjective_score if subjective_score is not None else objective_score) * 0.35),
+            2,
+        )
+
         blockers = sorted({item["blockers"] for item in today_entries if item["blockers"]})
         longest_tasks = sorted(today_entries, key=lambda item: item["duration_minutes"], reverse=True)[:3]
 
@@ -1222,11 +1303,16 @@ async def run_evening_checkup(request: DailyCheckupRequest):
             f"Total logged today: {_format_minutes(total_minutes)}",
             f"Billable portion: {_format_minutes(billable_minutes)}",
             f"Sessions captured: {len(today_entries)}",
+            f"Estimated performance score: {performance_score}/10",
         ]
         if avg_focus is not None:
             fallback_lines.append(f"Average focus: {avg_focus}/10")
         if avg_energy is not None:
             fallback_lines.append(f"Average energy: {avg_energy}/10")
+        if subjective_score is not None:
+            fallback_lines.append(f"Self-assessment: {subjective_score}/10")
+        if overdue_tasks > 0:
+            fallback_lines.append(f"Overdue tasks carried: {overdue_tasks}")
         fallback_lines.extend([f"Tomorrow: {item}" for item in tomorrow_focus])
 
         communication_profile = _extract_communication_profile(all_entries)
@@ -1243,6 +1329,12 @@ async def run_evening_checkup(request: DailyCheckupRequest):
             f"Avg focus: {avg_focus if avg_focus is not None else 'n/a'}\n"
             f"Avg energy: {avg_energy if avg_energy is not None else 'n/a'}\n"
             f"Blockers: {', '.join(blockers) if blockers else 'none'}\n"
+            f"Overdue tasks: {overdue_tasks}\n"
+            f"Due today tasks: {due_today_tasks}\n"
+            f"Completed tasks today: {completed_tasks_today}\n"
+            f"Planned deep work minutes: {planned_deep_work_minutes}\n"
+            f"Self-rating: {subjective_score if subjective_score is not None else 'n/a'}\n"
+            f"Objective score: {objective_score}/10\n"
             "Provide an evening checkup with: 1) one recap sentence, "
             "2) two wins, 3) two concrete tomorrow actions."
         )
@@ -1273,6 +1365,22 @@ async def run_evening_checkup(request: DailyCheckupRequest):
                 "avg_energy": avg_energy,
                 "top_projects": top_projects,
             },
+            "performance": {
+                "score": performance_score,
+                "objective_score": objective_score,
+                "subjective_score": subjective_score,
+                "minutes_score_component": round(minutes_score, 2),
+                "focus_score_component": round(focus_component, 2),
+                "tasks_score_component": round(tasks_component, 2),
+                "top_priority_component": round(priority_component, 2),
+                "planned_deep_work_minutes": round(planned_deep_work_minutes, 1),
+                "overdue_tasks": overdue_tasks,
+                "due_today_tasks": due_today_tasks,
+                "completed_tasks_today": completed_tasks_today,
+                "top_priority_completed": top_priority_completed,
+            },
+            "perspective": perspective,
+            "context_snapshot": context_snapshot,
             "wins": wins,
             "blockers": blockers,
             "tomorrow_focus": tomorrow_focus,
@@ -1286,6 +1394,7 @@ async def run_evening_checkup(request: DailyCheckupRequest):
             f"Evening checkup for {checkup_date.isoformat()}\n"
             f"Total Logged: {_format_minutes(total_minutes)}\n"
             f"Billable: {_format_minutes(billable_minutes)}\n"
+            f"Performance Score: {performance_score}/10\n"
             f"Sessions: {len(today_entries)}\n\n"
             "Wins:\n" + "\n".join(f"- {item}" for item in wins) + "\n\n"
             "Tomorrow Focus:\n" + "\n".join(f"- {item}" for item in tomorrow_focus) + "\n\n"
@@ -1314,6 +1423,18 @@ async def save_onboarding_data(data: OnboardingData):
     """Save user onboarding data to knowledge base."""
     try:
         kb_service = get_knowledge_base_service()
+
+        coach_preferences = data.coach_preferences or data.coachPreferences or {}
+        if not isinstance(coach_preferences, dict):
+            coach_preferences = {}
+
+        domain_preferences = data.domain_preferences or data.domainPreferences or {}
+        if not isinstance(domain_preferences, dict):
+            domain_preferences = {}
+
+        preference_profile = data.preference_profile or data.preferenceProfile or {}
+        if not isinstance(preference_profile, dict):
+            preference_profile = {}
         
         # First, delete existing onboarding entries in bulk to avoid repeated index rebuilds.
         all_entries = await kb_service.get_all_entries()
@@ -1337,6 +1458,9 @@ async def save_onboarding_data(data: OnboardingData):
                 "preferences": data.preferences,
                 "mentor": data.mentor,
                 "preferredTone": data.preferredTone,
+                "coach_preferences": coach_preferences,
+                "domain_preferences": domain_preferences,
+                "preference_profile": preference_profile,
                 "onboarding_completed": True
             },
             tags=["profile", "onboarding", data.role.lower()]
@@ -1375,13 +1499,85 @@ async def save_onboarding_data(data: OnboardingData):
             },
             tags=["planner", "schedule", "configuration"]
         )
+
+        preferences_synced = False
+        try:
+            resolved_profile: Dict[str, Dict[str, Any]] = {
+                section: values
+                for section, values in preference_profile.items()
+                if isinstance(values, dict)
+            }
+
+            if not resolved_profile:
+                availability = data.planner.get("availability", {}) if isinstance(data.planner, dict) else {}
+                work_hours = availability.get("workHours", {}) if isinstance(availability, dict) else {}
+                check_in = availability.get("checkIn", {}) if isinstance(availability, dict) else {}
+                timezone_name = availability.get("timezone", "UTC") if isinstance(availability, dict) else "UTC"
+
+                work_hours_value = f"{work_hours.get('start', '09:00')}-{work_hours.get('end', '17:00')}"
+                check_in_time = check_in.get("preferredTime", "09:00")
+                check_in_frequency = check_in.get("frequency", "daily")
+
+                resolved_profile = {
+                    "productivity": {
+                        "work_hours": work_hours_value,
+                        "check_in_time": check_in_time,
+                        "check_in_frequency": check_in_frequency,
+                        "priority_signals": data.preferences,
+                    },
+                    "health": {
+                        "wellness_focus": coach_preferences.get("wellnessFocus", "balanced"),
+                    },
+                    "finance": {
+                        "planning_priority": coach_preferences.get("financialFocus", "budgeting"),
+                    },
+                    "journal": {
+                        "reflection_frequency": check_in_frequency,
+                        "check_in_time": check_in_time,
+                    },
+                    "general": {
+                        "role": data.role,
+                        "timezone": timezone_name,
+                        "priorities": data.preferences,
+                        "mentor": data.mentor,
+                        "preferred_tone": data.preferredTone,
+                        "coach_preferences": coach_preferences,
+                    },
+                }
+
+            for section in ["productivity", "health", "finance", "journal", "general"]:
+                incoming_section = domain_preferences.get(section)
+                if isinstance(incoming_section, dict):
+                    section_base = resolved_profile.get(section, {})
+                    if not isinstance(section_base, dict):
+                        section_base = {}
+                    section_base.update(incoming_section)
+                    resolved_profile[section] = section_base
+
+            current_preferences = await kb_service.get_user_preferences()
+            preferences_payload = current_preferences.model_dump()
+
+            for section, values in resolved_profile.items():
+                if not isinstance(values, dict):
+                    continue
+                existing_section = preferences_payload.get(section, {})
+                if not isinstance(existing_section, dict):
+                    existing_section = {}
+                existing_section.update(values)
+                preferences_payload[section] = existing_section
+
+            updated_preferences = UserPreferences(**preferences_payload)
+            preferences_synced = await kb_service.update_user_preferences(updated_preferences)
+        except Exception as pref_sync_error:
+            logger.warning("Failed to sync structured onboarding preferences: %s", pref_sync_error)
         
         return {
             "success": True,
             "message": "Onboarding data saved successfully",
             "profile_id": profile_entry.entry_id,
             "goals_count": len(goal_entries),
-            "planner_id": planner_entry.entry_id
+            "planner_id": planner_entry.entry_id,
+            "preferences_synced": preferences_synced
         }
     except Exception as e:
         import traceback
@@ -1424,7 +1620,10 @@ async def get_onboarding_profile():
             "preferences": [],
             "preferredTone": None,
             "coachAvatar": None,
-            "schedule": None
+            "schedule": None,
+            "coachPreferences": {},
+            "domainPreferences": {},
+            "preferenceProfile": {}
         }
         
         for entry in user_entries:
@@ -1435,6 +1634,9 @@ async def get_onboarding_profile():
                 profile_data["mentor"] = metadata.get("mentor", {})
                 profile_data["preferredTone"] = metadata.get("preferredTone") or metadata.get("preferred_tone")
                 profile_data["coachAvatar"] = metadata.get("mentor", {}).get("avatar")
+                profile_data["coachPreferences"] = metadata.get("coach_preferences", {})
+                profile_data["domainPreferences"] = metadata.get("domain_preferences", {})
+                profile_data["preferenceProfile"] = metadata.get("preference_profile", {})
                 # Convert preferences to Answer format
                 for pref in metadata.get("preferences", []):
                     profile_data["answers"].append({
@@ -1469,6 +1671,19 @@ async def get_onboarding_profile():
         # Update planner goals after all goals are collected
         if profile_data["planner"]:
             profile_data["planner"]["goals"] = profile_data["goals"]
+
+        if not profile_data["preferenceProfile"]:
+            try:
+                preferences = await kb_service.get_user_preferences()
+                profile_data["preferenceProfile"] = {
+                    "productivity": preferences.productivity,
+                    "health": preferences.health,
+                    "finance": preferences.finance,
+                    "journal": preferences.journal,
+                    "general": preferences.general,
+                }
+            except Exception:
+                profile_data["preferenceProfile"] = {}
         
         profile_data["onboardingCompleted"] = profile_data["role"] is not None
         return profile_data
