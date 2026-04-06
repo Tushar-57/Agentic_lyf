@@ -72,6 +72,12 @@ class KnowledgeBaseService:
             return vector
 
         return [value / norm for value in vector]
+
+    def _truncate_for_log(self, value: Any, limit: int = 140) -> str:
+        text = " ".join(str(value or "").split())
+        if len(text) <= limit:
+            return text
+        return f"{text[:limit - 3]}..."
     
     async def _generate_embedding(self, text: str) -> List[float]:
         """Generate embedding for text using the configured LLM provider."""
@@ -633,6 +639,11 @@ class KnowledgeBaseService:
         source_action = str(context_payload.get("source_action", "")).strip().lower()
         forced_category = str(context_payload.get("category", "")).strip().lower()
         has_time_entry_id = context_payload.get("time_entry_id") is not None
+        approval_payload = context_payload.get("approval") if isinstance(context_payload.get("approval"), dict) else {}
+        approved_as_insight = bool(
+            context_payload.get("approved_as_insight")
+            or approval_payload.get("approved_as_insight")
+        )
 
         is_time_entry = (
             forced_category == "time_entry"
@@ -645,6 +656,13 @@ class KnowledgeBaseService:
                 "time_entry",
                 KnowledgeEntrySubType.WORK_INTERACTION,
                 ["interaction", "history", "time_entry", "alterego_sync", normalized_agent],
+            )
+
+        if forced_category in {"insight", "important_insight", "deep_insight"} or approved_as_insight:
+            return (
+                "insight",
+                KnowledgeEntrySubType.IMPORTANT_INSIGHT,
+                ["insight", "approved", normalized_agent],
             )
 
         if normalized_agent == "health":
@@ -695,6 +713,13 @@ class KnowledgeBaseService:
     ) -> str:
         if category == "time_entry":
             return self._build_time_entry_title(context_payload)
+
+        if category == "insight":
+            payload = context_payload or {}
+            agent_hint = str(payload.get("agent_type") or payload.get("source_action") or "").strip()
+            if agent_hint:
+                return f"Approved Insight - {agent_hint.replace('_', ' ').title()}"
+            return "Approved Insight"
 
         title_source = category.replace("_", " ").title()
         return f"Interaction with {title_source}"
@@ -935,8 +960,41 @@ class KnowledgeBaseService:
                 context=context_payload,
             )
 
+            entry_type = KnowledgeEntryType.INSIGHT if category == "insight" else KnowledgeEntryType.INTERACTION
+
+            approval_payload = context_payload.get("approval") if isinstance(context_payload.get("approval"), dict) else {}
+            approved_by_user = bool(context_payload.get("approved_by_user") or approval_payload.get("approved"))
+            approved_at = context_payload.get("approved_at") or approval_payload.get("approved_at")
+            knowledge_sources = context_payload.get("knowledge_sources")
+            if not isinstance(knowledge_sources, list):
+                knowledge_sources = []
+
             interaction_title = self._build_interaction_title(category, context_payload)
-            interaction_content = f"User: {user_input}\nAgent ({agent_type}): {agent_response}"
+            if category == "time_entry":
+                interaction_content = f"User: {user_input}\nAgent ({agent_type}): {agent_response}"
+            else:
+                interaction_content = json.dumps(
+                    {
+                        "user_input": user_input,
+                        "agent_response": agent_response,
+                        "agent_type": agent_type,
+                        "approved_by_user": approved_by_user,
+                        "approved_at": approved_at,
+                        "knowledge_sources": knowledge_sources[:8],
+                    },
+                    ensure_ascii=False,
+                )
+
+            metadata_payload = {
+                "agent_type": agent_type,
+                "timestamp": datetime.utcnow().isoformat(),
+                "context": context_payload,
+                "user_input_length": len(user_input),
+                "response_length": len(agent_response),
+                "approved_by_user": approved_by_user,
+                "approved_at": approved_at,
+                "knowledge_source_count": len(knowledge_sources),
+            }
 
             sync_event_key = str(context_payload.get("sync_event_key", "")).strip()
             if sync_event_key:
@@ -946,31 +1004,19 @@ class KnowledgeBaseService:
                         entry_id=existing_entry.entry_id,
                         title=interaction_title,
                         content=interaction_content,
-                        metadata={
-                            "agent_type": agent_type,
-                            "timestamp": datetime.utcnow().isoformat(),
-                            "context": context_payload,
-                            "user_input_length": len(user_input),
-                            "response_length": len(agent_response),
-                        },
+                        metadata=metadata_payload,
                         tags=tags,
                     )
                     if updated_entry:
                         return updated_entry
 
             return await self.create_entry(
-                entry_type=KnowledgeEntryType.INTERACTION,
+                entry_type=entry_type,
                 entry_sub_type=entry_sub_type,
                 category=category,
                 title=interaction_title,
                 content=interaction_content,
-                metadata={
-                    "agent_type": agent_type,
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "context": context_payload,
-                    "user_input_length": len(user_input),
-                    "response_length": len(agent_response)
-                },
+                metadata=metadata_payload,
                 tags=tags
             )
         except Exception as e:
@@ -1204,6 +1250,27 @@ class KnowledgeBaseService:
                 "recent_time_entries": recent_time_entries,
                 "context_summary": self._generate_context_summary(user_input, agent_type, combined_results)
             }
+
+            top_matches = [
+                {
+                    "category": self._normalize_visual_category(result.entry),
+                    "type": self._normalize_visual_type(result.entry, self._normalize_visual_category(result.entry)),
+                    "score": round(float(result.similarity_score), 3),
+                }
+                for result in combined_results[:3]
+            ]
+
+            logger.info(
+                "[RAG_CONTEXT] agent=%s query=%s total=%d interactions=%d preferences=%d patterns=%d recent_time_entries=%d top_matches=%s",
+                agent_type,
+                self._truncate_for_log(user_input, 150),
+                len(combined_results),
+                len(interaction_results),
+                len(preference_results),
+                len(pattern_results),
+                len(recent_time_entries),
+                top_matches,
+            )
             
             return context
             
@@ -1279,6 +1346,15 @@ class KnowledgeBaseService:
         if recent_interactions:
             most_recent = max(recent_interactions, key=lambda x: x.entry.created_at)
             summary += f"Most recent similar interaction was on {most_recent.entry.created_at.strftime('%Y-%m-%d')}."
+
+        time_entry_results = [r for r in search_results if self._is_time_entry_entry(r.entry)]
+        if time_entry_results:
+            most_recent_time_entry = max(time_entry_results, key=lambda x: x.entry.created_at).entry
+            metadata = most_recent_time_entry.metadata if isinstance(most_recent_time_entry.metadata, dict) else {}
+            context = metadata.get("context") if isinstance(metadata.get("context"), dict) else {}
+            project_name = str(context.get("project_name") or "Unassigned").strip()
+            description = str(context.get("description") or context.get("task_name") or "work session").strip()
+            summary += f" Recent tracked focus: {project_name} - {description}."
         
         return summary
     

@@ -228,6 +228,7 @@ Remember: Your role is to be a trusted health partner that combines AI insights 
                     user_input=user_input,
                     agent_response=response,
                     agent_type="health",
+                    context=merged_context,
                     knowledge_sources=knowledge_sources
                 )
                 

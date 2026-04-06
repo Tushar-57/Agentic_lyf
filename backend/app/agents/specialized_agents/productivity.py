@@ -68,6 +68,7 @@ class ProductivityAgent(BaseAgent):
             )
 
             merged_context = self._merge_with_routing_context(contextual_knowledge, state_context)
+            self._log_rag_trace("context_loaded", user_input=user_input, context=merged_context)
             
             # Determine productivity task type
             if any(keyword in user_input.lower() for keyword in ["task", "todo", "organize", "project"]):
@@ -85,7 +86,8 @@ class ProductivityAgent(BaseAgent):
                 interaction_id = await recorder.create_pending_interaction(
                     user_input=user_input,
                     agent_response=response,
-                    agent_type="productivity"
+                    agent_type="productivity",
+                    context=merged_context,
                 )
                 if interaction_id:
                     logger.info("Created pending interaction %s for productivity approval", interaction_id)
@@ -112,6 +114,7 @@ class ProductivityAgent(BaseAgent):
         """Handle task management requests."""
         try:
             task_context = self._build_productivity_context(context, "tasks")
+            day_rundown = self._build_day_rundown(context)
             
             llm_service = await get_llm_service()
             if not llm_service:
@@ -122,13 +125,22 @@ class ProductivityAgent(BaseAgent):
             
             User Request: {user_input}
             Task Context: {task_context}
+            Day Rundown Signals: {day_rundown}
             
             Response requirements:
             1. Keep it concise (max 6 bullets, about 140-180 words unless user asks for depth).
             2. Explicitly reference any relevant goals, priorities, or recent time-entry patterns from context.
-            3. Provide one immediate next action the user can do now.
-            4. Ask one focused follow-up question only if critical context is missing.
+            3. Include a quick rundown using this framing: what was completed, what may have been missed, and what to do next.
+            4. Provide one immediate next action the user can do now.
+            5. Ask one focused follow-up question only if critical context is missing.
             """
+
+            self._log_rag_trace(
+                "task_prompt",
+                user_input=user_input,
+                context=context,
+                prompt=prompt,
+            )
             
             request = CompletionRequest(
                 messages=[ChatMessage(role="user", content=prompt)],
@@ -137,7 +149,9 @@ class ProductivityAgent(BaseAgent):
             )
             
             response = await llm_service.chat_completion(request)
-            return response.content
+            response_text = response.content or ""
+            self._log_rag_trace("task_response", user_input=user_input, context=context, response=response_text)
+            return response_text
             
         except Exception as e:
             logger.error(f"Task management failed: {e}")
@@ -147,6 +161,7 @@ class ProductivityAgent(BaseAgent):
         """Handle goal setting and tracking requests."""
         try:
             goal_context = self._build_productivity_context(context, "goals")
+            day_rundown = self._build_day_rundown(context)
             
             llm_service = await get_llm_service()
             if not llm_service:
@@ -157,13 +172,22 @@ class ProductivityAgent(BaseAgent):
             
             User Request: {user_input}
             Goal Context: {goal_context}
+            Day Rundown Signals: {day_rundown}
             
             Response requirements:
             1. Keep it concise (max 6 bullets, about 140-180 words unless user asks for depth).
             2. Tie recommendations to the user's stated priorities and active goals from context.
             3. Convert advice into concrete weekly actions.
-            4. End with one measurable checkpoint.
+            4. Explicitly mention what progress appears done vs what is still lagging.
+            5. End with one measurable checkpoint.
             """
+
+            self._log_rag_trace(
+                "goal_prompt",
+                user_input=user_input,
+                context=context,
+                prompt=prompt,
+            )
             
             request = CompletionRequest(
                 messages=[ChatMessage(role="user", content=prompt)],
@@ -172,7 +196,9 @@ class ProductivityAgent(BaseAgent):
             )
             
             response = await llm_service.chat_completion(request)
-            return response.content
+            response_text = response.content or ""
+            self._log_rag_trace("goal_response", user_input=user_input, context=context, response=response_text)
+            return response_text
             
         except Exception as e:
             logger.error(f"Goal setting failed: {e}")
@@ -182,6 +208,7 @@ class ProductivityAgent(BaseAgent):
         """Handle time management and productivity optimization."""
         try:
             time_context = self._build_productivity_context(context, "time")
+            day_rundown = self._build_day_rundown(context)
             
             llm_service = await get_llm_service()
             if not llm_service:
@@ -192,13 +219,22 @@ class ProductivityAgent(BaseAgent):
             
             User Request: {user_input}
             Time Management Context: {time_context}
+            Day Rundown Signals: {day_rundown}
             
             Response requirements:
             1. Keep it concise (max 6 bullets, about 140-180 words unless user asks for depth).
             2. Reference relevant recent time-entry patterns and suggest targeted adjustments.
-            3. Offer a practical time-blocking plan for the next 24 hours.
-            4. End with one immediate action.
+            3. Include a clear rundown section with headings: Completed Today, Missed/At Risk, Next Blocks.
+            4. Offer a practical time-blocking plan for the next 24 hours.
+            5. End with one immediate action.
             """
+
+            self._log_rag_trace(
+                "time_prompt",
+                user_input=user_input,
+                context=context,
+                prompt=prompt,
+            )
             
             request = CompletionRequest(
                 messages=[ChatMessage(role="user", content=prompt)],
@@ -207,7 +243,9 @@ class ProductivityAgent(BaseAgent):
             )
             
             response = await llm_service.chat_completion(request)
-            return response.content
+            response_text = response.content or ""
+            self._log_rag_trace("time_response", user_input=user_input, context=context, response=response_text)
+            return response_text
             
         except Exception as e:
             logger.error(f"Time management failed: {e}")
@@ -217,6 +255,7 @@ class ProductivityAgent(BaseAgent):
         """Handle general productivity queries."""
         try:
             productivity_context = self._build_productivity_context(context, "general")
+            day_rundown = self._build_day_rundown(context)
             
             llm_service = await get_llm_service()
             if not llm_service:
@@ -227,12 +266,21 @@ class ProductivityAgent(BaseAgent):
             
             User Request: {user_input}
             Productivity Context: {productivity_context}
+            Day Rundown Signals: {day_rundown}
             
             Response requirements:
             1. Keep response concise (max 5 bullets, about 120-160 words unless user asks for detail).
             2. Ground advice in available profile/goal/time-entry context.
-            3. Finish with one next action.
+            3. If enough context exists, include what seems done vs missed.
+            4. Finish with one next action.
             """
+
+            self._log_rag_trace(
+                "general_prompt",
+                user_input=user_input,
+                context=context,
+                prompt=prompt,
+            )
             
             request = CompletionRequest(
                 messages=[ChatMessage(role="user", content=prompt)],
@@ -241,7 +289,9 @@ class ProductivityAgent(BaseAgent):
             )
             
             response = await llm_service.chat_completion(request)
-            return response.content
+            response_text = response.content or ""
+            self._log_rag_trace("general_response", user_input=user_input, context=context, response=response_text)
+            return response_text
             
         except Exception as e:
             logger.error(f"General productivity failed: {e}")
@@ -335,8 +385,101 @@ class ProductivityAgent(BaseAgent):
 
         if "knowledge_context_summary" in context and context["knowledge_context_summary"]:
             context_parts.append(f"Routing knowledge summary: {context['knowledge_context_summary']}")
+
+        day_rundown = self._build_day_rundown(context)
+        if day_rundown:
+            context_parts.append(f"Day rundown: {day_rundown}")
         
         return " | ".join(context_parts) if context_parts else f"No specific {productivity_type} context available"
+
+    def _build_day_rundown(self, context: Dict[str, Any]) -> str:
+        """Create a compact completed-vs-missed rundown from recent tracked sessions."""
+        if not isinstance(context, dict):
+            return "No recent tracked sessions available."
+
+        recent_entries = context.get("recent_time_entries", [])
+        if not isinstance(recent_entries, list) or not recent_entries:
+            return "No recent tracked sessions available."
+
+        completed: List[str] = []
+        total_minutes = 0.0
+        combined_activity_text: List[str] = []
+
+        for item in recent_entries[:4]:
+            if not isinstance(item, dict):
+                continue
+
+            description = str(item.get("description") or "work session").strip()
+            project = str(item.get("project_name") or "Unassigned").strip()
+            duration = item.get("duration_minutes")
+
+            duration_label = ""
+            if duration is not None:
+                try:
+                    duration_float = float(duration)
+                    total_minutes += max(0.0, duration_float)
+                    duration_label = f" ({round(duration_float)}m)"
+                except (TypeError, ValueError):
+                    duration_label = ""
+
+            completed.append(f"{project}: {description}{duration_label}")
+            combined_activity_text.append(f"{project} {description}".lower())
+
+        priorities = []
+        profile_snapshot = context.get("profile_snapshot") if isinstance(context.get("profile_snapshot"), dict) else {}
+        if isinstance(profile_snapshot, dict):
+            raw_priorities = profile_snapshot.get("priorities")
+            if isinstance(raw_priorities, list):
+                priorities = [str(item).strip() for item in raw_priorities if str(item).strip()]
+
+        missed_priorities: List[str] = []
+        joined_activity = " ".join(combined_activity_text)
+        for priority in priorities[:4]:
+            normalized_priority = priority.lower()
+            if normalized_priority and normalized_priority not in joined_activity:
+                missed_priorities.append(priority)
+
+        completed_text = "; ".join(completed) if completed else "No concrete completions detected."
+        missed_text = "; ".join(missed_priorities[:2]) if missed_priorities else "No obvious priority gaps inferred."
+
+        return (
+            f"Completed: {completed_text} | "
+            f"Missed/at-risk priorities: {missed_text} | "
+            f"Tracked minutes (sample): {round(total_minutes)}"
+        )
+
+    def _log_rag_trace(
+        self,
+        stage: str,
+        user_input: str,
+        context: Optional[Dict[str, Any]] = None,
+        prompt: Optional[str] = None,
+        response: Optional[str] = None,
+    ) -> None:
+        """Structured observability logs for context->prompt->response path."""
+        context = context or {}
+        context_counts = {
+            "interactions": len(context.get("relevant_interactions", [])) if isinstance(context.get("relevant_interactions"), list) else 0,
+            "preferences": len(context.get("user_preferences", [])) if isinstance(context.get("user_preferences"), list) else 0,
+            "time_entries": len(context.get("recent_time_entries", [])) if isinstance(context.get("recent_time_entries"), list) else 0,
+            "patterns": len(context.get("patterns_and_insights", [])) if isinstance(context.get("patterns_and_insights"), list) else 0,
+        }
+
+        logger.info(
+            "[RAG_TRACE][productivity][%s] input=%s context_counts=%s summary=%s prompt=%s response=%s",
+            stage,
+            self._truncate_text(user_input, 140),
+            context_counts,
+            self._truncate_text(str(context.get("context_summary", "")), 180),
+            self._truncate_text(prompt or "", 260),
+            self._truncate_text(response or "", 260),
+        )
+
+    def _truncate_text(self, value: str, limit: int = 200) -> str:
+        text = " ".join(str(value or "").split())
+        if len(text) <= limit:
+            return text
+        return f"{text[:limit - 3]}..."
 
     def _merge_with_routing_context(self, kb_context: Dict[str, Any], state_context: Dict[str, Any]) -> Dict[str, Any]:
         """Merge orchestrator routing context with knowledge-base context."""

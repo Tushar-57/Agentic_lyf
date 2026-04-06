@@ -88,7 +88,8 @@ class JournalAgent(BaseAgent):
                 interaction_id = await recorder.create_pending_interaction(
                     user_input=user_input,
                     agent_response=response,
-                    agent_type="journal"
+                    agent_type="journal",
+                    context=merged_context,
                 )
                 if interaction_id:
                     logger.info("Created pending interaction %s for journal approval", interaction_id)

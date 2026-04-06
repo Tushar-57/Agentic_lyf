@@ -58,6 +58,139 @@ class InteractionRecorder:
             r'(data|analysis|report|metrics|statistics)',
             r'(preference|setting|configuration|customize)',
         ]
+
+    def _truncate_text(self, value: Any, limit: int = 220) -> str:
+        text = str(value or "").strip()
+        if len(text) <= limit:
+            return text
+        return f"{text[:limit - 3]}..."
+
+    def _extract_context_sources(self, context: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Derive transparent knowledge sources from merged RAG context."""
+        if not isinstance(context, dict):
+            return []
+
+        sources: List[Dict[str, Any]] = []
+
+        for interaction in context.get("relevant_interactions", [])[:3]:
+            if not isinstance(interaction, dict):
+                continue
+            sources.append({
+                "type": "Previous Interaction",
+                "content": self._truncate_text(interaction.get("content", "")),
+                "similarity": interaction.get("similarity", 0),
+                "created_at": interaction.get("created_at"),
+                "category": interaction.get("category"),
+                "metadata": interaction.get("metadata", {}),
+            })
+
+        for preference in context.get("user_preferences", [])[:3]:
+            if not isinstance(preference, dict):
+                continue
+            sources.append({
+                "type": "User Preference",
+                "content": self._truncate_text(preference.get("content", "")),
+                "similarity": preference.get("similarity", 0),
+                "category": preference.get("category"),
+                "metadata": preference.get("metadata", {}),
+            })
+
+        for entry in context.get("recent_time_entries", [])[:3]:
+            if not isinstance(entry, dict):
+                continue
+
+            description = str(entry.get("description") or "work session").strip()
+            project_name = str(entry.get("project_name") or "Unassigned").strip()
+            duration_minutes = entry.get("duration_minutes")
+            duration_suffix = f" ({duration_minutes}m)" if duration_minutes is not None else ""
+
+            sources.append({
+                "type": "Recent Time Entry",
+                "content": self._truncate_text(f"{project_name}: {description}{duration_suffix}"),
+                "similarity": entry.get("similarity", 0),
+                "created_at": entry.get("created_at"),
+                "category": "time_entry",
+                "metadata": {
+                    "project_name": entry.get("project_name"),
+                    "description": entry.get("description"),
+                    "duration_minutes": entry.get("duration_minutes"),
+                    "billable": entry.get("billable"),
+                },
+            })
+
+        for insight in context.get("patterns_and_insights", [])[:2]:
+            if not isinstance(insight, dict):
+                continue
+            sources.append({
+                "type": "Pattern/Insight",
+                "content": self._truncate_text(insight.get("content", "")),
+                "similarity": insight.get("similarity", 0),
+                "metadata": insight.get("metadata", {}),
+            })
+
+        return sources
+
+    def _looks_like_time_entry_context(self, context: Optional[Dict[str, Any]]) -> bool:
+        if not isinstance(context, dict):
+            return False
+
+        source = str(context.get("source", "")).strip().lower()
+        source_action = str(context.get("source_action", "")).strip().lower()
+        forced_category = str(context.get("category", "")).strip().lower()
+
+        return (
+            forced_category == "time_entry"
+            or source == "alterego_timetracker"
+            or "time_entry" in source_action
+            or context.get("time_entry_id") is not None
+        )
+
+    def _should_promote_to_insight(self, pending: PendingInteraction) -> bool:
+        """Promote high-value approved responses into insight category for discoverability."""
+        if self._looks_like_time_entry_context(pending.context):
+            return False
+
+        combined_text = f"{pending.user_input} {pending.agent_response}".lower()
+        response_text = pending.agent_response.strip()
+
+        structured_signal = response_text.count("\n") >= 4 or any(
+            token in combined_text
+            for token in [
+                "today's rundown",
+                "what you completed",
+                "what you missed",
+                "next actions",
+                "insight",
+                "pattern",
+                "analysis",
+                "reflection",
+                "summary",
+            ]
+        )
+        depth_signal = len(response_text) >= 280
+
+        return structured_signal and depth_signal
+
+    def _build_approval_context(self, pending: PendingInteraction, approved_as_insight: bool) -> Dict[str, Any]:
+        context_payload: Dict[str, Any] = dict(pending.context or {})
+
+        context_payload["approval"] = {
+            "approved": True,
+            "approved_at": datetime.now().isoformat(),
+            "source": "user_approval_queue",
+            "approved_as_insight": approved_as_insight,
+        }
+        context_payload["approved_by_user"] = True
+        context_payload["approved_at"] = datetime.now().isoformat()
+
+        if pending.knowledge_sources:
+            context_payload["knowledge_sources"] = pending.knowledge_sources
+
+        if approved_as_insight and not self._looks_like_time_entry_context(context_payload):
+            context_payload["category"] = "insight"
+            context_payload["approved_as_insight"] = True
+
+        return context_payload
     
     async def create_pending_interaction(self, user_input: str, agent_response: str, 
                                        agent_type: str = "general", context: Optional[Dict] = None,
@@ -85,13 +218,15 @@ class InteractionRecorder:
                 self.logger.debug("Interaction filtered out - not creating pending approval for %s", agent_type)
                 return None
             
+            resolved_sources = knowledge_sources or self._extract_context_sources(context)
+
             # Create pending interaction
             pending = PendingInteraction(
                 user_input=user_input,
                 agent_response=agent_response,
                 agent_type=agent_type,
                 context=context,
-                knowledge_sources=knowledge_sources or []
+                knowledge_sources=resolved_sources
             )
             
             self.pending_interactions.append(pending)
@@ -121,17 +256,27 @@ class InteractionRecorder:
                 self.logger.warning("Pending interaction not found: %s", interaction_id)
                 return False
             
+            approved_as_insight = self._should_promote_to_insight(pending)
+            approved_context = self._build_approval_context(pending, approved_as_insight)
+
             # Record the approved interaction
-            await self.knowledge_base.add_interaction_history(
+            saved_entry = await self.knowledge_base.add_interaction_history(
                 agent_type=pending.agent_type,
                 user_input=pending.user_input,
                 agent_response=pending.agent_response,
-                context=pending.context
+                context=approved_context
             )
             
             # Remove from pending list
             self.pending_interactions.remove(pending)
-            self.logger.info("USER APPROVED and recorded interaction %s (%s)", interaction_id, pending.agent_type)
+            self.logger.info(
+                "USER APPROVED and recorded interaction %s (%s) entry_id=%s category=%s insight=%s",
+                interaction_id,
+                pending.agent_type,
+                getattr(saved_entry, "entry_id", None),
+                getattr(saved_entry, "category", None),
+                approved_as_insight,
+            )
             return True
             
         except Exception as e:

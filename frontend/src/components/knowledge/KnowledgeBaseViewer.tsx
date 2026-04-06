@@ -94,10 +94,17 @@ const toDisplayLabel = (rawValue: string) => {
 const resolveEntryCategory = (entry: KnowledgeEntry): string => {
   const metadata = entry.metadata || {}
   const context = (metadata.context || {}) as Record<string, any>
+  const approval = (metadata.approval && typeof metadata.approval === 'object'
+    ? (metadata.approval as Record<string, any>)
+    : {})
 
   const source = String(context.source || '').toLowerCase()
   const sourceAction = String(context.source_action || '').toLowerCase()
   const category = String(entry.category || '').toLowerCase()
+
+  if (Boolean(context.approved_as_insight) || Boolean(approval.approved_as_insight)) {
+    return 'insight'
+  }
 
   if (
     category === 'time_entry' ||
@@ -116,6 +123,10 @@ const resolveEntryType = (entry: KnowledgeEntry, resolvedCategory: string): stri
 
   if (resolvedCategory === 'time_entry') {
     return 'time_entry'
+  }
+
+  if (resolvedCategory === 'insight' && String(entry.entry_type || '').toLowerCase() === 'interaction') {
+    return 'insight'
   }
 
   if (subType.includes('goal')) {
@@ -185,6 +196,10 @@ type HighlightItem = {
 type EntryPresentation = {
   summary: string
   highlights: HighlightItem[]
+  conversation?: {
+    userInput?: string
+    agentResponse?: string
+  }
   contentRows: Array<{ label: string; value: string }>
   metadataRows: Array<{ label: string; value: string }>
 }
@@ -353,6 +368,9 @@ const deriveSummary = (
 ): string => {
   const summaryKeys = [
     'summary',
+    'agent_response',
+    'assistant_response',
+    'ai_response',
     'description',
     'insight',
     'notes',
@@ -411,6 +429,8 @@ const buildPresentation = (entry: DisplayKnowledgeEntry): EntryPresentation => {
   const confidence = pickFirstValue(recordSources, ['confidence', 'similarity'])
   const startTime = pickFirstValue(recordSources, ['start_time'])
   const endTime = pickFirstValue(recordSources, ['end_time'])
+  const conversationUserInput = pickFirstValue(recordSources, ['user_input', 'user_query', 'prompt'])
+  const conversationAgentResponse = pickFirstValue(recordSources, ['agent_response', 'assistant_response', 'ai_response', 'response'])
   const billable = pickFirstValue(recordSources, ['billable'])
   const linkedGoal = pickFirstValue(recordSources, ['linked_goal'])
   const focusScore = pickFirstValue(recordSources, ['focus_score'])
@@ -512,9 +532,19 @@ const buildPresentation = (entry: DisplayKnowledgeEntry): EntryPresentation => {
         },
       )
 
+  const conversation = {
+    userInput: typeof conversationUserInput === 'string' && conversationUserInput.trim().length > 0
+      ? conversationUserInput.trim()
+      : undefined,
+    agentResponse: typeof conversationAgentResponse === 'string' && conversationAgentResponse.trim().length > 0
+      ? conversationAgentResponse.trim()
+      : undefined,
+  }
+
   return {
     summary: summary.length > 220 ? `${summary.slice(0, 217)}...` : summary,
     highlights,
+    conversation: conversation.userInput || conversation.agentResponse ? conversation : undefined,
     contentRows,
     metadataRows,
   }
@@ -631,20 +661,22 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
     }
   }
 
-  const displayEntries: DisplayKnowledgeEntry[] = entries.map((entry) => {
-    const displayCategory = resolveEntryCategory(entry)
-    const displayType = resolveEntryType(entry, displayCategory)
-    const displayTitle = resolveDisplayTitle(entry, displayType)
+  const displayEntries: DisplayKnowledgeEntry[] = [...entries]
+    .map((entry) => {
+      const displayCategory = resolveEntryCategory(entry)
+      const displayType = resolveEntryType(entry, displayCategory)
+      const displayTitle = resolveDisplayTitle(entry, displayType)
 
-    return {
-      ...entry,
-      displayTitle,
-      displayType,
-      displayTypeLabel: toDisplayLabel(displayType),
-      displayCategory,
-      displayCategoryLabel: toDisplayLabel(displayCategory),
-    }
-  })
+      return {
+        ...entry,
+        displayTitle,
+        displayType,
+        displayTypeLabel: toDisplayLabel(displayType),
+        displayCategory,
+        displayCategoryLabel: toDisplayLabel(displayCategory),
+      }
+    })
+    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
 
   // Filter entries based on search and filters
   const filteredEntries = displayEntries.filter(entry => {
@@ -911,7 +943,7 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
             <Input
               placeholder="Search entries, tags, or content..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(event: React.ChangeEvent<HTMLInputElement>) => setSearchQuery(event.target.value)}
               className="pl-10"
             />
           </div>
@@ -1011,6 +1043,28 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
                         {presentation.summary}
                       </p>
 
+                      {presentation.conversation?.userInput && (
+                        <div className="mb-3 rounded-lg border border-blue-200/60 bg-blue-50/50 p-3 dark:border-blue-900/60 dark:bg-blue-950/25">
+                          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">
+                            User Input
+                          </p>
+                          <p className="max-h-24 overflow-y-auto whitespace-pre-wrap break-words text-sm text-blue-900 dark:text-blue-100">
+                            {presentation.conversation.userInput}
+                          </p>
+                        </div>
+                      )}
+
+                      {presentation.conversation?.agentResponse && (
+                        <div className="mb-3 rounded-lg border border-emerald-200/60 bg-emerald-50/40 p-3 dark:border-emerald-900/60 dark:bg-emerald-950/20">
+                          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">
+                            AI Response
+                          </p>
+                          <p className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words text-sm text-emerald-900 dark:text-emerald-100">
+                            {presentation.conversation.agentResponse}
+                          </p>
+                        </div>
+                      )}
+
                       {presentation.highlights.length > 0 && (
                         <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
                           {presentation.highlights.slice(0, 4).map((item, itemIndex) => {
@@ -1030,6 +1084,36 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
                             )
                           })}
                         </div>
+                      )}
+
+                      {presentation.contentRows.length > 0 && (
+                        <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          {presentation.contentRows.map((row, rowIndex) => (
+                            <div
+                              key={`${entry.entry_id}-content-row-${rowIndex}`}
+                              className="rounded-lg border border-border/60 bg-muted/20 px-2 py-1.5"
+                            >
+                              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{row.label}</p>
+                              <p className="break-words text-xs font-medium text-foreground">{row.value}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {presentation.metadataRows.length > 0 && (
+                        <details className="mb-3 rounded-lg border border-border/60 bg-muted/15 px-3 py-2">
+                          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            Metadata Details
+                          </summary>
+                          <div className="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2">
+                            {presentation.metadataRows.map((row, rowIndex) => (
+                              <div key={`${entry.entry_id}-metadata-row-${rowIndex}`} className="min-w-0">
+                                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{row.label}</p>
+                                <p className="break-words text-xs text-foreground">{row.value}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </details>
                       )}
                       
                       {entry.tags.length > 0 && (
