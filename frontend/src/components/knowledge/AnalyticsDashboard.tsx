@@ -79,6 +79,13 @@ interface DailyCheckupResponse {
   stats?: Record<string, unknown>
 }
 
+interface DailyCheckupInsightEntry {
+  content?: string
+  created_at?: string
+  updated_at?: string
+  metadata?: Record<string, unknown>
+}
+
 interface AnalyticsDashboardProps {
   className?: string
 }
@@ -98,7 +105,128 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
 
   useEffect(() => {
     loadAnalyticsData()
+    loadLatestCheckups()
   }, [selectedTimeRange])
+
+  const toStringArray = (value: unknown): string[] | undefined => {
+    if (!Array.isArray(value)) {
+      return undefined
+    }
+
+    const normalized = value
+      .map((item) => (typeof item === 'string' ? item.trim() : String(item ?? '').trim()))
+      .filter(Boolean)
+
+    return normalized.length ? normalized : undefined
+  }
+
+  const parseStoredCheckup = (entry: DailyCheckupInsightEntry): DailyCheckupResponse | null => {
+    const metadata = entry.metadata
+    if (!metadata || typeof metadata !== 'object') {
+      return null
+    }
+
+    const checkupType = metadata.checkup_type
+    if (checkupType !== 'morning' && checkupType !== 'evening') {
+      return null
+    }
+
+    const checkupDate =
+      typeof metadata.checkup_date === 'string' && metadata.checkup_date.trim()
+        ? metadata.checkup_date
+        : (entry.updated_at || entry.created_at || new Date().toISOString()).slice(0, 10)
+
+    const coachMessage =
+      typeof metadata.coach_message === 'string' && metadata.coach_message.trim()
+        ? metadata.coach_message
+        : (entry.content || '').trim()
+
+    if (!coachMessage) {
+      return null
+    }
+
+    const generatedWith =
+      typeof metadata.generated_with === 'string' && metadata.generated_with.trim()
+        ? metadata.generated_with
+        : 'stored'
+
+    const focusTarget =
+      typeof metadata.focus_target === 'string' && metadata.focus_target.trim()
+        ? metadata.focus_target
+        : undefined
+
+    const intentNote =
+      typeof metadata.intent_note === 'string' ? metadata.intent_note : null
+
+    const reflectionNote =
+      typeof metadata.reflection_note === 'string' ? metadata.reflection_note : null
+
+    const stats =
+      metadata.stats && typeof metadata.stats === 'object'
+        ? (metadata.stats as Record<string, unknown>)
+        : undefined
+
+    return {
+      date: checkupDate,
+      checkup_type: checkupType,
+      coach_message: coachMessage,
+      generated_with: generatedWith,
+      focus_target: focusTarget,
+      intent_note: intentNote,
+      reflection_note: reflectionNote,
+      wins: toStringArray(metadata.wins),
+      blockers: toStringArray(metadata.blockers),
+      tomorrow_focus: toStringArray(metadata.tomorrow_focus),
+      stats,
+    }
+  }
+
+  const loadLatestCheckups = async () => {
+    try {
+      const response = await fetch('/api/knowledge/entries?entry_type=insight&category=daily_checkup')
+      if (!response.ok) {
+        throw new Error(`Checkup entries request failed with status ${response.status}`)
+      }
+
+      const payload = await response.json()
+      const entries = Array.isArray(payload?.entries)
+        ? (payload.entries as DailyCheckupInsightEntry[])
+        : []
+
+      const sortedEntries = [...entries].sort((a, b) => {
+        const aTime = new Date(a.updated_at || a.created_at || 0).getTime()
+        const bTime = new Date(b.updated_at || b.created_at || 0).getTime()
+        return bTime - aTime
+      })
+
+      let latestMorning: DailyCheckupResponse | null = null
+      let latestEvening: DailyCheckupResponse | null = null
+
+      for (const entry of sortedEntries) {
+        const parsed = parseStoredCheckup(entry)
+        if (!parsed) {
+          continue
+        }
+
+        if (parsed.checkup_type === 'morning' && !latestMorning) {
+          latestMorning = parsed
+        }
+
+        if (parsed.checkup_type === 'evening' && !latestEvening) {
+          latestEvening = parsed
+        }
+
+        if (latestMorning && latestEvening) {
+          break
+        }
+      }
+
+      setMorningCheckup(latestMorning)
+      setEveningCheckup(latestEvening)
+    } catch (error) {
+      console.error('Failed to load saved checkups:', error)
+    }
+  }
 
   const loadAnalyticsData = async () => {
     setIsLoading(true)
@@ -170,7 +298,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         setEveningCheckup(payload)
       }
 
-      loadAnalyticsData()
+      await Promise.all([loadAnalyticsData(), loadLatestCheckups()])
     } catch (error) {
       console.error(`Failed to run ${checkupType} checkup:`, error)
       setCheckupError('Unable to run checkup right now. Please try again.')

@@ -667,6 +667,16 @@ Response contract:
             intent_payload["agent_type"] = resolved_agent_type
 
             execution_path = self._get_execution_path(complexity, strategic_plan)
+            response_preview = str(response or "").strip()
+            if len(response_preview) > 320:
+                response_preview = f"{response_preview[:317]}..."
+
+            specialist_step = {
+                "agent": resolved_agent_type or "general",
+                "action": "Generated specialist response",
+                "result": response_preview or "No response body returned.",
+            }
+
             reasoning = {
                 "complexity": complexity.value,
                 "intent": intent_payload,
@@ -687,12 +697,19 @@ Response contract:
                     "confidence": float(intent_payload.get("confidence", 0.0) or 0.0),
                     "reason": str(intent_payload.get("reason", "")),
                 },
+                "agent_outputs": [
+                    {
+                        "agent": resolved_agent_type,
+                        "response_preview": response_preview,
+                    }
+                ],
                 "steps": [
                     {
                         "agent": "orchestrator",
                         "action": f"Routed request to {resolved_agent_type} specialist",
                         "result": str(intent_payload.get("reason", ""))[:220],
                     },
+                    specialist_step,
                     *[
                         {
                             "agent": "orchestrator",

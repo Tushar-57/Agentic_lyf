@@ -20,6 +20,10 @@ interface Message {
 }
 
 interface AgentThinking {
+  agent_outputs?: Array<{
+    agent: string
+    response_preview: string
+  }>
   steps?: Array<{
     agent: string
     action: string
@@ -121,6 +125,7 @@ const AgentThinkingDisplay = ({ thinking }: { thinking: AgentThinking }) => {
   const quickAgent = thinking.classification?.agent_type || thinking.finalAgent
   const quickStepCount = thinking.steps?.length || 0
   const quickSourceCount = thinking.knowledge_sources?.length || 0
+  const quickOutputCount = thinking.agent_outputs?.length || 0
   const derivedClassification = thinking.classification || (
     thinking.intent?.agent_type
       ? {
@@ -146,6 +151,7 @@ const AgentThinkingDisplay = ({ thinking }: { thinking: AgentThinking }) => {
     derivedClassification
       || hasRoutingContext
       || (thinking.knowledge_sources && thinking.knowledge_sources.length > 0)
+        || (thinking.agent_outputs && thinking.agent_outputs.length > 0)
       || thinking.handoff
       || (thinking.steps && thinking.steps.length > 0)
       || thinking.finalAgent
@@ -271,6 +277,24 @@ const AgentThinkingDisplay = ({ thinking }: { thinking: AgentThinking }) => {
         </div>
       )}
 
+      {thinking.agent_outputs && thinking.agent_outputs.length > 0 && (
+        <div className="mb-3 rounded border-l-4 border-violet-500 bg-violet-50/80 p-2 dark:bg-violet-950/25">
+          <div className="text-sm font-medium text-violet-900 dark:text-violet-200">Agent Responses</div>
+          <div className="mt-2 space-y-2">
+            {thinking.agent_outputs.map((output, index) => (
+              <div key={`${output.agent}-${index}`} className="rounded border bg-white/80 p-2 dark:bg-slate-800/70">
+                <div className="text-xs font-medium capitalize text-violet-800 dark:text-violet-300">
+                  {output.agent} Agent
+                </div>
+                <div className="mt-1 text-xs text-violet-700 dark:text-violet-200 break-words">
+                  {output.response_preview}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {thinking.steps && thinking.steps.length > 0 && (
         <div className="space-y-2">
           <div className="font-medium text-sm text-slate-700 dark:text-slate-300">Processing Steps:</div>
@@ -334,11 +358,12 @@ const AgentThinkingDisplay = ({ thinking }: { thinking: AgentThinking }) => {
             <Brain className="w-4 h-4" />
             Agent Thinking Process
           </span>
-          {(quickAgent || quickStepCount > 0 || quickSourceCount > 0) && (
+          {(quickAgent || quickStepCount > 0 || quickOutputCount > 0 || quickSourceCount > 0) && (
             <span className="mt-0.5 text-[11px] font-normal text-slate-500 dark:text-slate-400">
               {quickAgent ? `Agent: ${quickAgent}` : ''}
               {quickStepCount > 0 ? `${quickAgent ? ' | ' : ''}${quickStepCount} steps` : ''}
-              {quickSourceCount > 0 ? `${quickAgent || quickStepCount > 0 ? ' | ' : ''}${quickSourceCount} sources` : ''}
+              {quickOutputCount > 0 ? `${quickAgent || quickStepCount > 0 ? ' | ' : ''}${quickOutputCount} outputs` : ''}
+              {quickSourceCount > 0 ? `${quickAgent || quickStepCount > 0 || quickOutputCount > 0 ? ' | ' : ''}${quickSourceCount} sources` : ''}
             </span>
           )}
         </span>
@@ -490,6 +515,19 @@ const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLas
           agent_type: classificationAgent || 'general',
           confidence: Number(rawObj.classification.confidence || 0),
           reason: safeString(rawObj.classification.reason || ''),
+        }
+      }
+
+      if (Array.isArray(rawObj.agent_outputs)) {
+        const agentOutputs = rawObj.agent_outputs
+          .map((output: any) => ({
+            agent: normalizeAgentType(output?.agent || output?.agent_type || 'orchestrator') || 'orchestrator',
+            response_preview: safeString(output?.response_preview || output?.response || ''),
+          }))
+          .filter((output: { response_preview: string }) => Boolean(output.response_preview))
+
+        if (agentOutputs.length > 0) {
+          normalized.agent_outputs = agentOutputs
         }
       }
 
