@@ -9,7 +9,7 @@ import logging
 import re
 import math
 from time import monotonic
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional, Set
 
 from ..models.knowledge import (
@@ -1838,6 +1838,259 @@ class KnowledgeBaseService:
 
         return fallback_results
 
+    def _parse_datetime_value(self, value: Any) -> Optional[datetime]:
+        """Parse timestamps from heterogeneous metadata payloads into naive UTC datetimes."""
+        if isinstance(value, datetime):
+            if value.tzinfo is not None:
+                return value.astimezone(timezone.utc).replace(tzinfo=None)
+            return value
+
+        text = str(value or "").strip()
+        if not text:
+            return None
+
+        normalized = text.replace("Z", "+00:00")
+
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            parsed = None
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+                try:
+                    parsed = datetime.strptime(normalized, fmt)
+                    break
+                except ValueError:
+                    continue
+
+            if parsed is None:
+                return None
+
+        if parsed.tzinfo is not None:
+            return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed
+
+    def _infer_time_window(self, user_input: str, reference_time: datetime) -> Dict[str, Any]:
+        """Infer the reporting time window from the user query."""
+        text = str(user_input or "").strip().lower()
+        day_start = datetime(reference_time.year, reference_time.month, reference_time.day)
+
+        if re.search(r"\byesterday\b", text):
+            start = day_start - timedelta(days=1)
+            return {
+                "key": "yesterday",
+                "label": "Yesterday",
+                "start": start,
+                "end": start + timedelta(days=1),
+            }
+
+        if re.search(r"\btoday\b", text):
+            return {
+                "key": "today",
+                "label": "Today",
+                "start": day_start,
+                "end": day_start + timedelta(days=1),
+            }
+
+        if re.search(r"\b(this week|weekly|week)\b", text):
+            week_start = day_start - timedelta(days=day_start.weekday())
+            return {
+                "key": "this_week",
+                "label": "This Week",
+                "start": week_start,
+                "end": week_start + timedelta(days=7),
+            }
+
+        return {
+            "key": "unspecified",
+            "label": "Recent",
+            "start": None,
+            "end": None,
+        }
+
+    def _collect_time_entry_records(self, entries: List[KnowledgeEntry]) -> List[Dict[str, Any]]:
+        """Normalize persisted time-entry interactions into a unified record format."""
+        records: List[Dict[str, Any]] = []
+
+        for entry in entries:
+            if not self._is_time_entry_entry(entry):
+                continue
+
+            metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+            context_payload = metadata.get("context") if isinstance(metadata.get("context"), dict) else {}
+
+            start_time = self._parse_datetime_value(context_payload.get("start_time"))
+            end_time = self._parse_datetime_value(context_payload.get("end_time"))
+
+            raw_duration = context_payload.get("duration_minutes")
+            if raw_duration is None and context_payload.get("duration_seconds") is not None:
+                try:
+                    raw_duration = float(context_payload.get("duration_seconds", 0.0)) / 60.0
+                except (TypeError, ValueError):
+                    raw_duration = None
+
+            duration_minutes: Optional[float]
+            try:
+                duration_minutes = float(raw_duration) if raw_duration is not None else None
+            except (TypeError, ValueError):
+                duration_minutes = None
+
+            if start_time and end_time and duration_minutes is None:
+                duration_minutes = max(0.0, (end_time - start_time).total_seconds() / 60.0)
+
+            if start_time and duration_minutes is not None and end_time is None:
+                end_time = start_time + timedelta(minutes=max(0.0, duration_minutes))
+
+            if end_time and duration_minutes is not None and start_time is None:
+                start_time = end_time - timedelta(minutes=max(0.0, duration_minutes))
+
+            fallback_time = entry.updated_at if isinstance(entry.updated_at, datetime) else entry.created_at
+            effective_start = start_time or fallback_time
+            effective_end = end_time or effective_start
+
+            if duration_minutes is None:
+                duration_minutes = max(0.0, (effective_end - effective_start).total_seconds() / 60.0)
+
+            records.append(
+                {
+                    "entry_id": entry.entry_id,
+                    "project_name": str(context_payload.get("project_name") or "Unassigned").strip() or "Unassigned",
+                    "description": str(context_payload.get("description") or context_payload.get("task_name") or entry.title or "work session").strip(),
+                    "duration_minutes": max(0.0, float(duration_minutes or 0.0)),
+                    "billable": bool(context_payload.get("billable", False)),
+                    "start_dt": effective_start,
+                    "end_dt": effective_end,
+                    "start_time": context_payload.get("start_time") or effective_start.isoformat(timespec="minutes"),
+                    "end_time": context_payload.get("end_time") or effective_end.isoformat(timespec="minutes"),
+                    "created_at": entry.created_at.isoformat(),
+                    "updated_at": entry.updated_at.isoformat(),
+                    "source_action": str(context_payload.get("source_action") or "").strip(),
+                }
+            )
+
+        records.sort(key=lambda item: item.get("start_dt") or datetime.min, reverse=True)
+        return records
+
+    def _filter_records_for_window(self, records: List[Dict[str, Any]], window: Dict[str, Any]) -> List[Dict[str, Any]]:
+        start = window.get("start")
+        end = window.get("end")
+        if not isinstance(start, datetime) or not isinstance(end, datetime):
+            return list(records)
+
+        selected: List[Dict[str, Any]] = []
+        for record in records:
+            record_start = record.get("start_dt") or datetime.min
+            record_end = record.get("end_dt") or record_start
+            if record_end > start and record_start < end:
+                selected.append(record)
+
+        return selected
+
+    def _summarize_time_window_records(
+        self,
+        records: List[Dict[str, Any]],
+        window: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if not records:
+            return {
+                "window_key": window.get("key", "unspecified"),
+                "window_label": window.get("label", "Recent"),
+                "has_data": False,
+                "entry_count": 0,
+                "total_logged_minutes": 0.0,
+                "active_minutes": 0.0,
+                "span_minutes": 0.0,
+                "idle_minutes": 0.0,
+                "gap_count": 0,
+                "top_projects": [],
+                "top_entries": [],
+            }
+
+        total_logged_minutes = sum(float(item.get("duration_minutes") or 0.0) for item in records)
+
+        project_minutes: Dict[str, float] = {}
+        for record in records:
+            project_name = str(record.get("project_name") or "Unassigned").strip() or "Unassigned"
+            project_minutes[project_name] = project_minutes.get(project_name, 0.0) + float(record.get("duration_minutes") or 0.0)
+
+        top_projects = [
+            {
+                "project_name": project,
+                "minutes": round(minutes, 1),
+            }
+            for project, minutes in sorted(project_minutes.items(), key=lambda item: item[1], reverse=True)[:5]
+        ]
+
+        intervals = []
+        for record in records:
+            start_dt = record.get("start_dt")
+            end_dt = record.get("end_dt")
+            if isinstance(start_dt, datetime) and isinstance(end_dt, datetime) and end_dt >= start_dt:
+                intervals.append((start_dt, end_dt))
+
+        intervals.sort(key=lambda item: item[0])
+        merged_intervals: List[List[datetime]] = []
+        for start_dt, end_dt in intervals:
+            if not merged_intervals or start_dt > merged_intervals[-1][1]:
+                merged_intervals.append([start_dt, end_dt])
+            elif end_dt > merged_intervals[-1][1]:
+                merged_intervals[-1][1] = end_dt
+
+        active_minutes = sum(
+            max(0.0, (interval_end - interval_start).total_seconds() / 60.0)
+            for interval_start, interval_end in merged_intervals
+        )
+
+        span_minutes = 0.0
+        gap_count = 0
+        if merged_intervals:
+            span_minutes = max(0.0, (merged_intervals[-1][1] - merged_intervals[0][0]).total_seconds() / 60.0)
+            for idx in range(1, len(merged_intervals)):
+                gap_duration = (merged_intervals[idx][0] - merged_intervals[idx - 1][1]).total_seconds() / 60.0
+                if gap_duration > 0:
+                    gap_count += 1
+
+        idle_minutes = max(0.0, span_minutes - active_minutes)
+
+        top_entries = [
+            {
+                "entry_id": record.get("entry_id"),
+                "project_name": record.get("project_name"),
+                "description": record.get("description"),
+                "duration_minutes": round(float(record.get("duration_minutes") or 0.0), 1),
+                "billable": bool(record.get("billable", False)),
+                "start_time": record.get("start_time"),
+                "end_time": record.get("end_time"),
+            }
+            for record in sorted(records, key=lambda item: float(item.get("duration_minutes") or 0.0), reverse=True)[:8]
+        ]
+
+        return {
+            "window_key": window.get("key", "unspecified"),
+            "window_label": window.get("label", "Recent"),
+            "has_data": True,
+            "entry_count": len(records),
+            "total_logged_minutes": round(total_logged_minutes, 1),
+            "active_minutes": round(active_minutes, 1),
+            "span_minutes": round(span_minutes, 1),
+            "idle_minutes": round(idle_minutes, 1),
+            "gap_count": gap_count,
+            "top_projects": top_projects,
+            "top_entries": top_entries,
+        }
+
+    async def _build_time_window_summary(self, user_input: str) -> Dict[str, Any]:
+        """Build an all-entry time summary for review queries (today/yesterday/week)."""
+        reference_time = datetime.utcnow()
+        window = self._infer_time_window(user_input, reference_time)
+
+        interaction_entries = await self.get_all_entries(entry_type=KnowledgeEntryType.INTERACTION)
+        time_records = self._collect_time_entry_records(interaction_entries)
+        filtered_records = self._filter_records_for_window(time_records, window)
+
+        summary = self._summarize_time_window_records(filtered_records, window)
+        summary["total_time_entry_records_available"] = len(time_records)
+        return summary
+
     async def get_contextual_knowledge_for_agent(self, 
                                                 user_input: str,
                                                 agent_type: str,
@@ -2007,7 +2260,44 @@ class KnowledgeBaseService:
                 if recent_time_entries and "recent_history" not in fallback_modes:
                     fallback_modes.append("recent_time_entries_only")
 
+            time_window_summary = await self._build_time_window_summary(user_input)
+            window_key = str(time_window_summary.get("window_key") or "unspecified")
+            if time_window_summary.get("has_data") and window_key in {"today", "yesterday", "this_week"}:
+                window_entries = [
+                    {
+                        "entry_id": item.get("entry_id"),
+                        "project_name": item.get("project_name"),
+                        "description": item.get("description"),
+                        "duration_minutes": item.get("duration_minutes"),
+                        "billable": item.get("billable"),
+                        "start_time": item.get("start_time"),
+                        "end_time": item.get("end_time"),
+                        "created_at": item.get("start_time"),
+                        "similarity": 0.5,
+                    }
+                    for item in time_window_summary.get("top_entries", [])
+                ]
+                if window_entries:
+                    recent_time_entries = window_entries[: max(RAG_RECENT_FALLBACK_LIMIT, 8)]
+                    if "window_summary" not in fallback_modes:
+                        fallback_modes.append("window_summary")
+
             context_summary = self._generate_context_summary(user_input, agent_type, combined_results)
+            if time_window_summary.get("has_data"):
+                context_summary = (
+                    f"{context_summary} "
+                    f"{time_window_summary.get('window_label', 'Recent')} logged "
+                    f"{time_window_summary.get('total_logged_minutes', 0)} minutes across "
+                    f"{time_window_summary.get('entry_count', 0)} entries; "
+                    f"idle gaps {time_window_summary.get('gap_count', 0)} "
+                    f"(~{time_window_summary.get('idle_minutes', 0)} minutes)."
+                ).strip()
+            elif window_key in {"today", "yesterday", "this_week"}:
+                context_summary = (
+                    f"{context_summary} "
+                    f"No tracked time entries found for {str(time_window_summary.get('window_label', 'the requested window')).lower()}."
+                ).strip()
+
             if fallback_modes:
                 context_summary = f"{context_summary} Retrieval fallback: {', '.join(fallback_modes)}."
             
@@ -2043,6 +2333,7 @@ class KnowledgeBaseService:
                     for result in pattern_results
                 ][:3],
                 "recent_time_entries": recent_time_entries,
+                "time_window_summary": time_window_summary,
                 "context_summary": context_summary
             }
 
@@ -2056,7 +2347,7 @@ class KnowledgeBaseService:
             ]
 
             logger.info(
-                "[RAG_CONTEXT] agent=%s query=%s total=%d interactions=%d preferences=%d patterns=%d recent_time_entries=%d fallback=%s top_matches=%s",
+                "[RAG_CONTEXT] agent=%s query=%s total=%d interactions=%d preferences=%d patterns=%d recent_time_entries=%d window=%s window_entries=%s fallback=%s top_matches=%s",
                 agent_type,
                 self._truncate_for_log(user_input, 150),
                 len(combined_results),
@@ -2064,6 +2355,8 @@ class KnowledgeBaseService:
                 len(preference_results),
                 len(pattern_results),
                 len(recent_time_entries),
+                time_window_summary.get("window_key"),
+                time_window_summary.get("entry_count"),
                 fallback_modes or ["none"],
                 top_matches,
             )

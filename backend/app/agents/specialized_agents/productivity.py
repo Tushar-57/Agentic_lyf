@@ -3,6 +3,7 @@ Productivity Agent - Specialized agent for productivity, task management, and go
 """
 
 import logging
+import re
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
@@ -69,13 +70,19 @@ class ProductivityAgent(BaseAgent):
 
             merged_context = self._merge_with_routing_context(contextual_knowledge, state_context)
             self._log_rag_trace("context_loaded", user_input=user_input, context=merged_context)
+
+            normalized_input = user_input.lower()
             
             # Determine productivity task type
-            if any(keyword in user_input.lower() for keyword in ["task", "todo", "organize", "project"]):
+            if self._is_performance_review_request(normalized_input):
+                response = await self._handle_performance_review(user_input, merged_context)
+            elif self._is_activity_fact_check_request(normalized_input):
+                response = self._handle_activity_fact_check(user_input, merged_context)
+            elif any(keyword in normalized_input for keyword in ["task", "todo", "organize", "project"]):
                 response = await self._handle_task_management(user_input, merged_context)
-            elif any(keyword in user_input.lower() for keyword in ["goal", "objective", "target", "achieve"]):
+            elif any(keyword in normalized_input for keyword in ["goal", "objective", "target", "achieve"]):
                 response = await self._handle_goal_setting(user_input, merged_context)
-            elif any(keyword in user_input.lower() for keyword in ["time", "schedule", "productivity", "focus"]):
+            elif any(keyword in normalized_input for keyword in ["time", "schedule", "productivity", "focus"]):
                 response = await self._handle_time_management(user_input, merged_context)
             else:
                 response = await self._handle_general_productivity(user_input, merged_context)
@@ -296,6 +303,155 @@ class ProductivityAgent(BaseAgent):
         except Exception as e:
             logger.error(f"General productivity failed: {e}")
             return "🚀 I'm here to boost your productivity! What specific area would you like help with?"
+
+    def _is_performance_review_request(self, normalized_input: str) -> bool:
+        return bool(
+            re.search(
+                r"\b(how did i do|review|highlights|performance|compare|yesterday|daily summary|day summary)\b",
+                normalized_input,
+            )
+        )
+
+    def _is_activity_fact_check_request(self, normalized_input: str) -> bool:
+        return bool(
+            re.search(r"\b(did i|have i|was i)\b", normalized_input)
+            and re.search(r"\b(today|yesterday)\b", normalized_input)
+        )
+
+    async def _handle_performance_review(self, user_input: str, context: Dict[str, Any]) -> str:
+        """Handle day-review questions with hard factual constraints from full window summaries."""
+        try:
+            productivity_context = self._build_productivity_context(context, "review")
+            day_rundown = self._build_day_rundown(context)
+            summary = context.get("time_window_summary") if isinstance(context, dict) else {}
+            if not isinstance(summary, dict):
+                summary = {}
+
+            hard_facts = {
+                "window_label": summary.get("window_label", "Requested window"),
+                "entry_count": summary.get("entry_count", 0),
+                "total_logged_minutes": summary.get("total_logged_minutes", 0),
+                "active_minutes": summary.get("active_minutes", 0),
+                "idle_minutes": summary.get("idle_minutes", 0),
+                "gap_count": summary.get("gap_count", 0),
+                "top_projects": summary.get("top_projects", []),
+            }
+
+            llm_service = await get_llm_service()
+            if not llm_service:
+                return (
+                    f"Performance snapshot ({hard_facts['window_label']}): "
+                    f"{hard_facts['total_logged_minutes']} tracked minutes across {hard_facts['entry_count']} entries. "
+                    "Next action: choose one high-impact task and time-box it for 45 minutes."
+                )
+
+            prompt = f"""
+            You are a performance review coach.
+
+            User Request: {user_input}
+            Productivity Context: {productivity_context}
+            Day Rundown Signals: {day_rundown}
+
+            Hard facts (do not alter numbers):
+            {hard_facts}
+
+            Response requirements:
+            1. Use ONLY the numbers in hard facts. Do not invent totals.
+            2. Structure output with headings: Highlights, Gaps, Next Action.
+            3. In Gaps, explicitly mention untracked/idle time from hard facts when available.
+            4. Tie advice to user priorities/goals from context.
+            5. Keep response concise (120-180 words).
+            """
+
+            self._log_rag_trace(
+                "review_prompt",
+                user_input=user_input,
+                context=context,
+                prompt=prompt,
+            )
+
+            request = CompletionRequest(
+                messages=[ChatMessage(role="user", content=prompt)],
+                temperature=0.2,
+                max_tokens=420,
+            )
+
+            response = await llm_service.chat_completion(request)
+            response_text = response.content or ""
+            self._log_rag_trace("review_response", user_input=user_input, context=context, response=response_text)
+            return response_text
+        except Exception as e:
+            logger.error(f"Performance review failed: {e}")
+            return "I couldn't complete a reliable performance review right now. Please try again in a moment."
+
+    def _handle_activity_fact_check(self, user_input: str, context: Dict[str, Any]) -> str:
+        """Deterministically answer yes/no activity checks from available tracked entries."""
+        summary = context.get("time_window_summary") if isinstance(context, dict) else {}
+        if not isinstance(summary, dict):
+            summary = {}
+
+        activity_phrase = self._extract_activity_phrase(user_input)
+        if not activity_phrase:
+            return "I couldn't identify the exact activity to verify. Rephrase with the action you want checked."
+
+        top_entries = summary.get("top_entries", []) if isinstance(summary.get("top_entries"), list) else []
+        searchable_text = []
+        for entry in top_entries:
+            if not isinstance(entry, dict):
+                continue
+            searchable_text.append(
+                " ".join(
+                    [
+                        str(entry.get("project_name") or ""),
+                        str(entry.get("description") or ""),
+                    ]
+                ).strip().lower()
+            )
+
+        activity_tokens = [token for token in re.findall(r"[a-zA-Z0-9_]+", activity_phrase.lower()) if len(token) > 2]
+        matched_entries = []
+        for entry, text_blob in zip(top_entries, searchable_text):
+            if all(token in text_blob for token in activity_tokens):
+                matched_entries.append(entry)
+
+        window_label = str(summary.get("window_label") or "requested period")
+        if matched_entries:
+            best_match = matched_entries[0]
+            return (
+                f"Yes, I found a tracked entry for {activity_phrase} in {window_label.lower()}: "
+                f"{best_match.get('project_name', 'Unassigned')} - {best_match.get('description', 'activity')} "
+                f"({best_match.get('duration_minutes', 0)}m)."
+            )
+
+        if summary.get("has_data"):
+            return (
+                f"I don't see a clear tracked entry for {activity_phrase} in {window_label.lower()}. "
+                "If you did it but didn't log it, add a quick entry so future reviews stay accurate."
+            )
+
+        return (
+            f"I don't have tracked entries for {window_label.lower()} yet, so I can't confirm whether {activity_phrase} happened. "
+            "Log the activity once and I can verify it reliably next time."
+        )
+
+    def _extract_activity_phrase(self, user_input: str) -> str:
+        normalized = str(user_input or "").strip()
+        lowered = normalized.lower()
+
+        patterns = [
+            r"did i\s+(.*?)\s+(today|yesterday)",
+            r"have i\s+(.*?)\s+(today|yesterday)",
+            r"was i\s+(.*?)\s+(today|yesterday)",
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, lowered)
+            if match:
+                phrase = match.group(1).strip(" ?!.,")
+                if phrase:
+                    return phrase
+
+        return ""
     
     def _build_productivity_context(self, context: Dict[str, Any], productivity_type: str) -> str:
         """Build productivity context from available knowledge."""
@@ -378,6 +534,21 @@ class ProductivityAgent(BaseAgent):
                     interaction_snippets.append(content[:220])
             if interaction_snippets:
                 context_parts.append("Related interactions: " + " || ".join(interaction_snippets))
+
+        time_window_summary = context.get("time_window_summary") if isinstance(context.get("time_window_summary"), dict) else {}
+        if time_window_summary.get("has_data"):
+            context_parts.append(
+                "Time window summary: "
+                f"{time_window_summary.get('window_label')} | "
+                f"entries={time_window_summary.get('entry_count')} | "
+                f"logged_minutes={time_window_summary.get('total_logged_minutes')} | "
+                f"idle_minutes={time_window_summary.get('idle_minutes')} | "
+                f"gaps={time_window_summary.get('gap_count')}"
+            )
+        elif time_window_summary.get("window_key") in {"today", "yesterday", "this_week"}:
+            context_parts.append(
+                f"Time window summary: no tracked entries for {str(time_window_summary.get('window_label')).lower()}."
+            )
         
         # Add context summary
         if "context_summary" in context and context["context_summary"]:
@@ -396,6 +567,49 @@ class ProductivityAgent(BaseAgent):
         """Create a compact completed-vs-missed rundown from recent tracked sessions."""
         if not isinstance(context, dict):
             return "No recent tracked sessions available."
+
+        priorities = []
+        profile_snapshot = context.get("profile_snapshot") if isinstance(context.get("profile_snapshot"), dict) else {}
+        if isinstance(profile_snapshot, dict):
+            raw_priorities = profile_snapshot.get("priorities")
+            if isinstance(raw_priorities, list):
+                priorities = [str(item).strip() for item in raw_priorities if str(item).strip()]
+
+        summary = context.get("time_window_summary") if isinstance(context.get("time_window_summary"), dict) else {}
+        if summary.get("has_data"):
+            top_entries = summary.get("top_entries", []) if isinstance(summary.get("top_entries"), list) else []
+            completed = []
+            combined_activity_text: List[str] = []
+            for item in top_entries[:4]:
+                if not isinstance(item, dict):
+                    continue
+                description = str(item.get("description") or "work session").strip()
+                project = str(item.get("project_name") or "Unassigned").strip()
+                duration = item.get("duration_minutes")
+                duration_label = ""
+                if duration is not None:
+                    try:
+                        duration_label = f" ({round(float(duration))}m)"
+                    except (TypeError, ValueError):
+                        duration_label = ""
+                completed.append(f"{project}: {description}{duration_label}")
+                combined_activity_text.append(f"{project} {description}".lower())
+
+            joined_activity = " ".join(combined_activity_text)
+            missed_priorities: List[str] = []
+            for priority in priorities[:4]:
+                normalized_priority = priority.lower()
+                if normalized_priority and normalized_priority not in joined_activity:
+                    missed_priorities.append(priority)
+
+            completed_text = "; ".join(completed) if completed else "No concrete completions detected."
+            missed_text = "; ".join(missed_priorities[:2]) if missed_priorities else "No obvious priority gaps inferred."
+            return (
+                f"{summary.get('window_label', 'Requested window')} completed: {completed_text} | "
+                f"Missed/at-risk priorities: {missed_text} | "
+                f"Tracked minutes (full window): {round(float(summary.get('total_logged_minutes', 0) or 0))} | "
+                f"Idle gaps: {summary.get('gap_count', 0)} (~{round(float(summary.get('idle_minutes', 0) or 0))}m)"
+            )
 
         recent_entries = context.get("recent_time_entries", [])
         if not isinstance(recent_entries, list) or not recent_entries:
@@ -425,13 +639,6 @@ class ProductivityAgent(BaseAgent):
             completed.append(f"{project}: {description}{duration_label}")
             combined_activity_text.append(f"{project} {description}".lower())
 
-        priorities = []
-        profile_snapshot = context.get("profile_snapshot") if isinstance(context.get("profile_snapshot"), dict) else {}
-        if isinstance(profile_snapshot, dict):
-            raw_priorities = profile_snapshot.get("priorities")
-            if isinstance(raw_priorities, list):
-                priorities = [str(item).strip() for item in raw_priorities if str(item).strip()]
-
         missed_priorities: List[str] = []
         joined_activity = " ".join(combined_activity_text)
         for priority in priorities[:4]:
@@ -445,7 +652,7 @@ class ProductivityAgent(BaseAgent):
         return (
             f"Completed: {completed_text} | "
             f"Missed/at-risk priorities: {missed_text} | "
-            f"Tracked minutes (sample): {round(total_minutes)}"
+            f"Tracked minutes (partial sample): {round(total_minutes)}"
         )
 
     def _log_rag_trace(

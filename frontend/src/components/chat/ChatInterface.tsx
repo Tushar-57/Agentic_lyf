@@ -309,7 +309,7 @@ const AgentThinkingDisplay = ({ thinking }: { thinking: AgentThinking }) => {
                   {step.action}
                 </div>
                 {step.result && (
-                  <div className="text-xs text-slate-500 dark:text-slate-500 mt-1 truncate">
+                  <div className="text-xs text-slate-500 dark:text-slate-500 mt-1 whitespace-pre-wrap break-words">
                     {step.result}
                   </div>
                 )}
@@ -610,28 +610,6 @@ const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLas
             ? dataPoints.priorities.map((item: any) => safeString(item)).filter(Boolean)
             : [],
           knowledge_context_summary: safeString(dataPoints.knowledge_context_summary || ''),
-        }
-
-        if (normalized.data_points_used.role) {
-          knowledgeSources.push({
-            type: 'Profile',
-            content: `Role: ${normalized.data_points_used.role}`,
-          })
-        }
-
-        if (normalized.data_points_used.priorities && normalized.data_points_used.priorities.length > 0) {
-          knowledgeSources.push({
-            type: 'Priorities',
-            content: normalized.data_points_used.priorities.join(', '),
-          })
-        }
-
-        const contextSummary = normalized.data_points_used.knowledge_context_summary || ''
-        if (contextSummary && !contextSummary.toLowerCase().startsWith('no previous context found')) {
-          knowledgeSources.push({
-            type: 'Knowledge Context',
-            content: contextSummary,
-          })
         }
       }
 

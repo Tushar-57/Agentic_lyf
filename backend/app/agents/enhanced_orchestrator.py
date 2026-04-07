@@ -355,12 +355,15 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
             )
             return blueprint
 
-        if re.search(r"\b(how did i do today|how was my day|review( my)? day|today review|daily review)\b", text):
+        if re.search(r"\b(how did i do( today| yesterday)?|how was my day|review( my)? day|today review|yesterday review|daily review|performance review|day summary|highlights)\b", text):
+            time_horizon = "today"
+            if "yesterday" in text:
+                time_horizon = "yesterday"
             blueprint.update(
                 {
                     "primary_intent": "daily_review",
                     "expected_outcome": "performance_review",
-                    "time_horizon": "today",
+                    "time_horizon": time_horizon,
                     "user_goal": "reflection_with_improvement",
                     "suggested_agent": AgentType.PRODUCTIVITY.value,
                 }
@@ -668,8 +671,6 @@ Response contract:
 
             execution_path = self._get_execution_path(complexity, strategic_plan)
             response_preview = str(response or "").strip()
-            if len(response_preview) > 320:
-                response_preview = f"{response_preview[:317]}..."
 
             specialist_step = {
                 "agent": resolved_agent_type or "general",
@@ -707,7 +708,7 @@ Response contract:
                     {
                         "agent": "orchestrator",
                         "action": f"Routed request to {resolved_agent_type} specialist",
-                        "result": str(intent_payload.get("reason", ""))[:220],
+                        "result": str(intent_payload.get("reason", "")),
                     },
                     specialist_step,
                     *[
