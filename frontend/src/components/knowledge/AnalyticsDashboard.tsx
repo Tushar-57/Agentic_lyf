@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { motion } from 'framer-motion'
 import {
   BarChart,
@@ -40,6 +40,11 @@ import {
   ArrowRight,
   CheckCircle2,
   Lock,
+  CalendarClock,
+  ClipboardCheck,
+  ListTodo,
+  AlertTriangle,
+  ChevronDown,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -99,7 +104,173 @@ interface AnalyticsDashboardProps {
   className?: string
 }
 
+interface OnboardingGoal {
+  id?: string
+  title?: string
+  description?: string
+  category?: string
+  priority?: string
+  smartCriteria?: Record<string, unknown>
+  milestones?: Array<Record<string, unknown>>
+}
+
+interface OnboardingProfileData {
+  goals?: OnboardingGoal[]
+  schedule?: Record<string, unknown> | null
+  planner?: Record<string, unknown> | null
+  preferenceProfile?: Record<string, Record<string, unknown>> | null
+}
+
+interface CheckupFormState {
+  topPriority: string
+  focusTaskOne: string
+  focusTaskTwo: string
+  focusTaskThree: string
+  blockers: string
+  additionalNote: string
+  plannedDeepWorkMinutes: number
+  confidence: number
+  selfRating: number
+  completedTasksToday: number
+  totalEstimatedMinutes: number
+  totalTimeSpentMinutes: number
+  habitsTotal: number
+  habitsCompletedToday: number
+  topPriorityCompleted: boolean
+}
+
+type CheckupSectionKey = 'context' | 'planning' | 'focus' | 'execution' | 'notes'
+
 const DAILY_CHECKUP_MODAL_HINT_KEY = 'agentic-daily-checkup-modal-hint'
+
+const createInitialCheckupForm = (): CheckupFormState => ({
+  topPriority: '',
+  focusTaskOne: '',
+  focusTaskTwo: '',
+  focusTaskThree: '',
+  blockers: '',
+  additionalNote: '',
+  plannedDeepWorkMinutes: 120,
+  confidence: 7,
+  selfRating: 7,
+  completedTasksToday: 0,
+  totalEstimatedMinutes: 120,
+  totalTimeSpentMinutes: 0,
+  habitsTotal: 0,
+  habitsCompletedToday: 0,
+  topPriorityCompleted: false,
+})
+
+const toFiniteNumber = (value: unknown, fallback = 0): number => {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+const toDisplayLabel = (value: unknown, fallback = 'N/A'): string => {
+  if (typeof value === 'string') {
+    const normalized = value.trim()
+    if (!normalized || normalized === '[object Object]') {
+      return fallback
+    }
+    return normalized
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+
+  if (Array.isArray(value)) {
+    const joined = value
+      .map((item) => toDisplayLabel(item, ''))
+      .filter(Boolean)
+      .join(', ')
+
+    return joined || fallback
+  }
+
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    const preferredKeys = ['title', 'name', 'label', 'category', 'agent', 'value']
+
+    for (const key of preferredKeys) {
+      if (key in record) {
+        const candidate = toDisplayLabel(record[key], '')
+        if (candidate) {
+          return candidate
+        }
+      }
+    }
+
+    const scalarEntry = Object.values(record).find((entry) => {
+      const entryType = typeof entry
+      return entryType === 'string' || entryType === 'number' || entryType === 'boolean'
+    })
+
+    if (scalarEntry !== undefined) {
+      return toDisplayLabel(scalarEntry, fallback)
+    }
+  }
+
+  return fallback
+}
+
+const toColor = (value: unknown, fallback: string): string => {
+  if (typeof value !== 'string') {
+    return fallback
+  }
+
+  const normalized = value.trim()
+  return normalized || fallback
+}
+
+const parseDateCandidate = (value: unknown): Date | null => {
+  if (!value || typeof value !== 'string') {
+    return null
+  }
+
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return null
+  }
+
+  return parsed
+}
+
+const resolveGoalDeadline = (goal: OnboardingGoal): Date | null => {
+  const smartCriteria = goal.smartCriteria || {}
+  const preferredKeys = [
+    'dueDate',
+    'due_date',
+    'deadline',
+    'targetDate',
+    'target_date',
+    'endDate',
+    'end_date',
+  ]
+
+  for (const key of preferredKeys) {
+    const candidate = parseDateCandidate(smartCriteria[key])
+    if (candidate) {
+      return candidate
+    }
+  }
+
+  const milestones = Array.isArray(goal.milestones) ? goal.milestones : []
+  for (const milestone of milestones) {
+    if (!milestone || typeof milestone !== 'object') {
+      continue
+    }
+
+    for (const key of preferredKeys) {
+      const candidate = parseDateCandidate(milestone[key])
+      if (candidate) {
+        return candidate
+      }
+    }
+  }
+
+  return null
+}
 
 const formatCheckupTime = (checkupDate: string | undefined) => {
   if (!checkupDate) {
@@ -134,18 +305,27 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   const [analyticsData, setAnalyticsData] = useState<AnalyticsData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [selectedTimeRange, setSelectedTimeRange] = useState<'7d' | '30d' | '90d'>('30d')
-  const [morningNote, setMorningNote] = useState('')
-  const [eveningNote, setEveningNote] = useState('')
   const [checkupLoading, setCheckupLoading] = useState<'morning' | 'evening' | null>(null)
   const [checkupError, setCheckupError] = useState<string | null>(null)
   const [morningCheckup, setMorningCheckup] = useState<DailyCheckupResponse | null>(null)
   const [eveningCheckup, setEveningCheckup] = useState<DailyCheckupResponse | null>(null)
   const [isCheckupModalOpen, setIsCheckupModalOpen] = useState(false)
   const [activeCheckupFlow, setActiveCheckupFlow] = useState<'morning' | 'evening'>('morning')
+  const [collapsedCheckupSections, setCollapsedCheckupSections] = useState<Record<CheckupSectionKey, boolean>>({
+    context: false,
+    planning: false,
+    focus: false,
+    execution: false,
+    notes: false,
+  })
+  const [profileData, setProfileData] = useState<OnboardingProfileData | null>(null)
+  const [morningForm, setMorningForm] = useState<CheckupFormState>(() => createInitialCheckupForm())
+  const [eveningForm, setEveningForm] = useState<CheckupFormState>(() => createInitialCheckupForm())
 
   useEffect(() => {
     loadAnalyticsData()
     loadLatestCheckups()
+    loadOnboardingProfile()
   }, [selectedTimeRange])
 
   const toStringArray = (value: unknown): string[] | undefined => {
@@ -268,6 +448,31 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     }
   }
 
+  const loadOnboardingProfile = async () => {
+    try {
+      const response = await fetch('/api/knowledge/onboarding/profile')
+      if (!response.ok) {
+        throw new Error(`Profile request failed with status ${response.status}`)
+      }
+
+      const payload = await response.json()
+      const normalizedProfile: OnboardingProfileData = {
+        goals: Array.isArray(payload?.goals) ? payload.goals : [],
+        schedule: payload?.schedule && typeof payload.schedule === 'object' ? payload.schedule : null,
+        planner: payload?.planner && typeof payload.planner === 'object' ? payload.planner : null,
+        preferenceProfile:
+          payload?.preferenceProfile && typeof payload.preferenceProfile === 'object'
+            ? payload.preferenceProfile
+            : null,
+      }
+
+      setProfileData(normalizedProfile)
+    } catch (error) {
+      console.error('Failed to load onboarding profile:', error)
+      setProfileData(null)
+    }
+  }
+
   const loadAnalyticsData = async () => {
     setIsLoading(true)
     try {
@@ -279,28 +484,75 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       const data = await response.json()
       const normalizedData: AnalyticsData = {
         interactions: {
-          daily: data.interactions?.daily ?? [],
-          weekly: data.interactions?.weekly ?? [],
-          by_agent: data.interactions?.by_agent ?? [],
-          by_category: data.interactions?.by_category ?? [],
+          daily: Array.isArray(data.interactions?.daily)
+            ? data.interactions.daily.map((entry: Record<string, unknown>) => ({
+                date: toDisplayLabel(entry?.date, new Date().toISOString()),
+                count: Math.max(0, toFiniteNumber(entry?.count, 0)),
+                agent: toDisplayLabel(entry?.agent, 'Unknown'),
+              }))
+            : [],
+          weekly: Array.isArray(data.interactions?.weekly)
+            ? data.interactions.weekly.map((entry: Record<string, unknown>) => ({
+                week: toDisplayLabel(entry?.week, 'Unknown'),
+                count: Math.max(0, toFiniteNumber(entry?.count, 0)),
+              }))
+            : [],
+          by_agent: Array.isArray(data.interactions?.by_agent)
+            ? data.interactions.by_agent.map((entry: Record<string, unknown>, index: number) => ({
+                agent: toDisplayLabel(entry?.agent, `Agent ${index + 1}`),
+                count: Math.max(0, toFiniteNumber(entry?.count, 0)),
+                color: toColor(entry?.color, '#3b82f6'),
+              }))
+            : [],
+          by_category: Array.isArray(data.interactions?.by_category)
+            ? data.interactions.by_category.map((entry: Record<string, unknown>, index: number) => ({
+                category: toDisplayLabel(entry?.category, `Category ${index + 1}`),
+                raw_category: toDisplayLabel(entry?.raw_category, `category_${index + 1}`),
+                count: Math.max(0, toFiniteNumber(entry?.count, 0)),
+                color: toColor(entry?.color, '#06b6d4'),
+              }))
+            : [],
         },
         patterns: {
-          most_active_hours: data.patterns?.most_active_hours ?? [],
-          preference_changes: data.patterns?.preference_changes ?? [],
-          knowledge_growth: data.patterns?.knowledge_growth ?? [],
-          category_focus: data.patterns?.category_focus ?? [],
+          most_active_hours: Array.isArray(data.patterns?.most_active_hours)
+            ? data.patterns.most_active_hours.map((entry: Record<string, unknown>) => ({
+                hour: Math.max(0, Math.min(23, Math.round(toFiniteNumber(entry?.hour, 0)))),
+                interactions: Math.max(0, toFiniteNumber(entry?.interactions, 0)),
+              }))
+            : [],
+          preference_changes: Array.isArray(data.patterns?.preference_changes)
+            ? data.patterns.preference_changes.map((entry: Record<string, unknown>) => ({
+                date: toDisplayLabel(entry?.date, new Date().toISOString()),
+                category: toDisplayLabel(entry?.category, 'Unknown'),
+                changes: Math.max(0, toFiniteNumber(entry?.changes, 0)),
+              }))
+            : [],
+          knowledge_growth: Array.isArray(data.patterns?.knowledge_growth)
+            ? data.patterns.knowledge_growth.map((entry: Record<string, unknown>) => ({
+                date: toDisplayLabel(entry?.date, new Date().toISOString()),
+                total_entries: Math.max(0, toFiniteNumber(entry?.total_entries, 0)),
+                new_entries: Math.max(0, toFiniteNumber(entry?.new_entries, 0)),
+              }))
+            : [],
+          category_focus: Array.isArray(data.patterns?.category_focus)
+            ? data.patterns.category_focus.map((entry: Record<string, unknown>) => ({
+                date: toDisplayLabel(entry?.date, new Date().toISOString()),
+                category: toDisplayLabel(entry?.category, 'Unknown'),
+                count: Math.max(0, toFiniteNumber(entry?.count, 0)),
+              }))
+            : [],
         },
         insights: {
-          total_interactions: data.insights?.total_interactions ?? 0,
-          most_used_agent: data.insights?.most_used_agent ?? 'N/A',
-          avg_daily_interactions: data.insights?.avg_daily_interactions ?? 0,
-          knowledge_base_size: data.insights?.knowledge_base_size ?? 0,
-          preference_stability: data.insights?.preference_stability ?? 0,
-          learning_velocity: data.insights?.learning_velocity ?? 0,
-          top_knowledge_category: data.insights?.top_knowledge_category ?? 'N/A',
-          time_entry_records: data.insights?.time_entry_records ?? 0,
-          time_entry_billable_records: data.insights?.time_entry_billable_records ?? 0,
-          avg_time_entry_minutes: data.insights?.avg_time_entry_minutes ?? 0,
+          total_interactions: Math.max(0, toFiniteNumber(data.insights?.total_interactions, 0)),
+          most_used_agent: toDisplayLabel(data.insights?.most_used_agent, 'N/A'),
+          avg_daily_interactions: Math.max(0, toFiniteNumber(data.insights?.avg_daily_interactions, 0)),
+          knowledge_base_size: Math.max(0, toFiniteNumber(data.insights?.knowledge_base_size, 0)),
+          preference_stability: Math.max(0, Math.min(1, toFiniteNumber(data.insights?.preference_stability, 0))),
+          learning_velocity: Math.max(0, toFiniteNumber(data.insights?.learning_velocity, 0)),
+          top_knowledge_category: toDisplayLabel(data.insights?.top_knowledge_category, 'N/A'),
+          time_entry_records: Math.max(0, toFiniteNumber(data.insights?.time_entry_records, 0)),
+          time_entry_billable_records: Math.max(0, toFiniteNumber(data.insights?.time_entry_billable_records, 0)),
+          avg_time_entry_minutes: Math.max(0, toFiniteNumber(data.insights?.avg_time_entry_minutes, 0)),
         },
       }
 
@@ -318,13 +570,13 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     setCheckupLoading(checkupType)
 
     try {
-      const note = checkupType === 'morning' ? morningNote.trim() : eveningNote.trim()
+      const requestPayload = buildCheckupRequestPayload(checkupType)
       const response = await fetch(`/api/knowledge/checkups/${checkupType}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ note: note || undefined }),
+        body: JSON.stringify(requestPayload),
       })
 
       if (!response.ok) {
@@ -334,10 +586,20 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       const payload = (await response.json()) as DailyCheckupResponse
       if (checkupType === 'morning') {
         setMorningCheckup(payload)
-        setMorningNote('')
+        setMorningForm((previous) => ({
+          ...previous,
+          blockers: '',
+          additionalNote: '',
+          confidence: Math.min(10, previous.confidence + 1),
+        }))
       } else {
         setEveningCheckup(payload)
-        setEveningNote('')
+        setEveningForm((previous) => ({
+          ...previous,
+          blockers: '',
+          additionalNote: '',
+          selfRating: Math.min(10, previous.selfRating + 1),
+        }))
       }
 
       await Promise.all([loadAnalyticsData(), loadLatestCheckups()])
@@ -382,6 +644,129 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   const eveningCompletedToday = normalizeDateKey(eveningCheckup?.date) === todayDateKey
   const canRunEveningCheckup = morningCompletedToday || eveningCompletedToday
 
+  const profileGoals = useMemo(() => {
+    if (!Array.isArray(profileData?.goals)) {
+      return [] as OnboardingGoal[]
+    }
+
+    return profileData.goals
+  }, [profileData])
+
+  const goalDeadlineSummary = useMemo(() => {
+    const now = new Date()
+    now.setHours(0, 0, 0, 0)
+
+    const topGoals = profileGoals
+      .map((goal) => String(goal.title || '').trim())
+      .filter(Boolean)
+      .slice(0, 3)
+
+    const upcoming: Array<{ title: string; dueDate: string; daysLeft: number; priority: string }> = []
+    let overdue = 0
+    let dueToday = 0
+
+    for (const goal of profileGoals) {
+      const deadline = resolveGoalDeadline(goal)
+      if (!deadline) {
+        continue
+      }
+
+      const dueDate = new Date(deadline)
+      dueDate.setHours(0, 0, 0, 0)
+      const daysLeft = Math.round((dueDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
+
+      if (daysLeft < 0) {
+        overdue += 1
+      }
+      if (daysLeft === 0) {
+        dueToday += 1
+      }
+
+      upcoming.push({
+        title: String(goal.title || 'Untitled goal'),
+        dueDate: dueDate.toISOString(),
+        daysLeft,
+        priority: String(goal.priority || 'Medium'),
+      })
+    }
+
+    upcoming.sort((left, right) => left.daysLeft - right.daysLeft)
+
+    return {
+      topGoals,
+      overdue,
+      dueToday,
+      upcoming: upcoming.slice(0, 6),
+    }
+  }, [profileGoals])
+
+  const yesterdaySnapshot = useMemo(() => {
+    if (!analyticsData) {
+      return {
+        interactions: 0,
+        estimatedFocusedMinutes: 0,
+        avgSessionMinutes: 0,
+      }
+    }
+
+    const yesterdayKey = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    const dailyEntries = [...analyticsData.interactions.daily].sort((a, b) => a.date.localeCompare(b.date))
+
+    const exactYesterday = dailyEntries.find((entry) => entry.date.slice(0, 10) === yesterdayKey)
+    const fallbackRecent = [...dailyEntries].reverse().find((entry) => entry.date.slice(0, 10) < todayDateKey)
+    const baselineEntry = exactYesterday || fallbackRecent || null
+
+    const interactions = baselineEntry ? toFiniteNumber(baselineEntry.count, 0) : 0
+    const avgSessionMinutes = Math.max(0, toFiniteNumber(analyticsData.insights.avg_time_entry_minutes, 0))
+    const estimatedFocusedMinutes = Math.round(interactions * avgSessionMinutes)
+
+    return {
+      interactions,
+      estimatedFocusedMinutes,
+      avgSessionMinutes,
+    }
+  }, [analyticsData, todayDateKey])
+
+  const updateMorningForm = (updater: (previous: CheckupFormState) => CheckupFormState) => {
+    setMorningForm((previous) => updater(previous))
+  }
+
+  const updateEveningForm = (updater: (previous: CheckupFormState) => CheckupFormState) => {
+    setEveningForm((previous) => updater(previous))
+  }
+
+  useEffect(() => {
+    if (!analyticsData) {
+      return
+    }
+
+    setMorningForm((previous) => {
+      if (previous.topPriority || previous.focusTaskOne || previous.additionalNote) {
+        return previous
+      }
+
+      return {
+        ...previous,
+        topPriority: goalDeadlineSummary.topGoals[0] || '',
+        plannedDeepWorkMinutes: Math.max(90, Math.round(yesterdaySnapshot.estimatedFocusedMinutes || 120)),
+        totalEstimatedMinutes: Math.max(120, Math.round(yesterdaySnapshot.estimatedFocusedMinutes || 120)),
+        totalTimeSpentMinutes: Math.max(0, yesterdaySnapshot.estimatedFocusedMinutes),
+      }
+    })
+
+    setEveningForm((previous) => {
+      if (previous.focusTaskOne || previous.additionalNote) {
+        return previous
+      }
+
+      return {
+        ...previous,
+        focusTaskOne: goalDeadlineSummary.topGoals[0] || '',
+        totalEstimatedMinutes: Math.max(120, Math.round(yesterdaySnapshot.estimatedFocusedMinutes || 120)),
+      }
+    })
+  }, [analyticsData, goalDeadlineSummary.topGoals, yesterdaySnapshot.estimatedFocusedMinutes])
+
   const openCheckupFlow = (flow: 'morning' | 'evening') => {
     setActiveCheckupFlow(flow)
     setCheckupError(null)
@@ -389,16 +774,43 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   }
 
   const activeCheckup = activeCheckupFlow === 'morning' ? morningCheckup : eveningCheckup
-  const activeNote = activeCheckupFlow === 'morning' ? morningNote : eveningNote
+  const activeForm = activeCheckupFlow === 'morning' ? morningForm : eveningForm
 
-  const setActiveNote = (value: string) => {
+  const updateActiveFormField = <K extends keyof CheckupFormState>(field: K, value: CheckupFormState[K]) => {
     if (activeCheckupFlow === 'morning') {
-      setMorningNote(value)
+      updateMorningForm((previous) => ({ ...previous, [field]: value }))
       return
     }
 
-    setEveningNote(value)
+    updateEveningForm((previous) => ({ ...previous, [field]: value }))
   }
+
+  const activeFocusTasks = [
+    activeForm.focusTaskOne,
+    activeForm.focusTaskTwo,
+    activeForm.focusTaskThree,
+  ]
+
+  const activeNote = activeForm.additionalNote
+
+  const setActiveNote = (value: string) => {
+    updateActiveFormField('additionalNote', value)
+  }
+
+  const toggleCheckupSection = (section: CheckupSectionKey) => {
+    setCollapsedCheckupSections((previous) => ({
+      ...previous,
+      [section]: !previous[section],
+    }))
+  }
+
+  const activeDeepWorkCoverage = activeForm.totalEstimatedMinutes > 0
+    ? (activeForm.totalTimeSpentMinutes / activeForm.totalEstimatedMinutes) * 100
+    : 0
+
+  const activeHabitCompletionToday = activeForm.habitsTotal > 0
+    ? (activeForm.habitsCompletedToday / activeForm.habitsTotal) * 100
+    : 0
 
   const quickPromptsByFlow: Record<'morning' | 'evening', string[]> = {
     morning: [
@@ -416,6 +828,84 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   const applyQuickPrompt = (prompt: string) => {
     const merged = activeNote.trim() ? `${activeNote.trim()}\n${prompt}` : prompt
     setActiveNote(merged)
+  }
+
+  const buildCheckupRequestPayload = (checkupType: 'morning' | 'evening') => {
+    const form = checkupType === 'morning' ? morningForm : eveningForm
+    const focusTasks = [form.focusTaskOne, form.focusTaskTwo, form.focusTaskThree]
+      .map((task) => task.trim())
+      .filter(Boolean)
+
+    const blockers = form.blockers
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean)
+
+    const estimatedMinutes = Math.max(0, toFiniteNumber(form.totalEstimatedMinutes, 0))
+    const spentMinutes = Math.max(0, toFiniteNumber(form.totalTimeSpentMinutes, 0))
+    const deepWorkCoverageRatio = estimatedMinutes > 0
+      ? Number((spentMinutes / estimatedMinutes).toFixed(2))
+      : 0
+
+    const habitCompletionRate7d = form.habitsTotal > 0
+      ? Number(((form.habitsCompletedToday / form.habitsTotal) * 100).toFixed(1))
+      : 0
+
+    const contextSnapshot = {
+      priorityFocus: form.topPriority.trim(),
+      topGoals: goalDeadlineSummary.topGoals,
+      focusTasks: focusTasks.map((title, index) => ({
+        id: `focus-task-${index + 1}`,
+        title,
+      })),
+      deadlineTasks: {
+        overdue: goalDeadlineSummary.overdue,
+        dueToday: goalDeadlineSummary.dueToday,
+      },
+      upcomingDeadlines: goalDeadlineSummary.upcoming.map((deadline) => ({
+        title: deadline.title,
+        dueDate: deadline.dueDate,
+        daysLeft: deadline.daysLeft,
+        priority: deadline.priority,
+      })),
+      habitMetrics: {
+        totalHabits: Math.max(0, toFiniteNumber(form.habitsTotal, 0)),
+        completedToday: Math.max(0, toFiniteNumber(form.habitsCompletedToday, 0)),
+        completionRate7d: Math.max(0, Math.min(100, habitCompletionRate7d)),
+      },
+      timeMetrics: {
+        totalEstimatedMinutes: estimatedMinutes,
+        totalTimeSpentMinutes: spentMinutes,
+        deepWorkCoverageRatio,
+      },
+      completedTasksToday: Math.max(0, toFiniteNumber(form.completedTasksToday, 0)),
+      plannedDeepWorkMinutes: Math.max(0, toFiniteNumber(form.plannedDeepWorkMinutes, 0)),
+      blockers,
+    }
+
+    const perspective = checkupType === 'morning'
+      ? {
+          confidence: Math.max(0, Math.min(10, toFiniteNumber(form.confidence, 0))),
+          plannedDeepWorkMinutes: Math.max(0, toFiniteNumber(form.plannedDeepWorkMinutes, 0)),
+        }
+      : {
+          selfRating: Math.max(0, Math.min(10, toFiniteNumber(form.selfRating, 0))),
+          topPriorityCompleted: Boolean(form.topPriorityCompleted),
+          plannedDeepWorkMinutes: Math.max(0, toFiniteNumber(form.plannedDeepWorkMinutes, 0)),
+        }
+
+    const noteSections = [
+      form.topPriority.trim() ? `Top priority: ${form.topPriority.trim()}` : '',
+      focusTasks.length ? `Focus tasks: ${focusTasks.join(', ')}` : '',
+      blockers.length ? `Likely blockers: ${blockers.join(', ')}` : '',
+      form.additionalNote.trim(),
+    ].filter(Boolean)
+
+    return {
+      note: noteSections.join('\n'),
+      perspective,
+      context_snapshot: contextSnapshot,
+    }
   }
 
   const handleRunActiveCheckup = async () => {
@@ -709,16 +1199,331 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                   </p>
                 </div>
 
-                <textarea
-                  value={activeNote}
-                  onChange={(event) => setActiveNote(event.target.value)}
-                  placeholder={
-                    activeCheckupFlow === 'morning'
-                      ? 'Example: I need two uninterrupted deep-work blocks for architecture decisions and one stakeholder sync.'
-                      : 'Example: I shipped one key task, but reactive context switching slowed execution quality.'
-                  }
-                  className="min-h-[210px] w-full rounded-xl border border-border/70 bg-background px-4 py-3 text-sm"
-                />
+                <div className="space-y-3">
+                  <div className="overflow-hidden rounded-xl border border-border/70 bg-background/70">
+                    <button
+                      type="button"
+                      onClick={() => toggleCheckupSection('context')}
+                      className="flex w-full items-center justify-between px-3 py-2 text-left"
+                    >
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Context Snapshot</p>
+                      <ChevronDown className={cn('h-4 w-4 transition-transform', !collapsedCheckupSections.context && 'rotate-180')} />
+                    </button>
+                    {!collapsedCheckupSections.context && (
+                      <div className="grid gap-3 border-t border-border/60 p-3 sm:grid-cols-2">
+                        <div className="rounded-xl border border-border/70 bg-background/80 p-3">
+                          <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            <ClipboardCheck className="h-3.5 w-3.5" />
+                            Yesterday Snapshot
+                          </p>
+                          <p className="text-sm font-semibold text-foreground">
+                            {yesterdaySnapshot.interactions} interactions logged
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Estimated focused time: {Math.round(yesterdaySnapshot.estimatedFocusedMinutes)} min
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            Avg session: {Math.round(yesterdaySnapshot.avgSessionMinutes)} min
+                          </p>
+                        </div>
+
+                        <div className="rounded-xl border border-border/70 bg-background/80 p-3">
+                          <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            <CalendarClock className="h-3.5 w-3.5" />
+                            Goal & Deadline Pressure
+                          </p>
+                          <p className="truncate text-sm font-semibold text-foreground">
+                            {goalDeadlineSummary.topGoals[0] || 'No top goal set yet'}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            {goalDeadlineSummary.overdue} overdue • {goalDeadlineSummary.dueToday} due today
+                          </p>
+                          {goalDeadlineSummary.upcoming[0] && (
+                            <p className="text-xs text-muted-foreground">
+                              Next: {goalDeadlineSummary.upcoming[0].title} ({goalDeadlineSummary.upcoming[0].daysLeft}d)
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="overflow-hidden rounded-xl border border-border/70 bg-background/70">
+                    <button
+                      type="button"
+                      onClick={() => toggleCheckupSection('planning')}
+                      className="flex w-full items-center justify-between px-3 py-2 text-left"
+                    >
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Planning Inputs</p>
+                      <ChevronDown className={cn('h-4 w-4 transition-transform', !collapsedCheckupSections.planning && 'rotate-180')} />
+                    </button>
+                    {!collapsedCheckupSections.planning && (
+                      <div className="grid gap-3 border-t border-border/60 p-3 sm:grid-cols-2">
+                        <label className="space-y-1">
+                          <span className="text-xs font-medium text-muted-foreground">Top Priority Outcome</span>
+                          <input
+                            type="text"
+                            value={activeForm.topPriority}
+                            onChange={(event) => updateActiveFormField('topPriority', event.target.value)}
+                            placeholder={
+                              activeCheckupFlow === 'morning'
+                                ? 'Ship one meaningful result before noon'
+                                : 'The most important result I aimed for today'
+                            }
+                            className="w-full rounded-lg border border-border/70 bg-background px-3 py-2 text-sm"
+                          />
+                        </label>
+
+                        <label className="space-y-1">
+                          <span className="text-xs font-medium text-muted-foreground">Planned Deep Work (minutes)</span>
+                          <input
+                            type="number"
+                            min={0}
+                            step={15}
+                            value={activeForm.plannedDeepWorkMinutes}
+                            onChange={(event) => {
+                              const parsed = Number(event.target.value)
+                              updateActiveFormField(
+                                'plannedDeepWorkMinutes',
+                                Number.isFinite(parsed) ? Math.max(0, parsed) : 0,
+                              )
+                            }}
+                            className="w-full rounded-lg border border-border/70 bg-background px-3 py-2 text-sm"
+                          />
+                        </label>
+
+                        <label className="space-y-1">
+                          <span className="text-xs font-medium text-muted-foreground">
+                            {activeCheckupFlow === 'morning' ? 'Confidence Score' : 'Self Rating'} (0-10)
+                          </span>
+                          <input
+                            type="range"
+                            min={0}
+                            max={10}
+                            step={1}
+                            value={activeCheckupFlow === 'morning' ? activeForm.confidence : activeForm.selfRating}
+                            onChange={(event) => {
+                              const parsed = Number(event.target.value)
+                              const normalized = Number.isFinite(parsed) ? Math.max(0, Math.min(10, parsed)) : 0
+                              if (activeCheckupFlow === 'morning') {
+                                updateActiveFormField('confidence', normalized)
+                              } else {
+                                updateActiveFormField('selfRating', normalized)
+                              }
+                            }}
+                            className="w-full"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            {activeCheckupFlow === 'morning' ? activeForm.confidence : activeForm.selfRating}/10
+                          </p>
+                        </label>
+
+                        <label className="space-y-1">
+                          <span className="text-xs font-medium text-muted-foreground">Completed Tasks Today</span>
+                          <input
+                            type="number"
+                            min={0}
+                            value={activeForm.completedTasksToday}
+                            onChange={(event) => {
+                              const parsed = Number(event.target.value)
+                              updateActiveFormField(
+                                'completedTasksToday',
+                                Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0,
+                              )
+                            }}
+                            className="w-full rounded-lg border border-border/70 bg-background px-3 py-2 text-sm"
+                          />
+                        </label>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="overflow-hidden rounded-xl border border-border/70 bg-background/70">
+                    <button
+                      type="button"
+                      onClick={() => toggleCheckupSection('focus')}
+                      className="flex w-full items-center justify-between px-3 py-2 text-left"
+                    >
+                      <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        <ListTodo className="h-3.5 w-3.5" />
+                        Focus Tasks
+                      </p>
+                      <ChevronDown className={cn('h-4 w-4 transition-transform', !collapsedCheckupSections.focus && 'rotate-180')} />
+                    </button>
+                    {!collapsedCheckupSections.focus && (
+                      <div className="grid gap-2 border-t border-border/60 p-3">
+                        {activeFocusTasks.map((task, index) => {
+                          const fieldKey = index === 0 ? 'focusTaskOne' : index === 1 ? 'focusTaskTwo' : 'focusTaskThree'
+                          return (
+                            <input
+                              key={`focus-task-${index + 1}`}
+                              type="text"
+                              value={task}
+                              onChange={(event) => updateActiveFormField(fieldKey, event.target.value)}
+                              placeholder={`Focus task ${index + 1}`}
+                              className="w-full rounded-lg border border-border/70 bg-background px-3 py-2 text-sm"
+                            />
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="overflow-hidden rounded-xl border border-border/70 bg-background/70">
+                    <button
+                      type="button"
+                      onClick={() => toggleCheckupSection('execution')}
+                      className="flex w-full items-center justify-between px-3 py-2 text-left"
+                    >
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Execution Metrics</p>
+                      <ChevronDown className={cn('h-4 w-4 transition-transform', !collapsedCheckupSections.execution && 'rotate-180')} />
+                    </button>
+                    {!collapsedCheckupSections.execution && (
+                      <div className="grid gap-3 border-t border-border/60 p-3 sm:grid-cols-2">
+                        <div className="rounded-xl border border-border/70 bg-background/70 p-3">
+                          <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            <Clock3 className="h-3.5 w-3.5" />
+                            Time Metrics
+                          </p>
+                          <div className="grid grid-cols-2 gap-2">
+                            <label className="space-y-1">
+                              <span className="text-[11px] text-muted-foreground">Estimated</span>
+                              <input
+                                type="number"
+                                min={0}
+                                step={15}
+                                value={activeForm.totalEstimatedMinutes}
+                                onChange={(event) => {
+                                  const parsed = Number(event.target.value)
+                                  updateActiveFormField(
+                                    'totalEstimatedMinutes',
+                                    Number.isFinite(parsed) ? Math.max(0, parsed) : 0,
+                                  )
+                                }}
+                                className="w-full rounded-md border border-border/70 bg-background px-2 py-1.5 text-sm"
+                              />
+                            </label>
+                            <label className="space-y-1">
+                              <span className="text-[11px] text-muted-foreground">Spent</span>
+                              <input
+                                type="number"
+                                min={0}
+                                step={15}
+                                value={activeForm.totalTimeSpentMinutes}
+                                onChange={(event) => {
+                                  const parsed = Number(event.target.value)
+                                  updateActiveFormField(
+                                    'totalTimeSpentMinutes',
+                                    Number.isFinite(parsed) ? Math.max(0, parsed) : 0,
+                                  )
+                                }}
+                                className="w-full rounded-md border border-border/70 bg-background px-2 py-1.5 text-sm"
+                              />
+                            </label>
+                          </div>
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            Deep-work coverage: {Math.round(activeDeepWorkCoverage)}%
+                          </p>
+                        </div>
+
+                        <div className="rounded-xl border border-border/70 bg-background/70 p-3">
+                          <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            <Activity className="h-3.5 w-3.5" />
+                            Habit Pulse
+                          </p>
+                          <div className="grid grid-cols-2 gap-2">
+                            <label className="space-y-1">
+                              <span className="text-[11px] text-muted-foreground">Total</span>
+                              <input
+                                type="number"
+                                min={0}
+                                value={activeForm.habitsTotal}
+                                onChange={(event) => {
+                                  const parsed = Number(event.target.value)
+                                  updateActiveFormField('habitsTotal', Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0)
+                                }}
+                                className="w-full rounded-md border border-border/70 bg-background px-2 py-1.5 text-sm"
+                              />
+                            </label>
+                            <label className="space-y-1">
+                              <span className="text-[11px] text-muted-foreground">Completed</span>
+                              <input
+                                type="number"
+                                min={0}
+                                value={activeForm.habitsCompletedToday}
+                                onChange={(event) => {
+                                  const parsed = Number(event.target.value)
+                                  updateActiveFormField(
+                                    'habitsCompletedToday',
+                                    Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0,
+                                  )
+                                }}
+                                className="w-full rounded-md border border-border/70 bg-background px-2 py-1.5 text-sm"
+                              />
+                            </label>
+                          </div>
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            Habit completion today: {Math.round(activeHabitCompletionToday)}%
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="overflow-hidden rounded-xl border border-border/70 bg-background/70">
+                    <button
+                      type="button"
+                      onClick={() => toggleCheckupSection('notes')}
+                      className="flex w-full items-center justify-between px-3 py-2 text-left"
+                    >
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Risks & Notes</p>
+                      <ChevronDown className={cn('h-4 w-4 transition-transform', !collapsedCheckupSections.notes && 'rotate-180')} />
+                    </button>
+                    {!collapsedCheckupSections.notes && (
+                      <div className="space-y-3 border-t border-border/60 p-3">
+                        {activeCheckupFlow === 'evening' && (
+                          <label className="flex items-center gap-2 rounded-xl border border-indigo-200/70 bg-indigo-50/60 px-3 py-2 text-sm dark:border-indigo-900/60 dark:bg-indigo-950/20">
+                            <input
+                              type="checkbox"
+                              checked={activeForm.topPriorityCompleted}
+                              onChange={(event) => updateActiveFormField('topPriorityCompleted', event.target.checked)}
+                              className="h-4 w-4"
+                            />
+                            <span>I completed my top priority outcome today.</span>
+                          </label>
+                        )}
+
+                        <div className="rounded-xl border border-rose-200/70 bg-rose-50/60 p-3 dark:border-rose-900/60 dark:bg-rose-950/20">
+                          <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-rose-700 dark:text-rose-300">
+                            <AlertTriangle className="h-3.5 w-3.5" />
+                            Known Blockers
+                          </p>
+                          <input
+                            type="text"
+                            value={activeForm.blockers}
+                            onChange={(event) => updateActiveFormField('blockers', event.target.value)}
+                            placeholder="Comma-separated blockers (e.g., unclear requirements, dependency wait)"
+                            className="w-full rounded-lg border border-rose-200/80 bg-background px-3 py-2 text-sm dark:border-rose-900/70"
+                          />
+                        </div>
+
+                        <div>
+                          <p className="mb-1 text-xs font-medium text-muted-foreground">Additional Note</p>
+                          <textarea
+                            value={activeNote}
+                            onChange={(event) => setActiveNote(event.target.value)}
+                            placeholder={
+                              activeCheckupFlow === 'morning'
+                                ? 'Example: I need two uninterrupted deep-work blocks for architecture decisions and one stakeholder sync.'
+                                : 'Example: I shipped one key task, but reactive context switching slowed execution quality.'
+                            }
+                            className="min-h-[120px] w-full rounded-xl border border-border/70 bg-background px-4 py-3 text-sm"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
 
                 <div className="mt-4 space-y-2">
                   <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Quick Strategic Prompts</p>
@@ -753,6 +1558,19 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                     disabled={isActiveCheckupRunning}
                   >
                     Clear Note
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    onClick={() => {
+                      if (activeCheckupFlow === 'morning') {
+                        setMorningForm(createInitialCheckupForm())
+                      } else {
+                        setEveningForm(createInitialCheckupForm())
+                      }
+                    }}
+                    disabled={isActiveCheckupRunning}
+                  >
+                    Reset Inputs
                   </Button>
                 </div>
               </div>
@@ -850,8 +1668,8 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       )}
 
       {/* Key Metrics */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        <Card className="p-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        <Card className="min-h-[96px] p-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-blue-500 to-blue-600 flex items-center justify-center">
               <Activity className="w-5 h-5 text-white" />
@@ -863,7 +1681,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
           </div>
         </Card>
         
-        <Card className="p-4">
+        <Card className="min-h-[96px] p-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-green-500 to-green-600 flex items-center justify-center">
               <TrendingUp className="w-5 h-5 text-white" />
@@ -875,7 +1693,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
           </div>
         </Card>
         
-        <Card className="p-4">
+        <Card className="min-h-[96px] p-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-purple-500 to-purple-600 flex items-center justify-center">
               <Brain className="w-5 h-5 text-white" />
@@ -887,7 +1705,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
           </div>
         </Card>
         
-        <Card className="p-4">
+        <Card className="min-h-[96px] p-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-orange-500 to-orange-600 flex items-center justify-center">
               <Target className="w-5 h-5 text-white" />
@@ -899,19 +1717,19 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
           </div>
         </Card>
 
-        <Card className="p-4">
+        <Card className="min-h-[96px] p-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-cyan-500 to-cyan-600 flex items-center justify-center">
               <Layers className="w-5 h-5 text-white" />
             </div>
-            <div>
-              <p className="text-2xl font-bold">{analyticsData.insights.top_knowledge_category}</p>
+            <div className="min-w-0">
+              <p className="truncate text-xl font-bold">{analyticsData.insights.top_knowledge_category}</p>
               <p className="text-sm text-muted-foreground">Top Category</p>
             </div>
           </div>
         </Card>
 
-        <Card className="p-4">
+        <Card className="min-h-[96px] p-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-teal-500 to-emerald-600 flex items-center justify-center">
               <Clock3 className="w-5 h-5 text-white" />
@@ -1127,7 +1945,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
               </div>
               <div className="rounded-xl border bg-secondary/40 p-4">
                 <p className="text-sm text-muted-foreground">Most Used Agent</p>
-                <p className="text-2xl font-bold">{analyticsData.insights.most_used_agent}</p>
+                <p className="truncate text-2xl font-bold">{analyticsData.insights.most_used_agent}</p>
               </div>
             </Card>
           </div>
