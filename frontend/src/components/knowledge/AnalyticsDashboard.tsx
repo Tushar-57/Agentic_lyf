@@ -31,6 +31,15 @@ import {
   LineChart as LineChartIcon,
   Layers,
   Clock3,
+  Sunrise,
+  MoonStar,
+  Compass,
+  Flag,
+  X,
+  Sparkles,
+  ArrowRight,
+  CheckCircle2,
+  Lock,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -90,6 +99,35 @@ interface AnalyticsDashboardProps {
   className?: string
 }
 
+const DAILY_CHECKUP_MODAL_HINT_KEY = 'agentic-daily-checkup-modal-hint'
+
+const formatCheckupTime = (checkupDate: string | undefined) => {
+  if (!checkupDate) {
+    return 'Not run yet'
+  }
+
+  const date = new Date(checkupDate)
+  if (Number.isNaN(date.getTime())) {
+    return 'Not run yet'
+  }
+
+  return date.toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+const summarizeCheckupMessage = (message?: string) => {
+  const normalized = (message || '').trim().replace(/\s+/g, ' ')
+  if (!normalized) {
+    return 'No checkup result yet.'
+  }
+
+  return normalized.length > 140 ? `${normalized.slice(0, 137)}...` : normalized
+}
+
 export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   className
 }) => {
@@ -102,6 +140,8 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   const [checkupError, setCheckupError] = useState<string | null>(null)
   const [morningCheckup, setMorningCheckup] = useState<DailyCheckupResponse | null>(null)
   const [eveningCheckup, setEveningCheckup] = useState<DailyCheckupResponse | null>(null)
+  const [isCheckupModalOpen, setIsCheckupModalOpen] = useState(false)
+  const [activeCheckupFlow, setActiveCheckupFlow] = useState<'morning' | 'evening'>('morning')
 
   useEffect(() => {
     loadAnalyticsData()
@@ -294,8 +334,10 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       const payload = (await response.json()) as DailyCheckupResponse
       if (checkupType === 'morning') {
         setMorningCheckup(payload)
+        setMorningNote('')
       } else {
         setEveningCheckup(payload)
+        setEveningNote('')
       }
 
       await Promise.all([loadAnalyticsData(), loadLatestCheckups()])
@@ -321,6 +363,105 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       default: return Activity
     }
   }
+
+  const normalizeDateKey = (value?: string | null): string | null => {
+    if (!value || typeof value !== 'string') {
+      return null
+    }
+
+    const trimmed = value.trim()
+    if (!trimmed) {
+      return null
+    }
+
+    return trimmed.slice(0, 10)
+  }
+
+  const todayDateKey = new Date().toISOString().slice(0, 10)
+  const morningCompletedToday = normalizeDateKey(morningCheckup?.date) === todayDateKey
+  const eveningCompletedToday = normalizeDateKey(eveningCheckup?.date) === todayDateKey
+  const canRunEveningCheckup = morningCompletedToday || eveningCompletedToday
+
+  const openCheckupFlow = (flow: 'morning' | 'evening') => {
+    setActiveCheckupFlow(flow)
+    setCheckupError(null)
+    setIsCheckupModalOpen(true)
+  }
+
+  const activeCheckup = activeCheckupFlow === 'morning' ? morningCheckup : eveningCheckup
+  const activeNote = activeCheckupFlow === 'morning' ? morningNote : eveningNote
+
+  const setActiveNote = (value: string) => {
+    if (activeCheckupFlow === 'morning') {
+      setMorningNote(value)
+      return
+    }
+
+    setEveningNote(value)
+  }
+
+  const quickPromptsByFlow: Record<'morning' | 'evening', string[]> = {
+    morning: [
+      'My single highest-leverage outcome today is...',
+      'I will protect deep-work time between...',
+      'The risk that could derail today is...',
+    ],
+    evening: [
+      'Today my strongest win was...',
+      'The blocker I need to resolve tomorrow is...',
+      'One habit I should tighten tomorrow is...',
+    ],
+  }
+
+  const applyQuickPrompt = (prompt: string) => {
+    const merged = activeNote.trim() ? `${activeNote.trim()}\n${prompt}` : prompt
+    setActiveNote(merged)
+  }
+
+  const handleRunActiveCheckup = async () => {
+    await runDailyCheckup(activeCheckupFlow)
+  }
+
+  const checkupHeaderLabel = activeCheckupFlow === 'morning'
+    ? 'Morning Strategic Setup'
+    : 'Evening Goal Progression Review'
+
+  const checkupSubLabel = activeCheckupFlow === 'morning'
+    ? 'Start with intent before your first serious work block. The output gives focus, constraints, and execution posture.'
+    : 'Close the loop on goal progression and carry only the right priorities into tomorrow.'
+
+  const isActiveCheckupRunning = checkupLoading === activeCheckupFlow
+  const eveningRunLocked = activeCheckupFlow === 'evening' && !canRunEveningCheckup
+
+  useEffect(() => {
+    if (!isCheckupModalOpen) {
+      return
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsCheckupModalOpen(false)
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [isCheckupModalOpen])
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || isLoading || morningCompletedToday) {
+      return
+    }
+
+    const alreadyPromptedForToday = window.localStorage.getItem(DAILY_CHECKUP_MODAL_HINT_KEY) === todayDateKey
+    if (alreadyPromptedForToday) {
+      return
+    }
+
+    setActiveCheckupFlow('morning')
+    setIsCheckupModalOpen(true)
+    window.localStorage.setItem(DAILY_CHECKUP_MODAL_HINT_KEY, todayDateKey)
+  }, [isLoading, morningCompletedToday, todayDateKey])
 
   if (isLoading) {
     return (
@@ -374,95 +515,339 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         </div>
       </div>
 
-      <Card className="p-5">
-        <div className="mb-4 flex items-center justify-between gap-3">
+      <Card className="relative overflow-hidden border-border/70 bg-gradient-to-br from-amber-50/80 via-white to-orange-50/50 p-5 dark:from-amber-950/25 dark:via-slate-950 dark:to-orange-950/20">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full bg-amber-300/35 blur-3xl dark:bg-amber-700/20"
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -bottom-20 left-1/4 h-56 w-56 rounded-full bg-indigo-200/30 blur-3xl dark:bg-indigo-700/15"
+        />
+
+        <div className="relative mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h3 className="text-lg font-semibold">Daily AI Checkups</h3>
+            <p className="mb-1 inline-flex items-center gap-2 rounded-full border border-amber-200/70 bg-white/75 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-amber-700 dark:border-amber-900/60 dark:bg-slate-900/65 dark:text-amber-300">
+              <Sparkles className="h-3.5 w-3.5" />
+              Daily Ritual Intelligence
+            </p>
+            <h3 className="text-lg font-semibold">Daily AI Checkup Studio</h3>
             <p className="text-sm text-muted-foreground">
-              Run a morning intention plan and an evening reflection from your real time-entry context.
+              Morning creates execution strategy. Evening closes loop on progression and tomorrow focus.
             </p>
           </div>
-          <Badge variant="outline">Morning + Evening</Badge>
+          <Badge variant="outline" className="self-start bg-white/70 text-[11px] sm:self-auto dark:bg-slate-900/70">
+            {morningCompletedToday && eveningCompletedToday
+              ? 'Both Complete Today'
+              : morningCompletedToday || eveningCompletedToday
+                ? 'In Progress Today'
+                : 'Not Started Today'}
+          </Badge>
+        </div>
+
+        <div className="relative mb-4 rounded-2xl border border-border/70 bg-white/70 p-4 dark:bg-slate-900/65">
+          <div className="grid grid-cols-[auto,1fr,auto,1fr,auto] items-center gap-3">
+            <div className={cn(
+              'flex h-9 w-9 items-center justify-center rounded-full border',
+              morningCompletedToday
+                ? 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
+                : 'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300',
+            )}>
+              {morningCompletedToday ? <CheckCircle2 className="h-4 w-4" /> : <Sunrise className="h-4 w-4" />}
+            </div>
+            <div className="h-px bg-gradient-to-r from-amber-300/70 to-indigo-300/70 dark:from-amber-700/60 dark:to-indigo-700/60" />
+            <div className={cn(
+              'flex h-9 w-9 items-center justify-center rounded-full border',
+              eveningCompletedToday
+                ? 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
+                : canRunEveningCheckup
+                  ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300'
+                  : 'border-slate-300 bg-slate-100 text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400',
+            )}>
+              {eveningCompletedToday ? <CheckCircle2 className="h-4 w-4" /> : canRunEveningCheckup ? <MoonStar className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
+            </div>
+            <div className="h-px bg-gradient-to-r from-indigo-300/70 to-emerald-300/70 dark:from-indigo-700/60 dark:to-emerald-700/60" />
+            <div className="flex h-9 w-9 items-center justify-center rounded-full border border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
+              <Flag className="h-4 w-4" />
+            </div>
+          </div>
+          <div className="mt-2 grid grid-cols-3 text-[11px] text-muted-foreground">
+            <p>Morning Strategy</p>
+            <p className="text-center">Evening Reflection</p>
+            <p className="text-right">Tomorrow Focus</p>
+          </div>
+        </div>
+
+        <div className="relative grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <div
+            className={cn(
+              'rounded-2xl border p-4 transition-shadow',
+              morningCompletedToday
+                ? 'border-emerald-200/70 bg-white/80 dark:border-emerald-900/50 dark:bg-slate-900/70'
+                : 'border-amber-200/80 bg-amber-50/45 shadow-[0_0_0_1px_rgba(251,191,36,0.2)] dark:border-amber-900/60 dark:bg-amber-950/20',
+            )}
+          >
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold">Morning Strategic Setup</p>
+                <p className="text-xs text-muted-foreground">Run before your first high-focus block.</p>
+              </div>
+              <Sunrise className="h-5 w-5 text-amber-600 dark:text-amber-300" />
+            </div>
+            <p className="mb-2 text-xs text-muted-foreground">
+              Last run: {formatCheckupTime(morningCheckup?.date)}
+            </p>
+            <p className="mb-3 rounded-lg border border-border/60 bg-background/60 px-3 py-2 text-xs text-muted-foreground">
+              {summarizeCheckupMessage(morningCheckup?.coach_message)}
+            </p>
+            <Button onClick={() => openCheckupFlow('morning')} className="w-full gap-2">
+              <Compass className="h-4 w-4" />
+              {morningCompletedToday ? 'Review Morning Plan' : 'Start Morning Plan'}
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+          </div>
+
+          <div className="rounded-2xl border border-indigo-200/75 bg-white/80 p-4 dark:border-indigo-900/60 dark:bg-slate-900/70">
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold">Evening Goal Progression</p>
+                <p className="text-xs text-muted-foreground">Review execution and lock tomorrow’s narrow focus.</p>
+              </div>
+              <MoonStar className="h-5 w-5 text-indigo-600 dark:text-indigo-300" />
+            </div>
+            <p className="mb-2 text-xs text-muted-foreground">
+              Last run: {formatCheckupTime(eveningCheckup?.date)}
+            </p>
+            <p className="mb-3 rounded-lg border border-border/60 bg-background/60 px-3 py-2 text-xs text-muted-foreground">
+              {canRunEveningCheckup
+                ? summarizeCheckupMessage(eveningCheckup?.coach_message)
+                : 'Evening checkup unlocks after morning checkup to preserve strategic sequence.'}
+            </p>
+            <Button
+              onClick={() => openCheckupFlow('evening')}
+              variant="secondary"
+              className="w-full gap-2"
+            >
+              {canRunEveningCheckup ? <Flag className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
+              {eveningCompletedToday ? 'Review Evening Reflection' : 'Open Evening Checkup'}
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
 
         {checkupError && (
-          <div className="mb-4 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <div className="mt-4 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200">
             {checkupError}
           </div>
         )}
+      </Card>
 
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <div className="space-y-3 rounded-xl border p-4">
-            <div>
-              <h4 className="font-medium">Morning Intent</h4>
-              <p className="text-xs text-muted-foreground">Tell AI what matters most today.</p>
-            </div>
-            <textarea
-              value={morningNote}
-              onChange={(event) => setMorningNote(event.target.value)}
-              placeholder="Example: Deep focus on API refactor and 2 important bug fixes."
-              className="min-h-[88px] w-full rounded-md border bg-background px-3 py-2 text-sm"
-            />
-            <Button
-              onClick={() => runDailyCheckup('morning')}
-              disabled={checkupLoading === 'morning'}
-              className="w-full"
-            >
-              {checkupLoading === 'morning' ? 'Running Morning Checkup...' : 'Run Morning Checkup'}
-            </Button>
-
-            {morningCheckup && (
-              <div className="space-y-2 rounded-md bg-secondary/40 p-3 text-sm">
-                <div className="flex items-center justify-between">
-                  <p className="font-medium">Focus: {morningCheckup.focus_target || 'N/A'}</p>
-                  <Badge variant="secondary">{morningCheckup.generated_with}</Badge>
-                </div>
-                <p className="whitespace-pre-wrap text-muted-foreground">{morningCheckup.coach_message}</p>
+      {isCheckupModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
+          <div className="flex h-[80vh] w-[min(1100px,94vw)] flex-col overflow-hidden rounded-2xl border border-border/70 bg-background shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-border/70 px-5 py-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Interactive Daily Checkup</p>
+                <h4 className="text-xl font-semibold">{checkupHeaderLabel}</h4>
+                <p className="mt-1 text-sm text-muted-foreground">{checkupSubLabel}</p>
               </div>
-            )}
-          </div>
-
-          <div className="space-y-3 rounded-xl border p-4">
-            <div>
-              <h4 className="font-medium">Evening Reflection</h4>
-              <p className="text-xs text-muted-foreground">Close the day with a grounded review.</p>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setIsCheckupModalOpen(false)}
+                aria-label="Close checkup modal"
+              >
+                <X className="h-4 w-4" />
+              </Button>
             </div>
-            <textarea
-              value={eveningNote}
-              onChange={(event) => setEveningNote(event.target.value)}
-              placeholder="Example: Felt productive but context switching hurt focus."
-              className="min-h-[88px] w-full rounded-md border bg-background px-3 py-2 text-sm"
-            />
-            <Button
-              onClick={() => runDailyCheckup('evening')}
-              disabled={checkupLoading === 'evening'}
-              className="w-full"
-            >
-              {checkupLoading === 'evening' ? 'Running Evening Checkup...' : 'Run Evening Checkup'}
-            </Button>
 
-            {eveningCheckup && (
-              <div className="space-y-2 rounded-md bg-secondary/40 p-3 text-sm">
-                <div className="flex items-center justify-between">
-                  <p className="font-medium">{eveningCheckup.date}</p>
-                  <Badge variant="secondary">{eveningCheckup.generated_with}</Badge>
+            <div className="border-b border-border/70 px-5 py-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setActiveCheckupFlow('morning')}
+                  className={cn(
+                    'rounded-full border px-3 py-1.5 text-xs font-semibold transition',
+                    activeCheckupFlow === 'morning'
+                      ? 'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300'
+                      : 'border-border/70 bg-background text-muted-foreground hover:bg-secondary/50',
+                  )}
+                >
+                  Morning Strategy
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveCheckupFlow('evening')}
+                  className={cn(
+                    'rounded-full border px-3 py-1.5 text-xs font-semibold transition',
+                    activeCheckupFlow === 'evening'
+                      ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300'
+                      : 'border-border/70 bg-background text-muted-foreground hover:bg-secondary/50',
+                    !canRunEveningCheckup && !eveningCompletedToday && 'opacity-70',
+                  )}
+                >
+                  Evening Reflection
+                </button>
+                {!canRunEveningCheckup && !eveningCompletedToday && (
+                  <Badge variant="outline" className="text-[10px]">
+                    Unlocks After Morning Checkup
+                  </Badge>
+                )}
+              </div>
+            </div>
+
+            <div className="grid flex-1 overflow-hidden lg:grid-cols-[1.15fr,1fr]">
+              <div className="overflow-y-auto border-b border-border/60 p-5 lg:border-b-0 lg:border-r">
+                <div className="mb-4 rounded-xl border border-border/70 bg-card/60 p-4">
+                  <p className="text-sm font-medium">
+                    {activeCheckupFlow === 'morning'
+                      ? 'What is your highest leverage outcome today?'
+                      : 'How did your actions move your top goals forward today?'}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Add context to improve recommendation quality and tactical specificity.
+                  </p>
                 </div>
-                <p className="whitespace-pre-wrap text-muted-foreground">{eveningCheckup.coach_message}</p>
-                {!!eveningCheckup.tomorrow_focus?.length && (
-                  <div>
-                    <p className="font-medium">Tomorrow Focus</p>
-                    <ul className="list-disc pl-5 text-muted-foreground">
-                      {eveningCheckup.tomorrow_focus.map((item) => (
-                        <li key={item}>{item}</li>
-                      ))}
-                    </ul>
+
+                <textarea
+                  value={activeNote}
+                  onChange={(event) => setActiveNote(event.target.value)}
+                  placeholder={
+                    activeCheckupFlow === 'morning'
+                      ? 'Example: I need two uninterrupted deep-work blocks for architecture decisions and one stakeholder sync.'
+                      : 'Example: I shipped one key task, but reactive context switching slowed execution quality.'
+                  }
+                  className="min-h-[210px] w-full rounded-xl border border-border/70 bg-background px-4 py-3 text-sm"
+                />
+
+                <div className="mt-4 space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Quick Strategic Prompts</p>
+                  <div className="flex flex-wrap gap-2">
+                    {quickPromptsByFlow[activeCheckupFlow].map((prompt) => (
+                      <button
+                        key={prompt}
+                        type="button"
+                        onClick={() => applyQuickPrompt(prompt)}
+                        className="rounded-full border border-border/70 bg-secondary/40 px-3 py-1 text-xs transition hover:bg-secondary/70"
+                      >
+                        {prompt}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mt-5 flex flex-col gap-2 sm:flex-row">
+                  <Button
+                    onClick={() => void handleRunActiveCheckup()}
+                    disabled={isActiveCheckupRunning || eveningRunLocked}
+                    className="gap-2"
+                  >
+                    {activeCheckupFlow === 'morning' ? <Sunrise className="h-4 w-4" /> : <MoonStar className="h-4 w-4" />}
+                    {isActiveCheckupRunning
+                      ? `Running ${activeCheckupFlow === 'morning' ? 'Morning' : 'Evening'} Checkup...`
+                      : `Run ${activeCheckupFlow === 'morning' ? 'Morning' : 'Evening'} Checkup`}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    onClick={() => setActiveNote('')}
+                    disabled={isActiveCheckupRunning}
+                  >
+                    Clear Note
+                  </Button>
+                </div>
+              </div>
+
+              <div className="overflow-y-auto bg-secondary/20 p-5">
+                <div className="mb-4 flex items-center justify-between">
+                  <p className="text-sm font-semibold">Latest Output</p>
+                  {activeCheckup && <Badge variant="secondary">{activeCheckup.generated_with}</Badge>}
+                </div>
+
+                {!activeCheckup ? (
+                  <div className="rounded-xl border border-dashed border-border/70 bg-background/70 p-6 text-sm text-muted-foreground">
+                    {activeCheckupFlow === 'morning'
+                      ? 'Run your morning checkup to generate focus direction, constraints, and execution posture.'
+                      : 'Run your evening checkup to reflect on progression, blockers, and tomorrow focus.'}
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="rounded-xl border border-border/70 bg-background/80 p-4">
+                      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        {activeCheckupFlow === 'morning' ? 'Strategic Focus' : 'Reflection Summary'}
+                      </p>
+                      <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+                        {activeCheckup.coach_message}
+                      </p>
+                    </div>
+
+                    {activeCheckup.focus_target && (
+                      <div className="rounded-xl border border-border/70 bg-background/80 p-4">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Focus Target</p>
+                        <p className="mt-1 text-sm font-medium text-foreground">{activeCheckup.focus_target}</p>
+                      </div>
+                    )}
+
+                    {!!activeCheckup.wins?.length && (
+                      <div className="rounded-xl border border-emerald-200/70 bg-emerald-50/50 p-4 dark:border-emerald-900/60 dark:bg-emerald-950/25">
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Wins</p>
+                        <ul className="space-y-1 text-sm text-emerald-900 dark:text-emerald-100">
+                          {activeCheckup.wins.map((item) => (
+                            <li key={item}>• {item}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {!!activeCheckup.blockers?.length && (
+                      <div className="rounded-xl border border-rose-200/70 bg-rose-50/50 p-4 dark:border-rose-900/60 dark:bg-rose-950/25">
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-rose-700 dark:text-rose-300">Blockers</p>
+                        <ul className="space-y-1 text-sm text-rose-900 dark:text-rose-100">
+                          {activeCheckup.blockers.map((item) => (
+                            <li key={item}>• {item}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {!!activeCheckup.tomorrow_focus?.length && (
+                      <div className="rounded-xl border border-indigo-200/70 bg-indigo-50/50 p-4 dark:border-indigo-900/60 dark:bg-indigo-950/25">
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-indigo-700 dark:text-indigo-300">Tomorrow Focus</p>
+                        <ul className="space-y-1 text-sm text-indigo-900 dark:text-indigo-100">
+                          {activeCheckup.tomorrow_focus.map((item) => (
+                            <li key={item}>• {item}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
-            )}
+            </div>
+
+            <div className="flex flex-col-reverse gap-3 border-t border-border/70 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-xs text-muted-foreground">
+                {eveningRunLocked
+                  ? 'Complete your morning checkup first to unlock evening progression review.'
+                  : 'Checkups are persisted as knowledge insights and reused in future coaching context.'}
+              </p>
+              <div className="flex gap-2 self-end sm:self-auto">
+                <Button variant="outline" onClick={() => setIsCheckupModalOpen(false)}>
+                  Close
+                </Button>
+                {activeCheckupFlow === 'morning' && (
+                  <Button
+                    variant="secondary"
+                    onClick={() => setActiveCheckupFlow('evening')}
+                    disabled={!canRunEveningCheckup && !eveningCompletedToday}
+                  >
+                    Go To Evening Flow
+                  </Button>
+                )}
+              </div>
+            </div>
           </div>
         </div>
-      </Card>
+      )}
 
       {/* Key Metrics */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">

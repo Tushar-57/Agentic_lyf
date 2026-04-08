@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
+import type { CSSProperties } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { 
   Database, 
@@ -81,6 +82,97 @@ interface DisplayKnowledgeEntry extends KnowledgeEntry {
   displayTypeLabel: string
   displayCategory: string
   displayCategoryLabel: string
+}
+
+interface KnowledgeSnapshotCache {
+  version: number
+  fetchedAt: string
+  entries: KnowledgeEntry[]
+  preferences: UserPreferences | null
+  stats: KnowledgeStats | null
+  profileSnapshot: OnboardingProfileSnapshot | null
+  refreshScope: string | null
+  lastSyncedAt: string | null
+}
+
+const KNOWLEDGE_CACHE_KEY = 'agentic-knowledge-view-cache-v3'
+const KNOWLEDGE_CACHE_VERSION = 3
+const KNOWLEDGE_CACHE_TTL_MS = 90 * 1000
+
+let inMemoryKnowledgeSnapshot: KnowledgeSnapshotCache | null = null
+
+const readCachedSnapshot = (): KnowledgeSnapshotCache | null => {
+  if (inMemoryKnowledgeSnapshot) {
+    return inMemoryKnowledgeSnapshot
+  }
+
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  try {
+    const raw = window.localStorage.getItem(KNOWLEDGE_CACHE_KEY)
+    if (!raw) {
+      return null
+    }
+
+    const parsed = JSON.parse(raw) as KnowledgeSnapshotCache
+    if (!parsed || parsed.version !== KNOWLEDGE_CACHE_VERSION || !Array.isArray(parsed.entries)) {
+      return null
+    }
+
+    inMemoryKnowledgeSnapshot = parsed
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+const writeCachedSnapshot = (snapshot: KnowledgeSnapshotCache) => {
+  inMemoryKnowledgeSnapshot = snapshot
+
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  try {
+    window.localStorage.setItem(KNOWLEDGE_CACHE_KEY, JSON.stringify(snapshot))
+  } catch {
+    // Cache write failures should never block UI rendering.
+  }
+}
+
+const isSnapshotFresh = (snapshot: KnowledgeSnapshotCache): boolean => {
+  const fetchedAtMs = new Date(snapshot.fetchedAt).getTime()
+  if (!Number.isFinite(fetchedAtMs)) {
+    return false
+  }
+
+  return Date.now() - fetchedAtMs <= KNOWLEDGE_CACHE_TTL_MS
+}
+
+const getEntryAccentStyle = (type: string): CSSProperties => {
+  const paletteByType: Record<string, [string, string, string]> = {
+    time_entry: ['rgba(56,189,248,0.55)', 'rgba(34,197,94,0.38)', 'rgba(59,130,246,0.34)'],
+    goal: ['rgba(251,146,60,0.58)', 'rgba(244,63,94,0.4)', 'rgba(245,158,11,0.33)'],
+    insight: ['rgba(248,113,113,0.58)', 'rgba(249,115,22,0.42)', 'rgba(59,130,246,0.28)'],
+    pattern: ['rgba(45,212,191,0.56)', 'rgba(14,165,233,0.4)', 'rgba(56,189,248,0.3)'],
+    preference: ['rgba(16,185,129,0.56)', 'rgba(20,184,166,0.4)', 'rgba(52,211,153,0.3)'],
+    user_preference: ['rgba(16,185,129,0.56)', 'rgba(20,184,166,0.4)', 'rgba(52,211,153,0.3)'],
+  }
+
+  const [colorA, colorB, colorC] = paletteByType[type] || ['rgba(148,163,184,0.5)', 'rgba(100,116,139,0.34)', 'rgba(148,163,184,0.26)']
+
+  return {
+    backgroundImage: [
+      `radial-gradient(135% 95% at 98% 8%, ${colorA} 0%, rgba(255,255,255,0) 58%)`,
+      `radial-gradient(120% 135% at 85% 92%, ${colorB} 0%, rgba(255,255,255,0) 66%)`,
+      `radial-gradient(90% 110% at 56% 48%, ${colorC} 0%, rgba(255,255,255,0) 72%)`,
+      'linear-gradient(170deg, rgba(255,255,255,0.68) 0%, rgba(255,255,255,0) 50%, rgba(255,255,255,0.16) 100%)',
+      'repeating-linear-gradient(126deg, rgba(255,255,255,0.2) 0px, rgba(255,255,255,0.2) 1px, rgba(255,255,255,0) 1px, rgba(255,255,255,0) 7px)',
+    ].join(', '),
+    mixBlendMode: 'normal',
+  }
 }
 
 const toDisplayLabel = (rawValue: string) => {
@@ -476,14 +568,12 @@ const buildPresentation = (entry: DisplayKnowledgeEntry): EntryPresentation => {
   const contentRows = entry.displayType === 'time_entry'
     ? toKeyValueRows(
         {
-          what_user_did: task,
-          project_name: project,
-          duration_minutes: durationRaw,
           start_time: startTime,
           end_time: endTime,
+          date: pickFirstValue(recordSources, ['date']),
         },
-        ['what_user_did', 'project_name', 'duration_minutes', 'start_time', 'end_time'],
-        6,
+        ['date', 'start_time', 'end_time'],
+        3,
         { allowFallback: false },
       )
     : toKeyValueRows(
@@ -550,6 +640,57 @@ const buildPresentation = (entry: DisplayKnowledgeEntry): EntryPresentation => {
   }
 }
 
+const formatCompactTime = (value: string): string => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return 'unknown time'
+  }
+
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+const resolveCheckupStatus = (
+  entries: KnowledgeEntry[],
+  checkupType: 'morning' | 'evening',
+): string => {
+  const matchingEntries = entries
+    .filter((entry) => {
+      const metadata = isRecord(entry.metadata) ? entry.metadata : {}
+      const category = String(entry.category || '').toLowerCase()
+      const metadataCheckupType = String(metadata.checkup_type || '').toLowerCase()
+      const subType = String(entry.entry_sub_type || '').toLowerCase()
+
+      return category === 'daily_checkup' && (
+        metadataCheckupType === checkupType || subType.includes(checkupType)
+      )
+    })
+    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+
+  if (matchingEntries.length === 0) {
+    return 'Not run yet'
+  }
+
+  const latest = matchingEntries[0]
+  const metadata = isRecord(latest.metadata) ? latest.metadata : {}
+  const checkupDateRaw = typeof metadata.checkup_date === 'string' && metadata.checkup_date.trim()
+    ? metadata.checkup_date.trim()
+    : latest.created_at
+
+  const checkupDay = checkupDateRaw.slice(0, 10)
+  const todayDay = new Date().toISOString().slice(0, 10)
+
+  if (checkupDay === todayDay) {
+    return `Completed today at ${formatCompactTime(latest.created_at)}`
+  }
+
+  const latestDate = new Date(latest.created_at)
+  if (Number.isNaN(latestDate.getTime())) {
+    return 'Completed previously'
+  }
+
+  return `Last run ${latestDate.toLocaleDateString()}`
+}
+
 export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
   className,
   onEditPreferences,
@@ -567,99 +708,127 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
   const [error, setError] = useState<string | null>(null)
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null)
   const [refreshScope, setRefreshScope] = useState<string | null>(null)
+  const [isRefreshingInBackground, setIsRefreshingInBackground] = useState(false)
+
+  const applySnapshot = useCallback((snapshot: KnowledgeSnapshotCache) => {
+    setEntries(Array.isArray(snapshot.entries) ? snapshot.entries : [])
+    setPreferences(snapshot.preferences || null)
+    setStats(snapshot.stats || null)
+    setProfileSnapshot(snapshot.profileSnapshot || null)
+    setRefreshScope(snapshot.refreshScope || null)
+    setLastSyncedAt(snapshot.lastSyncedAt || snapshot.fetchedAt)
+  }, [])
+
+  const revalidateFromApi = useCallback(
+    async (forceRefresh: boolean, backgroundRefresh: boolean) => {
+      try {
+        const cacheBust = Date.now().toString()
+
+        const requestOptions: RequestInit = {
+          cache: 'no-store',
+          headers: {
+            'Cache-Control': 'no-cache',
+            Pragma: 'no-cache',
+          },
+        }
+
+        let resolvedRefreshScope: string | null = refreshScope
+        if (forceRefresh) {
+          const refreshResponse = await fetch(`/api/knowledge/refresh?ts=${cacheBust}`, {
+            method: 'POST',
+            ...requestOptions,
+          }).catch(() => null)
+
+          if (refreshResponse && refreshResponse.ok) {
+            const refreshData = await refreshResponse.json()
+            const scope = refreshData?.user_scope?.storage_key
+            resolvedRefreshScope = typeof scope === 'string' && scope.trim() ? scope : null
+          }
+        }
+
+        const [entriesRes, preferencesRes, statsRes, profileRes] = await Promise.all([
+          fetch(`/api/knowledge/entries?ts=${cacheBust}`, requestOptions).catch(() => null),
+          fetch(`/api/knowledge/preferences?ts=${cacheBust}`, requestOptions).catch(() => null),
+          fetch(`/api/knowledge/stats?ts=${cacheBust}`, requestOptions).catch(() => null),
+          fetch(`/api/knowledge/onboarding/profile?ts=${cacheBust}`, requestOptions).catch(() => null),
+        ])
+
+        const entriesData = entriesRes && entriesRes.ok ? await entriesRes.json() : []
+        const preferencesData = preferencesRes && preferencesRes.ok ? await preferencesRes.json() : null
+        const statsData = statsRes && statsRes.ok ? await statsRes.json() : null
+        const profileData = profileRes && profileRes.ok ? await profileRes.json() : null
+
+        const syncedAt = new Date().toISOString()
+        const snapshot: KnowledgeSnapshotCache = {
+          version: KNOWLEDGE_CACHE_VERSION,
+          fetchedAt: syncedAt,
+          entries: Array.isArray(entriesData) ? entriesData : [],
+          preferences: preferencesData,
+          stats: statsData,
+          profileSnapshot: profileData,
+          refreshScope: resolvedRefreshScope,
+          lastSyncedAt: syncedAt,
+        }
+
+        applySnapshot(snapshot)
+        writeCachedSnapshot(snapshot)
+      } catch (err) {
+        console.error('Failed to load knowledge data:', err)
+        if (!backgroundRefresh) {
+          setError('Failed to load knowledge base data')
+
+          setEntries([])
+          setStats({
+            total_entries: 0,
+            entries_by_type: {},
+            entries_by_category: {},
+            last_updated: new Date().toISOString(),
+            embedding_model: 'unknown',
+          })
+          setPreferences(null)
+          setProfileSnapshot(null)
+        }
+      } finally {
+        if (backgroundRefresh) {
+          setIsRefreshingInBackground(false)
+        } else {
+          setIsLoading(false)
+        }
+      }
+    },
+    [applySnapshot, refreshScope],
+  )
+
+  const loadKnowledgeData = useCallback(
+    async (forceRefresh = false) => {
+      setError(null)
+
+      if (!forceRefresh) {
+        const cachedSnapshot = readCachedSnapshot()
+        if (cachedSnapshot) {
+          applySnapshot(cachedSnapshot)
+          setIsLoading(false)
+
+          if (isSnapshotFresh(cachedSnapshot)) {
+            return
+          }
+
+          setIsRefreshingInBackground(true)
+          void revalidateFromApi(false, true)
+          return
+        }
+      }
+
+      setIsLoading(true)
+      await revalidateFromApi(forceRefresh, false)
+    },
+    [applySnapshot, revalidateFromApi],
+  )
 
   // Load data on component mount
   useEffect(() => {
     void loadKnowledgeData()
-  }, [refreshKey])
-
-  const loadKnowledgeData = async (forceRefresh = false) => {
-    setIsLoading(true)
-    setError(null)
-    
-    try {
-      const cacheBust = Date.now().toString()
-
-      const requestOptions: RequestInit = {
-        cache: 'no-store',
-        headers: {
-          'Cache-Control': 'no-cache',
-          Pragma: 'no-cache',
-        },
-      }
-
-      if (forceRefresh) {
-        const refreshResponse = await fetch(`/api/knowledge/refresh?ts=${cacheBust}`, {
-          method: 'POST',
-          ...requestOptions,
-        }).catch(() => null)
-
-        if (refreshResponse && refreshResponse.ok) {
-          const refreshData = await refreshResponse.json()
-          const scope = refreshData?.user_scope?.storage_key
-          setRefreshScope(typeof scope === 'string' && scope.trim() ? scope : null)
-        }
-      }
-
-      // Load entries, preferences, and stats in parallel
-      const [entriesRes, preferencesRes, statsRes, profileRes] = await Promise.all([
-        fetch(`/api/knowledge/entries?ts=${cacheBust}`, requestOptions).catch(() => null),
-        fetch(`/api/knowledge/preferences?ts=${cacheBust}`, requestOptions).catch(() => null),
-        fetch(`/api/knowledge/stats?ts=${cacheBust}`, requestOptions).catch(() => null),
-        fetch(`/api/knowledge/onboarding/profile?ts=${cacheBust}`, requestOptions).catch(() => null),
-      ])
-
-      if (entriesRes && entriesRes.ok) {
-        const entriesData = await entriesRes.json()
-        setEntries(Array.isArray(entriesData) ? entriesData : [])
-      } else {
-        setEntries([])
-      }
-
-      if (preferencesRes && preferencesRes.ok) {
-        const preferencesData = await preferencesRes.json()
-        setPreferences(preferencesData)
-      } else {
-        setPreferences(null)
-      }
-
-      if (statsRes && statsRes.ok) {
-        const statsData = await statsRes.json()
-        setStats(statsData)
-      } else {
-        setStats(null)
-      }
-
-      if (profileRes && profileRes.ok) {
-        const profileData = await profileRes.json()
-        setProfileSnapshot(profileData)
-      } else {
-        setProfileSnapshot(null)
-      }
-
-      setLastSyncedAt(new Date().toISOString())
-    } catch (err) {
-      console.error('Failed to load knowledge data:', err)
-      setError('Failed to load knowledge base data')
-      
-      // Use empty arrays as fallback - the real data should come from the API
-      console.warn('Using fallback demo data - API may not be available')
-      setEntries([])
-      setStats({
-        total_entries: 0,
-        entries_by_type: {},
-        entries_by_category: {},
-        last_updated: new Date().toISOString(),
-        embedding_model: 'unknown'
-      })
-      
-      // Set empty preferences as fallback
-      setPreferences(null)
-      setProfileSnapshot(null)
-    } finally {
-      setIsLoading(false)
-    }
-  }
+  }, [loadKnowledgeData, refreshKey])
 
   const displayEntries: DisplayKnowledgeEntry[] = [...entries]
     .map((entry) => {
@@ -701,7 +870,48 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
   ).length
   const goalsCount = displayEntries.filter((entry) => entry.displayType === 'goal').length
   const timeEntriesCount = displayEntries.filter((entry) => entry.displayType === 'time_entry').length
-  const patternsCount = displayEntries.filter((entry) => entry.displayType === 'pattern').length
+  const insightsCount = displayEntries.filter((entry) => entry.displayType === 'insight').length
+  const prioritiesCount = displayEntries.filter((entry) => {
+    const metadata = isRecord(entry.metadata) ? entry.metadata : {}
+    const context = isRecord(metadata.context) ? metadata.context : {}
+    const prioritySignal = pickFirstValue(
+      [context, metadata],
+      ['priority', 'priority_level', 'importance', 'urgency', 'is_priority'],
+    )
+
+    if (prioritySignal !== null && prioritySignal !== undefined && prioritySignal !== '') {
+      return true
+    }
+
+    const searchableText = [
+      entry.displayType,
+      entry.displayCategory,
+      entry.entry_sub_type,
+      ...entry.tags,
+    ]
+      .join(' ')
+      .toLowerCase()
+
+    return searchableText.includes('priority') || searchableText.includes('urgent')
+  }).length
+
+  const morningCheckInStatus = resolveCheckupStatus(entries, 'morning')
+  const eveningCheckInStatus = resolveCheckupStatus(entries, 'evening')
+  const latestUpdateLabel = stats?.last_updated
+    ? new Date(stats.last_updated).toLocaleString([], {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    : lastSyncedAt
+      ? new Date(lastSyncedAt).toLocaleString([], {
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+      : 'Not synced yet'
 
   const getEntryIcon = (type: string) => {
     switch (type) {
@@ -775,29 +985,33 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
         <div className="flex-1 min-w-0">
           <h2 className="text-2xl font-bold">Knowledge Base</h2>
           <p className="text-muted-foreground">
-            View and manage your AI agent's learned preferences and patterns
+            Loaded instantly from your latest stored state, then refreshed quietly in the background.
           </p>
-          {lastSyncedAt && (
-            <p className="mt-1 text-xs text-muted-foreground">
-              Last synced: {new Date(lastSyncedAt).toLocaleTimeString()}
-            </p>
-          )}
           {refreshScope && (
             <p className="mt-1 text-[11px] text-muted-foreground">
               Active storage scope: {refreshScope}
             </p>
           )}
+          {isRefreshingInBackground && (
+            <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">
+              Refreshing in background...
+            </p>
+          )}
         </div>
-        <div className="flex gap-2 flex-shrink-0 flex-wrap">
+        <div className="flex gap-2 flex-shrink-0 flex-wrap items-center justify-end">
+          <div className="rounded-xl border border-border/70 bg-white/75 px-3 py-2 text-right text-xs shadow-sm dark:bg-slate-900/60">
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground">Last Updated</p>
+            <p className="font-semibold text-foreground">{latestUpdateLabel}</p>
+          </div>
           <Button 
             onClick={() => void loadKnowledgeData(true)} 
             variant="ghost" 
             size="icon"
-            disabled={isLoading}
+            disabled={isLoading || isRefreshingInBackground}
             className="gap-2"
             title="Force refresh data"
           >
-            <RefreshCcw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+            <RefreshCcw className={`w-4 h-4 ${(isLoading || isRefreshingInBackground) ? 'animate-spin' : ''}`} />
           </Button>
           <Button onClick={onAddPreference} variant="outline" className="gap-2">
             <Plus className="w-4 h-4" />
@@ -822,28 +1036,28 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
           </div>
           <div className="grid grid-cols-1 gap-3 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-6">
             <div>
-              <p className="font-medium text-slate-700 dark:text-slate-200">Primary Provider</p>
-              <p>{String(preferences?.llm_provider?.provider || 'not set')}</p>
-            </div>
-            <div>
-              <p className="font-medium text-slate-700 dark:text-slate-200">Timezone</p>
-              <p>{String(preferences?.general?.timezone || 'not set')}</p>
-            </div>
-            <div>
               <p className="font-medium text-slate-700 dark:text-slate-200">Work Hours</p>
               <p>{String(preferences?.productivity?.work_hours || preferences?.general?.work_hours || 'not set')}</p>
             </div>
             <div>
-              <p className="font-medium text-slate-700 dark:text-slate-200">Check-In Time</p>
+              <p className="font-medium text-slate-700 dark:text-slate-200">Preferred Check-In Time</p>
               <p>{String(preferences?.journal?.check_in_time || 'not set')}</p>
             </div>
             <div>
-              <p className="font-medium text-slate-700 dark:text-slate-200">Role</p>
-              <p>{String(profileSnapshot?.role || 'not set')}</p>
+              <p className="font-medium text-slate-700 dark:text-slate-200">Morning Check-In</p>
+              <p>{morningCheckInStatus}</p>
+            </div>
+            <div>
+              <p className="font-medium text-slate-700 dark:text-slate-200">Evening Check-In</p>
+              <p>{eveningCheckInStatus}</p>
             </div>
             <div>
               <p className="font-medium text-slate-700 dark:text-slate-200">Mentor</p>
               <p>{String(profileSnapshot?.mentor?.name || 'not set')}</p>
+            </div>
+            <div>
+              <p className="font-medium text-slate-700 dark:text-slate-200">Communication Tone</p>
+              <p>{String(profileSnapshot?.preferredTone || 'not set')}</p>
             </div>
           </div>
         </Card>
@@ -906,29 +1120,26 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
             </div>
           </Card>
 
-          
-          <Card className="border-border/70 bg-white/75 p-4 shadow-sm dark:bg-slate-900/60">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-sky-500 to-blue-500 flex items-center justify-center">
-                <TrendingUp className="w-5 h-5 text-white" />
-              </div>
-              <div>
-                <p className="text-2xl font-bold">{patternsCount}</p>
-                <p className="text-sm text-muted-foreground">Patterns</p>
-              </div>
-            </div>
-          </Card>
-          
           <Card className="border-border/70 bg-white/75 p-4 shadow-sm dark:bg-slate-900/60">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center">
-                <Calendar className="w-5 h-5 text-white" />
+                <BarChart3 className="w-5 h-5 text-white" />
               </div>
               <div>
-                <p className="text-2xl font-bold">
-                  {new Date(stats.last_updated).toLocaleDateString()}
-                </p>
-                <p className="text-sm text-muted-foreground">Last Updated</p>
+                <p className="text-2xl font-bold">{insightsCount}</p>
+                <p className="text-sm text-muted-foreground">Insights</p>
+              </div>
+            </div>
+          </Card>
+
+          <Card className="border-border/70 bg-white/75 p-4 shadow-sm dark:bg-slate-900/60">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-rose-500 to-orange-500 flex items-center justify-center">
+                <TrendingUp className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold">{prioritiesCount}</p>
+                <p className="text-sm text-muted-foreground">Priorities</p>
               </div>
             </div>
           </Card>
@@ -994,10 +1205,31 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
                 transition={{ delay: index * 0.1 }}
               >
                 <Card className={cn(
-                  'p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md',
+                  'group relative overflow-hidden p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md',
                   tileStyle,
                 )}>
-                  <div className="flex items-start gap-4">
+                  <div
+                    aria-hidden
+                    className="pointer-events-none absolute inset-y-0 right-0 hidden w-32 md:block"
+                  >
+                    <div
+                      className="relative h-full w-full border-l border-white/45 transition-transform duration-300 group-hover:translate-x-0.5 dark:border-slate-800/70"
+                    >
+                      <div className="absolute inset-0" style={getEntryAccentStyle(entry.displayType)} />
+                      <div className="absolute -right-8 top-4 h-24 w-24 rounded-full bg-white/45 blur-2xl dark:bg-white/10" />
+                      <div className="absolute -left-10 bottom-8 h-20 w-20 rounded-full bg-white/35 blur-2xl dark:bg-slate-400/10" />
+                      <div className="absolute inset-x-2 bottom-3 space-y-1 rounded-lg border border-white/35 bg-white/45 px-2 py-1.5 backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-900/45">
+                        <p className="truncate text-[10px] font-semibold uppercase tracking-wide text-slate-700 dark:text-slate-200">
+                          {entry.displayTypeLabel}
+                        </p>
+                        <p className="truncate text-[10px] text-slate-600 dark:text-slate-300">
+                          {new Date(entry.updated_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="relative flex items-start gap-4 md:pr-32">
                     <div className={cn(
                       "w-10 h-10 rounded-xl flex items-center justify-center bg-gradient-to-br",
                       colorClass
@@ -1103,7 +1335,7 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
                       {presentation.metadataRows.length > 0 && (
                         <details className="mb-3 rounded-lg border border-border/60 bg-muted/15 px-3 py-2">
                           <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                            Metadata Details
+                            AI Additional Context
                           </summary>
                           <div className="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2">
                             {presentation.metadataRows.map((row, rowIndex) => (
