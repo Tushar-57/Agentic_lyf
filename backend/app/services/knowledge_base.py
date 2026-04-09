@@ -1058,6 +1058,12 @@ class KnowledgeBaseService:
         context = metadata.get("context") if isinstance(metadata.get("context"), dict) else {}
 
         category = str(entry.category or "").strip().lower()
+        checkup_type = str(metadata.get("checkup_type") or "").strip().lower()
+
+        # Daily checkup insights can carry legacy time_entry tags but should remain insights.
+        if category == "daily_checkup" or checkup_type in {"morning", "evening"}:
+            return False
+
         source = str(context.get("source", "")).strip().lower()
         source_action = str(context.get("source_action", "")).strip().lower()
         has_time_entry_id = context.get("time_entry_id") is not None

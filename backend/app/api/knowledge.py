@@ -346,6 +346,14 @@ async def get_embeddings_for_visualization():
     """Get all embeddings with 3D coordinates for visualization."""
     try:
         kb_service = get_knowledge_base_service()
+        sync_report = await _sync_missing_db_checkup_insights(kb_service)
+        if sync_report["created"] > 0:
+            logger.info(
+                "Materialized %s missing checkup insights before visualization (records=%s failed=%s)",
+                sync_report["created"],
+                sync_report["records"],
+                sync_report["failed"],
+            )
         visualization_data = await kb_service.get_embeddings_visualization_data()
         return visualization_data
     except Exception as e:
@@ -372,6 +380,7 @@ async def get_embeddings_quality_report():
     """Return diagnostics about embedding integrity and semantic signal coverage."""
     try:
         kb_service = get_knowledge_base_service()
+        await _sync_missing_db_checkup_insights(kb_service)
         return await kb_service.get_embedding_quality_report()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get embedding quality report: {str(e)}")
@@ -384,6 +393,7 @@ async def rebuild_zero_signal_embeddings(
     """Rebuild missing/zero-signal embeddings and return refreshed quality diagnostics."""
     try:
         kb_service = get_knowledge_base_service()
+        await _sync_missing_db_checkup_insights(kb_service)
         return await kb_service.rebuild_zero_signal_embeddings(limit=limit)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to rebuild zero-signal embeddings: {str(e)}")
@@ -1181,7 +1191,7 @@ def _record_to_knowledge_entry(record: DailyCheckupRecord) -> Optional[Knowledge
         title=f"{title_prefix} - {checkup_date}",
         content=_build_checkup_content_from_payload(payload),
         metadata=payload,
-        tags=sorted({"daily_checkup", checkup_type, "time_entry"}),
+        tags=sorted({"daily_checkup", checkup_type, "insight"}),
         created_at=_coerce_datetime(record.created_at),
         updated_at=_coerce_datetime(record.updated_at),
     )
@@ -1281,6 +1291,89 @@ def _load_latest_checkups_from_db() -> Dict[str, Dict[str, Any]]:
     return resolved
 
 
+async def _sync_missing_db_checkup_insights(kb_service) -> Dict[str, int]:
+    """Materialize DB-backed checkups into KB entries for embedding-driven features."""
+    checkup_store = get_daily_checkup_store()
+    if not checkup_store:
+        return {"records": 0, "created": 0, "failed": 0}
+
+    request_user = get_current_user()
+    db_records = checkup_store.list_checkups_for_user(request_user.storage_key)
+    if not db_records:
+        return {"records": 0, "created": 0, "failed": 0}
+
+    existing_entries = await kb_service.get_all_entries(
+        category="daily_checkup",
+        entry_type=KnowledgeEntryType.INSIGHT,
+    )
+    existing_identities = {
+        identity
+        for identity in (
+            _extract_checkup_identity_from_metadata(entry.metadata or {})
+            for entry in existing_entries
+        )
+        if identity
+    }
+
+    created_count = 0
+    failed_count = 0
+
+    for record in db_records:
+        payload = dict(record.payload or {})
+        payload.setdefault("checkup_type", record.checkup_type)
+        payload.setdefault("date", record.checkup_date.isoformat())
+        payload.setdefault("checkup_date", record.checkup_date.isoformat())
+
+        identity = _extract_checkup_identity_from_metadata(payload)
+        if not identity or identity in existing_identities:
+            continue
+
+        checkup_type = str(payload.get("checkup_type", "")).strip().lower()
+        checkup_date_text = str(payload.get("checkup_date") or payload.get("date") or "").strip()[:10]
+        if checkup_type not in {"morning", "evening"} or not checkup_date_text:
+            continue
+
+        try:
+            checkup_date = date.fromisoformat(checkup_date_text)
+        except ValueError:
+            logger.warning(
+                "Skipping DB checkup with invalid date user=%s type=%s date=%s",
+                request_user.storage_key,
+                checkup_type,
+                checkup_date_text,
+            )
+            continue
+
+        title_prefix = "Morning Checkup" if checkup_type == "morning" else "Evening Checkup"
+        try:
+            await kb_service.create_entry(
+                entry_type=KnowledgeEntryType.INSIGHT,
+                entry_sub_type=KnowledgeEntrySubType.MISC_INSIGHT,
+                category="daily_checkup",
+                title=f"{title_prefix} - {checkup_date.isoformat()}",
+                content=_build_checkup_content_from_payload(payload),
+                metadata=payload,
+                tags=sorted({"daily_checkup", checkup_type, "insight"}),
+            )
+            existing_identities.add(identity)
+            created_count += 1
+        except Exception as sync_error:
+            failed_count += 1
+            logger.warning(
+                "Failed to materialize DB checkup into KB user=%s type=%s date=%s: %s",
+                request_user.storage_key,
+                checkup_type,
+                checkup_date.isoformat(),
+                sync_error,
+            )
+
+    return {
+        "records": len(db_records),
+        "created": created_count,
+        "failed": failed_count,
+    }
+
+
 async def _upsert_checkup_insight(
     kb_service,
     checkup_type: str,
@@ -1311,7 +1404,7 @@ async def _upsert_checkup_insight(
     merged_metadata["checkup_type"] = checkup_type
     merged_metadata["checkup_date"] = checkup_date_iso
 
-    normalized_tags = sorted(set([*tags, "daily_checkup", checkup_type]))
+    normalized_tags = sorted(set([*tags, "daily_checkup", checkup_type, "insight"]))
 
     if target_entry:
         updated_entry = await kb_service.update_entry(
@@ -1889,7 +1982,7 @@ async def run_morning_checkup(request: DailyCheckupRequest):
             title=f"Morning Checkup - {checkup_date.isoformat()}",
             content=insight_content,
             metadata=response_payload,
-            tags=["planning", "time_entry"],
+            tags=["planning"],
         )
         _persist_checkup_payload_to_db("morning", checkup_date, response_payload)
 
@@ -2247,7 +2340,7 @@ async def run_evening_checkup(request: DailyCheckupRequest):
             title=f"Evening Checkup - {checkup_date.isoformat()}",
             content=insight_content,
             metadata=response_payload,
-            tags=["reflection", "time_entry"],
+            tags=["reflection"],
         )
         _persist_checkup_payload_to_db("evening", checkup_date, response_payload)
 

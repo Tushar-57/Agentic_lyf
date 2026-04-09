@@ -1210,7 +1210,6 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
         () => getQualityTone(embeddingQuality?.status || 'empty'),
         [embeddingQuality?.status],
     )
-    const QualityToneIcon = qualityTone.icon
 
     const dominantEmbeddingDimension = useMemo(() => {
         if (!embeddingQuality?.dimension_histogram) {
@@ -1753,9 +1752,15 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
 
                 {points.length > 0 && (
                     <div className={`absolute left-1/2 z-20 w-[min(44rem,calc(100vw-1rem))] -translate-x-1/2 px-2 sm:px-0 ${isMobileViewport ? 'top-[calc(10.9rem+env(safe-area-inset-top))]' : 'top-[5.65rem]'}`}>
-                        <div className="pointer-events-auto rounded-xl border border-cyan-400/30 bg-slate-950/80 p-2.5 text-white shadow-xl backdrop-blur-sm">
-                            <div className="flex flex-wrap items-center gap-2">
-                                <span className="px-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-300">Focus Lens</span>
+                        <div className="pointer-events-auto relative overflow-hidden rounded-2xl border border-cyan-300/45 bg-slate-950/86 p-3 text-white shadow-[0_22px_60px_-28px_rgba(34,211,238,0.55)] backdrop-blur-md">
+                            <div className="absolute -right-10 -top-16 h-36 w-36 rounded-full bg-cyan-400/12 blur-3xl" />
+                            <div className="absolute -bottom-14 -left-10 h-32 w-32 rounded-full bg-amber-400/12 blur-3xl" />
+
+                            <div className="relative flex flex-wrap items-center gap-2">
+                                <span className="rounded-full border border-cyan-300/45 bg-cyan-500/15 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-100">Focus Lens</span>
+                                <Badge variant="outline" className="border-white/25 bg-white/5 text-[10px] text-white/85">
+                                    Semantic Graph
+                                </Badge>
                                 {FOCUS_PRESET_OPTIONS.map((option) => (
                                     <Button
                                         key={option.value}
@@ -1763,9 +1768,9 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                                         size="sm"
                                         variant="ghost"
                                         onClick={() => setFocusPreset(option.value)}
-                                        className={`h-7 rounded-full px-3 text-xs ${focusPreset === option.value
-                                            ? 'bg-cyan-500/20 text-cyan-100 hover:bg-cyan-500/30'
-                                            : 'text-slate-200 hover:bg-white/10 hover:text-white'
+                                        className={`h-7 rounded-full border px-3 text-xs ${focusPreset === option.value
+                                            ? 'border-cyan-300/60 bg-cyan-500/26 text-cyan-50 shadow-[0_8px_22px_-16px_rgba(34,211,238,0.95)] hover:bg-cyan-500/34'
+                                            : 'border-white/15 text-slate-200 hover:border-white/30 hover:bg-white/10 hover:text-white'
                                             }`}
                                     >
                                         {option.label}
@@ -1773,83 +1778,18 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                                 ))}
                             </div>
 
-                            <div className="mt-2 flex flex-wrap items-center gap-2">
-                                <Badge variant="outline" className="border-amber-300/45 bg-amber-950/35 text-amber-100">
+                            <div className="relative mt-2 flex flex-wrap items-center gap-2">
+                                <Badge variant="outline" className="border-amber-300/50 bg-amber-500/15 text-amber-100">
                                     Insights {insightStats.visibleInsights}/{insightStats.totalInsights}
                                 </Badge>
-                                <Badge variant="outline" className="border-cyan-300/45 bg-cyan-950/35 text-cyan-100">
+                                <Badge variant="outline" className="border-cyan-300/50 bg-cyan-500/12 text-cyan-100">
                                     Nodes {filteredPoints.length}/{processedPoints.length}
                                 </Badge>
                                 {activeFilterCount > 0 && (
-                                    <Badge variant="outline" className="border-slate-300/40 bg-slate-900/50 text-slate-100">
+                                    <Badge variant="outline" className="border-white/25 bg-white/5 text-slate-100">
                                         {activeFilterCount} active filters
                                     </Badge>
                                 )}
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {points.length > 0 && (
-                    <div className={`absolute left-1/2 z-20 w-[min(58rem,calc(100vw-1rem))] -translate-x-1/2 px-2 sm:px-0 ${isMobileViewport ? 'top-[calc(16.2rem+env(safe-area-inset-top))]' : 'top-[9.55rem]'}`}>
-                        <div className="pointer-events-auto rounded-xl border border-white/10 bg-slate-950/80 p-2.5 text-white shadow-xl backdrop-blur-sm">
-                            <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
-                                <div className="rounded-lg border border-sky-400/25 bg-sky-950/20 p-2.5">
-                                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-200">Visibility</p>
-                                    <p className="mt-1 text-xl font-semibold text-white">{filteredPoints.length}</p>
-                                    <p className="text-xs text-sky-100/80">of {processedPoints.length} nodes in view</p>
-                                </div>
-
-                                <div className="rounded-lg border border-amber-400/25 bg-amber-950/20 p-2.5">
-                                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-200">Insight Coverage</p>
-                                    <p className="mt-1 text-xl font-semibold text-white">
-                                        {embeddingQuality ? formatPercent(embeddingQuality.insight_coverage) : '--'}
-                                    </p>
-                                    <p className="text-xs text-amber-100/80">
-                                        {insightStats.visibleInsights}/{insightStats.totalInsights} visible insight nodes
-                                    </p>
-                                </div>
-
-                                <div className="rounded-lg border border-emerald-400/25 bg-emerald-950/20 p-2.5">
-                                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-200">Embedding Integrity</p>
-                                    <div className="mt-1 flex items-center gap-2">
-                                        <QualityToneIcon className="h-4 w-4 text-emerald-200" />
-                                        <p className="text-xl font-semibold text-white">{embeddingQuality ? formatPercent(embeddingQuality.coverage) : '--'}</p>
-                                    </div>
-                                    <p className="text-xs text-emerald-100/80">
-                                        {embeddingQuality ? `${embeddingQuality.zero_signal_embeddings} suspicious vectors` : 'Checking quality...'}
-                                    </p>
-                                </div>
-
-                                <div className="rounded-lg border border-violet-400/25 bg-violet-950/20 p-2.5">
-                                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-violet-200">Integrity Actions</p>
-                                    <div className="mt-1 flex gap-2">
-                                        <Button
-                                            type="button"
-                                            size="sm"
-                                            variant="outline"
-                                            onClick={() => loadEmbeddingQuality(false)}
-                                            disabled={isQualityLoading}
-                                            className="h-7 border-violet-300/40 bg-violet-500/10 text-violet-100 hover:bg-violet-500/20"
-                                        >
-                                            <RefreshCw className={`mr-1 h-3.5 w-3.5 ${isQualityLoading ? 'animate-spin' : ''}`} />
-                                            Scan
-                                        </Button>
-                                        <Button
-                                            type="button"
-                                            size="sm"
-                                            onClick={handleRepairEmbeddings}
-                                            disabled={isRepairingEmbeddings}
-                                            className="h-7 bg-violet-500/80 px-2 text-xs text-white hover:bg-violet-500"
-                                        >
-                                            <Wrench className={`mr-1 h-3.5 w-3.5 ${isRepairingEmbeddings ? 'animate-spin' : ''}`} />
-                                            Repair
-                                        </Button>
-                                    </div>
-                                    <p className="mt-1 line-clamp-1 text-xs text-violet-100/80">
-                                        {lastRepairSummary || 'Run repair if suspicious vectors remain high.'}
-                                    </p>
-                                </div>
                             </div>
                         </div>
                     </div>
