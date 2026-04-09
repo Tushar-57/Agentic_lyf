@@ -560,6 +560,25 @@ def _looks_like_html(value: str) -> bool:
     return bool(re.search(r"</?[a-zA-Z][^>]*>", value))
 
 
+def _is_structured_morning_checkup_html(value: str) -> bool:
+    """Validate that generated morning checkup HTML contains required semantic sections."""
+    if not _looks_like_html(value):
+        return False
+
+    normalized = value.lower()
+    required_tokens = [
+        "daily-checkup",
+        "dc-header",
+        "dc-metrics",
+        "daily-schedule",
+        "dc-timeline",
+        "execution-notes",
+        "dc-journal",
+        "dc-block",
+    ]
+    return all(token in normalized for token in required_tokens)
+
+
 def _parse_hhmm_to_minutes(raw_value: str, default_minutes: int) -> int:
     match = re.match(r"^\s*(\d{1,2}):(\d{2})\s*$", raw_value or "")
     if not match:
@@ -621,6 +640,14 @@ def _build_morning_schedule_blocks(
 ) -> List[Dict[str, Any]]:
     start_minutes, end_minutes = _parse_work_hours_range(work_hours)
     check_in_minutes = _parse_hhmm_to_minutes(check_in_time, start_minutes)
+
+    # Morning checkups should anchor near the start of the work window.
+    # If saved check-in time is too late in the day, reset the schedule anchor.
+    workday_span = max(120, end_minutes - start_minutes)
+    latest_morning_anchor = start_minutes + min(180, workday_span // 3)
+    if check_in_minutes > latest_morning_anchor:
+        check_in_minutes = start_minutes
+
     cursor = max(start_minutes, min(end_minutes - 15, check_in_minutes))
 
     schedule_blocks: List[Dict[str, Any]] = []
@@ -1450,6 +1477,7 @@ async def run_morning_checkup(request: DailyCheckupRequest):
             f"User confidence: {confidence_score if confidence_score > 0 else 'n/a'}\n"
             f"Today existing entries: {len(today_entries)}\n"
             f"Schedule seed blocks: {schedule_seed or 'none'}\n"
+            "Use the schedule seed block times exactly as provided; do not invent or shift block start/end times. "
             "Reason over task priorities, deadlines, habits, and tracked time to produce a practical daily schedule. "
             "Return ONLY valid HTML that can be rendered directly. "
             "Use this exact semantic structure and class names: "
@@ -1469,7 +1497,8 @@ async def run_morning_checkup(request: DailyCheckupRequest):
             style_directive=style_directive,
             force_html=True,
         )
-        llm_html = llm_message.strip() if llm_message and _looks_like_html(llm_message) else None
+        llm_candidate = llm_message.strip() if llm_message and _looks_like_html(llm_message) else None
+        llm_html = llm_candidate if llm_candidate and _is_structured_morning_checkup_html(llm_candidate) else None
         coach_message_html = llm_html or fallback_html
         coach_message = _strip_html_tags(coach_message_html) or fallback_text
 

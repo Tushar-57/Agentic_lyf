@@ -500,7 +500,13 @@ const toRenderableCheckupHtml = (rawMessage?: string) => {
 
   const looksLikeHtml = /<\/?[a-z][\s\S]*>/i.test(normalized)
   if (looksLikeHtml) {
-    return sanitizeCheckupHtml(normalized)
+    const sanitized = sanitizeCheckupHtml(normalized)
+    if (sanitized) {
+      return sanitized
+    }
+
+    const textFallback = stripHtmlTags(normalized)
+    return textFallback ? `<p>${escapeHtml(textFallback)}</p>` : ''
   }
 
   return normalized
@@ -587,7 +593,9 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         ? metadata.coach_message_html
         : undefined
 
-    if (!coachMessage) {
+    const normalizedCoachMessage = coachMessage || stripHtmlTags(coachMessageHtml)
+
+    if (!normalizedCoachMessage && !coachMessageHtml) {
       return null
     }
 
@@ -615,7 +623,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     return {
       date: checkupDate,
       checkup_type: checkupType,
-      coach_message: coachMessage,
+      coach_message: normalizedCoachMessage || '',
       coach_message_html: coachMessageHtml,
       generated_with: generatedWith,
       focus_target: focusTarget,
@@ -628,7 +636,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     }
   }
 
-  const loadLatestCheckups = async () => {
+  const loadLatestCheckups = async (options?: { preserveCurrent?: boolean }) => {
     try {
       const response = await fetch('/api/knowledge/entries?entry_type=insight&category=daily_checkup')
       if (!response.ok) {
@@ -668,8 +676,13 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         }
       }
 
-      setMorningCheckup(latestMorning)
-      setEveningCheckup(latestEvening)
+      if (options?.preserveCurrent) {
+        setMorningCheckup((previous) => latestMorning || previous)
+        setEveningCheckup((previous) => latestEvening || previous)
+      } else {
+        setMorningCheckup(latestMorning)
+        setEveningCheckup(latestEvening)
+      }
     } catch (error) {
       console.error('Failed to load saved checkups:', error)
     }
@@ -851,7 +864,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
 
       // Keep the checkup UX stable: avoid full analytics refresh right after submit.
       // A background checkup-entry refresh is enough to confirm persistence.
-      void loadLatestCheckups()
+      void loadLatestCheckups({ preserveCurrent: true })
     } catch (error) {
       console.error(`Failed to run ${checkupType} checkup:`, error)
       const fallbackMessage = 'Unable to run checkup right now. Please try again.'
