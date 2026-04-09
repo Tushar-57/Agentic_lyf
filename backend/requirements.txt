@@ -52,5 +52,6 @@ isort>=5.12.0
 # Additional useful packages already in your environment
 pandas==2.3.1
 SQLAlchemy==2.0.41
+psycopg2-binary==2.9.9
 PyYAML==6.0.2
 tiktoken==0.11.0

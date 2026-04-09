@@ -2,6 +2,22 @@ const BRIDGE_TOKEN_STORAGE_KEY = 'agentic.bridge.token'
 const BRIDGE_USER_STORAGE_KEY = 'agentic.bridge.user'
 const CONVERSATION_PREFIX = 'agentic.conversation'
 
+function getStoredBridgeUserFallback(): string | null {
+  try {
+    return localStorage.getItem(BRIDGE_USER_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
+function setStoredBridgeUserFallback(value: string): void {
+  try {
+    localStorage.setItem(BRIDGE_USER_STORAGE_KEY, value)
+  } catch {
+    // Ignore storage failures (privacy mode, disabled storage, etc.)
+  }
+}
+
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
   try {
     const segments = token.split('.')
@@ -101,6 +117,7 @@ export function bootstrapAgenticBridgeSession(): void {
   const derivedUserKey = normalizeUserKey(bridgeUserFromUrl) || (bridgeTokenFromUrl ? deriveUserFromToken(bridgeTokenFromUrl) : null)
   if (derivedUserKey) {
     sessionStorage.setItem(BRIDGE_USER_STORAGE_KEY, derivedUserKey)
+    setStoredBridgeUserFallback(derivedUserKey)
   }
 
   if (bridgeTokenFromUrl || bridgeUserFromUrl) {
@@ -121,8 +138,12 @@ export function getAgenticBridgeUserKey(): string {
     return 'single_user'
   }
 
-  const existing = normalizeUserKey(sessionStorage.getItem(BRIDGE_USER_STORAGE_KEY))
+  const existing =
+    normalizeUserKey(sessionStorage.getItem(BRIDGE_USER_STORAGE_KEY))
+    || normalizeUserKey(getStoredBridgeUserFallback())
+
   if (existing) {
+    sessionStorage.setItem(BRIDGE_USER_STORAGE_KEY, existing)
     return existing
   }
 
@@ -130,6 +151,7 @@ export function getAgenticBridgeUserKey(): string {
   const derived = token ? deriveUserFromToken(token) : null
   if (derived) {
     sessionStorage.setItem(BRIDGE_USER_STORAGE_KEY, derived)
+    setStoredBridgeUserFallback(derived)
     return derived
   }
 

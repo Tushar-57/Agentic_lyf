@@ -21,6 +21,7 @@ from app.models.knowledge import (
 )
 from app.services.knowledge_base import get_knowledge_base_service
 from app.services.knowledge_base import reset_knowledge_base_service
+from app.services.checkup_store import DailyCheckupRecord, get_daily_checkup_store
 from app.auth.user_context import get_current_user
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
@@ -162,6 +163,7 @@ async def get_all_entries(
     try:
         kb_service = get_knowledge_base_service()
         entries = await kb_service.get_all_entries(category=category, entry_type=entry_type)
+        entries = _merge_db_checkup_entries(entries, category=category, entry_type=entry_type)
         return entries
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get entries: {str(e)}")
@@ -1079,6 +1081,184 @@ async def _generate_checkup_message(
         return None
 
 
+def _coerce_datetime(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value
+
+    text = str(value or "").strip()
+    if not text:
+        return datetime.now(timezone.utc)
+
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return datetime.now(timezone.utc)
+
+
+def _extract_checkup_identity_from_metadata(metadata: Dict[str, Any]) -> Optional[str]:
+    if not isinstance(metadata, dict):
+        return None
+
+    checkup_type = str(metadata.get("checkup_type", "")).strip().lower()
+    checkup_date = str(metadata.get("checkup_date") or metadata.get("date") or "").strip()[:10]
+    if checkup_type not in {"morning", "evening"} or not checkup_date:
+        return None
+
+    return f"{checkup_type}:{checkup_date}"
+
+
+def _build_checkup_content_from_payload(payload: Dict[str, Any]) -> str:
+    checkup_type = str(payload.get("checkup_type", "")).strip().lower()
+    checkup_date = str(payload.get("checkup_date") or payload.get("date") or "").strip()[:10]
+    coach_message = str(payload.get("coach_message") or "").strip()
+
+    if checkup_type == "morning":
+        focus_target = str(payload.get("focus_target") or "").strip() or "Most important task"
+        return (
+            f"Morning checkup for {checkup_date}\n"
+            f"Focus: {focus_target}\n\n"
+            f"Coach Guidance:\n{coach_message}"
+        )
+
+    wins = payload.get("wins") if isinstance(payload.get("wins"), list) else []
+    tomorrow_focus = payload.get("tomorrow_focus") if isinstance(payload.get("tomorrow_focus"), list) else []
+    wins_lines = "\n".join([f"- {str(item).strip()}" for item in wins if str(item).strip()])
+    tomorrow_lines = "\n".join([f"- {str(item).strip()}" for item in tomorrow_focus if str(item).strip()])
+
+    return (
+        f"Evening checkup for {checkup_date}\n\n"
+        f"Wins:\n{wins_lines or '- n/a'}\n\n"
+        f"Tomorrow Focus:\n{tomorrow_lines or '- n/a'}\n\n"
+        f"Coach Reflection:\n{coach_message}"
+    )
+
+
+def _record_to_knowledge_entry(record: DailyCheckupRecord) -> Optional[KnowledgeEntry]:
+    payload = dict(record.payload or {})
+    payload.setdefault("checkup_type", record.checkup_type)
+    payload.setdefault("date", record.checkup_date.isoformat())
+    payload.setdefault("checkup_date", record.checkup_date.isoformat())
+
+    checkup_type = str(payload.get("checkup_type", "")).strip().lower()
+    if checkup_type not in {"morning", "evening"}:
+        return None
+
+    checkup_date = str(payload.get("checkup_date") or payload.get("date") or "").strip()[:10]
+    if not checkup_date:
+        return None
+
+    title_prefix = "Morning Checkup" if checkup_type == "morning" else "Evening Checkup"
+    entry_id = f"db_daily_checkup::{record.user_id}::{checkup_type}::{checkup_date}"
+
+    return KnowledgeEntry(
+        entry_id=entry_id,
+        user_id=record.user_id,
+        entry_type=KnowledgeEntryType.INSIGHT,
+        entry_sub_type=KnowledgeEntrySubType.MISC_INSIGHT,
+        category="daily_checkup",
+        title=f"{title_prefix} - {checkup_date}",
+        content=_build_checkup_content_from_payload(payload),
+        metadata=payload,
+        tags=sorted({"daily_checkup", checkup_type, "time_entry"}),
+        created_at=_coerce_datetime(record.created_at),
+        updated_at=_coerce_datetime(record.updated_at),
+    )
+
+
+def _merge_db_checkup_entries(
+    entries: List[KnowledgeEntry],
+    *,
+    category: Optional[str],
+    entry_type: Optional[KnowledgeEntryType],
+) -> List[KnowledgeEntry]:
+    wants_insights = entry_type in {None, KnowledgeEntryType.INSIGHT}
+    wants_checkups = category in {None, "daily_checkup"}
+    if not (wants_insights and wants_checkups):
+        return entries
+
+    checkup_store = get_daily_checkup_store()
+    if not checkup_store:
+        return entries
+
+    request_user = get_current_user()
+    db_records = checkup_store.list_checkups_for_user(request_user.storage_key)
+    if not db_records:
+        return entries
+
+    merged_entries = list(entries)
+    existing_index: Dict[str, int] = {}
+
+    for index, entry in enumerate(merged_entries):
+        identity = _extract_checkup_identity_from_metadata(entry.metadata or {})
+        if identity:
+            existing_index[identity] = index
+
+    for record in db_records:
+        db_entry = _record_to_knowledge_entry(record)
+        if not db_entry:
+            continue
+
+        identity = _extract_checkup_identity_from_metadata(db_entry.metadata or {})
+        if not identity:
+            continue
+
+        existing_idx = existing_index.get(identity)
+        if existing_idx is None:
+            existing_index[identity] = len(merged_entries)
+            merged_entries.append(db_entry)
+            continue
+
+        existing_entry = merged_entries[existing_idx]
+        if _coerce_datetime(db_entry.updated_at) > _coerce_datetime(existing_entry.updated_at):
+            merged_entries[existing_idx] = db_entry
+
+    return merged_entries
+
+
+def _persist_checkup_payload_to_db(checkup_type: str, checkup_date: date, payload: Dict[str, Any]) -> None:
+    checkup_store = get_daily_checkup_store()
+    if not checkup_store:
+        return
+
+    request_user = get_current_user()
+    payload_to_store = dict(payload or {})
+    payload_to_store["checkup_type"] = checkup_type
+    payload_to_store["checkup_date"] = checkup_date.isoformat()
+    payload_to_store["date"] = checkup_date.isoformat()
+
+    saved = checkup_store.upsert_checkup(
+        user_id=request_user.storage_key,
+        checkup_type=checkup_type,
+        checkup_date=checkup_date,
+        payload=payload_to_store,
+    )
+    if not saved:
+        logger.warning("Failed to persist %s checkup in database for user=%s", checkup_type, request_user.storage_key)
+
+
+def _load_latest_checkups_from_db() -> Dict[str, Dict[str, Any]]:
+    checkup_store = get_daily_checkup_store()
+    if not checkup_store:
+        return {}
+
+    request_user = get_current_user()
+    latest_records = checkup_store.get_latest_checkups_for_user(request_user.storage_key)
+
+    resolved: Dict[str, Dict[str, Any]] = {}
+    for checkup_type in ("morning", "evening"):
+        record = latest_records.get(checkup_type)
+        if not record:
+            continue
+
+        payload = dict(record.payload or {})
+        payload.setdefault("checkup_type", checkup_type)
+        payload.setdefault("date", record.checkup_date.isoformat())
+        payload.setdefault("checkup_date", record.checkup_date.isoformat())
+        resolved[checkup_type] = payload
+
+    return resolved
+
+
 async def _upsert_checkup_insight(
     kb_service,
     checkup_type: str,
@@ -1689,6 +1869,7 @@ async def run_morning_checkup(request: DailyCheckupRequest):
             metadata=response_payload,
             tags=["planning", "time_entry"],
         )
+        _persist_checkup_payload_to_db("morning", checkup_date, response_payload)
 
         return response_payload
     except HTTPException:
@@ -2046,12 +2227,69 @@ async def run_evening_checkup(request: DailyCheckupRequest):
             metadata=response_payload,
             tags=["reflection", "time_entry"],
         )
+        _persist_checkup_payload_to_db("evening", checkup_date, response_payload)
 
         return response_payload
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate evening checkup: {str(e)}")
+
+
+@router.get("/checkups/latest")
+async def get_latest_checkups():
+    """Get latest morning/evening checkups with database-first retrieval."""
+    try:
+        latest_from_db = _load_latest_checkups_from_db()
+
+        # If DB has both checkups, return directly.
+        if latest_from_db.get("morning") and latest_from_db.get("evening"):
+            return {
+                "morning": latest_from_db.get("morning"),
+                "evening": latest_from_db.get("evening"),
+                "source": "database",
+            }
+
+        kb_service = get_knowledge_base_service()
+        existing_entries = await kb_service.get_all_entries(
+            category="daily_checkup",
+            entry_type=KnowledgeEntryType.INSIGHT,
+        )
+
+        sorted_entries = sorted(
+            existing_entries,
+            key=lambda entry: _coerce_datetime(entry.updated_at or entry.created_at),
+            reverse=True,
+        )
+
+        latest_from_kb: Dict[str, Dict[str, Any]] = {}
+        for entry in sorted_entries:
+            entry_metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+            checkup_type = str(entry_metadata.get("checkup_type", "")).strip().lower()
+            checkup_date = str(entry_metadata.get("checkup_date") or entry_metadata.get("date") or "").strip()[:10]
+
+            if checkup_type not in {"morning", "evening"}:
+                continue
+            if checkup_type in latest_from_kb:
+                continue
+
+            payload = dict(entry_metadata)
+            payload.setdefault("checkup_type", checkup_type)
+            if checkup_date:
+                payload.setdefault("date", checkup_date)
+                payload.setdefault("checkup_date", checkup_date)
+
+            latest_from_kb[checkup_type] = payload
+            if "morning" in latest_from_kb and "evening" in latest_from_kb:
+                break
+
+        return {
+            "morning": latest_from_db.get("morning") or latest_from_kb.get("morning"),
+            "evening": latest_from_db.get("evening") or latest_from_kb.get("evening"),
+            "source": "database" if latest_from_db else "knowledge_base",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load latest checkups: {str(e)}")
 
 
 @router.post("/onboarding")

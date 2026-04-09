@@ -637,6 +637,32 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   }
 
   const loadLatestCheckups = async (options?: { preserveCurrent?: boolean }) => {
+    const applyResolvedCheckups = (latestMorning: DailyCheckupResponse | null, latestEvening: DailyCheckupResponse | null) => {
+      if (options?.preserveCurrent) {
+        setMorningCheckup((previous) => latestMorning || previous)
+        setEveningCheckup((previous) => latestEvening || previous)
+      } else {
+        setMorningCheckup(latestMorning)
+        setEveningCheckup(latestEvening)
+      }
+    }
+
+    try {
+      const latestResponse = await fetch('/api/knowledge/checkups/latest')
+      if (latestResponse.ok) {
+        const latestPayload = await latestResponse.json()
+        const latestMorning = parseStoredCheckup({ metadata: latestPayload?.morning })
+        const latestEvening = parseStoredCheckup({ metadata: latestPayload?.evening })
+
+        if (latestMorning || latestEvening) {
+          applyResolvedCheckups(latestMorning, latestEvening)
+          return
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load latest checkups from database endpoint:', error)
+    }
+
     try {
       const response = await fetch('/api/knowledge/entries?entry_type=insight&category=daily_checkup')
       if (!response.ok) {
@@ -676,13 +702,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         }
       }
 
-      if (options?.preserveCurrent) {
-        setMorningCheckup((previous) => latestMorning || previous)
-        setEveningCheckup((previous) => latestEvening || previous)
-      } else {
-        setMorningCheckup(latestMorning)
-        setEveningCheckup(latestEvening)
-      }
+      applyResolvedCheckups(latestMorning, latestEvening)
     } catch (error) {
       console.error('Failed to load saved checkups:', error)
     }
@@ -902,7 +922,14 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     return trimmed.slice(0, 10)
   }
 
-  const todayDateKey = new Date().toISOString().slice(0, 10)
+  const toLocalDateKey = (value: Date): string => {
+    const year = value.getFullYear()
+    const month = String(value.getMonth() + 1).padStart(2, '0')
+    const day = String(value.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
+  }
+
+  const todayDateKey = toLocalDateKey(new Date())
   const morningCompletedToday = normalizeDateKey(morningCheckup?.date) === todayDateKey
   const eveningCompletedToday = normalizeDateKey(eveningCheckup?.date) === todayDateKey
   const canRunEveningCheckup = morningCompletedToday || eveningCompletedToday
@@ -972,7 +999,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       }
     }
 
-    const yesterdayKey = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    const yesterdayKey = toLocalDateKey(new Date(Date.now() - 24 * 60 * 60 * 1000))
     const dailyEntries = [...analyticsData.interactions.daily].sort((a, b) => a.date.localeCompare(b.date))
 
     const exactYesterday = dailyEntries.find((entry) => entry.date.slice(0, 10) === yesterdayKey)
