@@ -16,7 +16,8 @@ import {
   Brain,
   TrendingUp,
   BarChart3,
-  Target
+  Target,
+  ChevronDown,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -333,16 +334,72 @@ const formatDurationMinutes = (value: unknown): string | null => {
   return `${minutes}m`
 }
 
+const flattenStructuredRecord = (record: Record<string, any>): string => {
+  const preferredKeys = [
+    'title',
+    'name',
+    'label',
+    'summary',
+    'message',
+    'status',
+    'checkup_type',
+    'focus_target',
+    'intent_prompt',
+    'accountability_prompt',
+  ]
+
+  const highlightedParts: string[] = []
+
+  preferredKeys.forEach((key) => {
+    if (!Object.prototype.hasOwnProperty.call(record, key)) {
+      return
+    }
+
+    const rawValue = record[key]
+    if (rawValue === undefined || rawValue === null || rawValue === '') {
+      return
+    }
+
+    if (typeof rawValue === 'object' && rawValue !== null) {
+      return
+    }
+
+    highlightedParts.push(`${toDisplayLabel(key)}: ${formatValue(rawValue)}`)
+  })
+
+  if (highlightedParts.length > 0) {
+    return highlightedParts.slice(0, 3).join(' | ')
+  }
+
+  const scalarPairs = Object.entries(record)
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .filter(([, value]) => typeof value !== 'object' || Array.isArray(value))
+    .slice(0, 4)
+    .map(([key, value]) => `${toDisplayLabel(key)}: ${formatValue(value)}`)
+
+  if (scalarPairs.length > 0) {
+    return scalarPairs.join(' | ')
+  }
+
+  return 'Additional structured context is available.'
+}
+
 const formatValue = (value: unknown): string => {
   if (value === null || value === undefined || value === '') {
     return 'Not provided'
   }
 
   if (typeof value === 'string') {
-    return value
+    const normalizedValue = value
       .replace(/[_-]+/g, ' ')
       .replace(/\s+/g, ' ')
       .trim()
+
+    if (!normalizedValue || normalizedValue === '[object Object]') {
+      return 'Not provided'
+    }
+
+    return normalizedValue
   }
 
   if (typeof value === 'number' || typeof value === 'boolean') {
@@ -356,11 +413,7 @@ const formatValue = (value: unknown): string => {
   }
 
   if (isRecord(value)) {
-    try {
-      return JSON.stringify(value)
-    } catch {
-      return '[Object]'
-    }
+    return flattenStructuredRecord(value)
   }
 
   return String(value)
@@ -401,7 +454,7 @@ const toKeyValueRows = (
 
     rows.push({
       label: toDisplayLabel(key),
-      value: formattedValue.length > 140 ? `${formattedValue.slice(0, 137)}...` : formattedValue,
+      value: formattedValue,
     })
     seenKeys.add(key)
   }
@@ -592,35 +645,125 @@ const buildPresentation = (entry: DisplayKnowledgeEntry): EntryPresentation => {
         8,
       )
 
-  const metadataRows = entry.displayType === 'time_entry'
-    ? toKeyValueRows(
-        {
-          billable,
-          linked_goal: linkedGoal,
-          focus_score: focusScore,
-          energy_score: energyScore,
-          tag_count: entry.tags.length,
-        },
-        ['billable', 'linked_goal', 'focus_score', 'energy_score', 'tag_count'],
-        5,
-        { allowFallback: false },
-      )
-    : toKeyValueRows(
-        { ...metadataRecord, ...contextRecord },
-        ['agent', 'agent_type', 'confidence', 'timestamp'],
-        8,
-        {
-          excludeKeys: [
-            'context',
-            'source',
-            'source_action',
-            'sync_event_key',
-            'time_entry_id',
-            'user_input_length',
-            'response_length',
-          ],
-        },
-      )
+  let metadataRows: Array<{ label: string; value: string }> = []
+
+  if (entry.displayType === 'time_entry') {
+    metadataRows = toKeyValueRows(
+      {
+        billable,
+        linked_goal: linkedGoal,
+        focus_score: focusScore,
+        energy_score: energyScore,
+        tag_count: entry.tags.length,
+      },
+      ['billable', 'linked_goal', 'focus_score', 'energy_score', 'tag_count'],
+      5,
+      { allowFallback: false },
+    )
+  } else if (entry.displayCategory === 'daily_checkup') {
+    const checkupTopRows = toKeyValueRows(
+      {
+        date: metadataRecord.date,
+        checkup_type: metadataRecord.checkup_type,
+        intent_note: metadataRecord.intent_note,
+        reflection_note: metadataRecord.reflection_note,
+        focus_target: metadataRecord.focus_target,
+        generated_with: metadataRecord.generated_with,
+        recommended_projects: metadataRecord.recommended_projects,
+      },
+      [
+        'date',
+        'checkup_type',
+        'focus_target',
+        'intent_note',
+        'reflection_note',
+        'generated_with',
+        'recommended_projects',
+      ],
+      8,
+      { allowFallback: false },
+    )
+
+    const statsRows = isRecord(metadataRecord.stats)
+      ? toKeyValueRows(metadataRecord.stats, [], 8).map((row) => ({
+          ...row,
+          label: `Stats · ${row.label}`,
+        }))
+      : []
+
+    const decisionRows = isRecord(metadataRecord.decision_metrics)
+      ? toKeyValueRows(metadataRecord.decision_metrics, [], 12).map((row) => ({
+          ...row,
+          label: `Decision · ${row.label}`,
+        }))
+      : []
+
+    const journalingRoot = isRecord(metadataRecord.journaling)
+      ? metadataRecord.journaling
+      : isRecord(metadataRecord.reflection_journal)
+        ? metadataRecord.reflection_journal
+        : {}
+
+    const journalingRows = toKeyValueRows(
+      journalingRoot,
+      [
+        'intent_prompt',
+        'accountability_prompt',
+        'recap_prompt',
+        'tomorrow_prompt',
+      ],
+      6,
+      {
+        excludeKeys: ['focus_commitment', 'evidence', 'deadline_pressure', 'habit_anchor'],
+      },
+    ).map((row) => ({
+      ...row,
+      label: `Journaling · ${row.label}`,
+    }))
+
+    const focusCommitment = isRecord(journalingRoot.focus_commitment)
+      ? journalingRoot.focus_commitment
+      : isRecord(journalingRoot.evidence)
+        ? journalingRoot.evidence
+        : {}
+
+    const commitmentRows = toKeyValueRows(
+      focusCommitment,
+      ['priority_focus', 'focus_tasks', 'goal_anchors', 'deep_work_coverage_ratio'],
+      8,
+      {
+        excludeKeys: ['deadline_pressure', 'habit_anchor', 'habit_state'],
+      },
+    ).map((row) => ({
+      ...row,
+      label: `Focus Context · ${row.label}`,
+    }))
+
+    metadataRows = [
+      ...checkupTopRows,
+      ...statsRows,
+      ...decisionRows,
+      ...journalingRows,
+      ...commitmentRows,
+    ]
+  } else {
+    metadataRows = toKeyValueRows(
+      { ...metadataRecord, ...contextRecord },
+      ['agent', 'agent_type', 'confidence', 'timestamp'],
+      12,
+      {
+        excludeKeys: [
+          'context',
+          'source',
+          'source_action',
+          'sync_event_key',
+          'time_entry_id',
+          'user_input_length',
+          'response_length',
+        ],
+      },
+    )
+  }
 
   const conversation = {
     userInput: typeof conversationUserInput === 'string' && conversationUserInput.trim().length > 0
@@ -702,8 +845,9 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
   const [stats, setStats] = useState<KnowledgeStats | null>(null)
   const [profileSnapshot, setProfileSnapshot] = useState<OnboardingProfileSnapshot | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
-  const [selectedCategory, setSelectedCategory] = useState<string>('all')
-  const [selectedType, setSelectedType] = useState<string>('all')
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([])
+  const [selectedTypes, setSelectedTypes] = useState<string[]>([])
+  const [expandedEntries, setExpandedEntries] = useState<Record<string, boolean>>({})
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null)
@@ -847,6 +991,34 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
     })
     .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
 
+  const categoryOptions = [...new Set(displayEntries.map((entry) => entry.displayCategory))].sort((left, right) =>
+    left.localeCompare(right),
+  )
+  const typeOptions = [...new Set(displayEntries.map((entry) => entry.displayType))].sort((left, right) =>
+    left.localeCompare(right),
+  )
+
+  const toggleCategorySelection = (category: string) => {
+    setSelectedCategories((previous) => (
+      previous.includes(category)
+        ? previous.filter((item) => item !== category)
+        : [...previous, category]
+    ))
+  }
+
+  const toggleTypeSelection = (type: string) => {
+    setSelectedTypes((previous) => (
+      previous.includes(type)
+        ? previous.filter((item) => item !== type)
+        : [...previous, type]
+    ))
+  }
+
+  const clearAllFilters = () => {
+    setSelectedCategories([])
+    setSelectedTypes([])
+  }
+
   // Filter entries based on search and filters
   const filteredEntries = displayEntries.filter(entry => {
     const matchesSearch = searchQuery === '' || 
@@ -855,14 +1027,11 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
       entry.content.toLowerCase().includes(searchQuery.toLowerCase()) ||
       entry.tags.some(tag => tag.toLowerCase().includes(searchQuery.toLowerCase()))
     
-    const matchesCategory = selectedCategory === 'all' || entry.displayCategory === selectedCategory
-    const matchesType = selectedType === 'all' || entry.displayType === selectedType
+    const matchesCategory = selectedCategories.length === 0 || selectedCategories.includes(entry.displayCategory)
+    const matchesType = selectedTypes.length === 0 || selectedTypes.includes(entry.displayType)
     
     return matchesSearch && matchesCategory && matchesType
   })
-
-  const categories = ['all', ...new Set(displayEntries.map((entry) => entry.displayCategory))]
-  const types = ['all', ...new Set(displayEntries.map((entry) => entry.displayType))]
   const totalEntriesCount = displayEntries.length
 
   const preferencesCount = displayEntries.filter((entry) =>
@@ -1148,7 +1317,7 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
 
       {/* Search and Filters */}
       <Card className="border-border/70 bg-white/75 p-4 shadow-sm dark:bg-slate-900/60">
-        <div className="flex flex-col sm:flex-row gap-4">
+        <div className="flex flex-col gap-4 sm:flex-row">
           <div className="flex-1 relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
@@ -1158,33 +1327,117 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
               className="pl-10"
             />
           </div>
-          
-          <div className="flex gap-2">
-            <select
-              value={selectedCategory}
-              onChange={(e) => setSelectedCategory(e.target.value)}
-              className="rounded-xl border border-border/70 bg-white/75 px-3 py-2 text-sm shadow-sm dark:bg-slate-900/60"
-            >
-              {categories.map(category => (
-                <option key={category} value={category}>
-                  {category === 'all' ? 'All Categories' : toDisplayLabel(category)}
-                </option>
-              ))}
-            </select>
-            
-            <select
-              value={selectedType}
-              onChange={(e) => setSelectedType(e.target.value)}
-              className="rounded-xl border border-border/70 bg-white/75 px-3 py-2 text-sm shadow-sm dark:bg-slate-900/60"
-            >
-              {types.map(type => (
-                <option key={type} value={type}>
-                  {type === 'all' ? 'All Types' : toDisplayLabel(type)}
-                </option>
-              ))}
-            </select>
+
+          <div className="flex flex-wrap items-start gap-2">
+            <details className="group relative">
+              <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl border border-border/70 bg-white/75 px-3 py-2 text-sm shadow-sm dark:bg-slate-900/60">
+                <Filter className="h-4 w-4 text-muted-foreground" />
+                Categories
+                <Badge variant="secondary" className="ml-1 text-[10px]">
+                  {selectedCategories.length === 0 ? 'All' : selectedCategories.length}
+                </Badge>
+                <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="absolute right-0 z-20 mt-2 w-64 rounded-xl border border-border/70 bg-background p-3 shadow-xl">
+                <div className="mb-2 flex items-center justify-between">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Categories</p>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCategories([])}
+                    className="text-[11px] font-medium text-primary hover:underline"
+                  >
+                    Clear
+                  </button>
+                </div>
+                <div className="max-h-64 space-y-1 overflow-y-auto pr-1">
+                  {categoryOptions.map((category) => (
+                    <label key={category} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-muted/60">
+                      <input
+                        type="checkbox"
+                        checked={selectedCategories.includes(category)}
+                        onChange={() => toggleCategorySelection(category)}
+                        className="h-3.5 w-3.5"
+                      />
+                      <span className="truncate">{toDisplayLabel(category)}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </details>
+
+            <details className="group relative">
+              <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl border border-border/70 bg-white/75 px-3 py-2 text-sm shadow-sm dark:bg-slate-900/60">
+                <Tag className="h-4 w-4 text-muted-foreground" />
+                Types
+                <Badge variant="secondary" className="ml-1 text-[10px]">
+                  {selectedTypes.length === 0 ? 'All' : selectedTypes.length}
+                </Badge>
+                <ChevronDown className="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="absolute right-0 z-20 mt-2 w-64 rounded-xl border border-border/70 bg-background p-3 shadow-xl">
+                <div className="mb-2 flex items-center justify-between">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Types</p>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTypes([])}
+                    className="text-[11px] font-medium text-primary hover:underline"
+                  >
+                    Clear
+                  </button>
+                </div>
+                <div className="max-h-64 space-y-1 overflow-y-auto pr-1">
+                  {typeOptions.map((type) => (
+                    <label key={type} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-muted/60">
+                      <input
+                        type="checkbox"
+                        checked={selectedTypes.includes(type)}
+                        onChange={() => toggleTypeSelection(type)}
+                        className="h-3.5 w-3.5"
+                      />
+                      <span className="truncate">{toDisplayLabel(type)}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </details>
+
+            {(selectedCategories.length > 0 || selectedTypes.length > 0) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={clearAllFilters}
+                className="h-9 rounded-xl px-3 text-xs"
+              >
+                Clear Filters
+              </Button>
+            )}
           </div>
         </div>
+
+        {(selectedCategories.length > 0 || selectedTypes.length > 0) && (
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {selectedCategories.map((category) => (
+              <button
+                key={`selected-category-${category}`}
+                type="button"
+                onClick={() => toggleCategorySelection(category)}
+                className="rounded-full border border-border/70 bg-muted/40 px-2 py-1 text-[11px]"
+              >
+                Category: {toDisplayLabel(category)}
+              </button>
+            ))}
+            {selectedTypes.map((type) => (
+              <button
+                key={`selected-type-${type}`}
+                type="button"
+                onClick={() => toggleTypeSelection(type)}
+                className="rounded-full border border-border/70 bg-muted/40 px-2 py-1 text-[11px]"
+              >
+                Type: {toDisplayLabel(type)}
+              </button>
+            ))}
+          </div>
+        )}
       </Card>
 
       {/* Entries List */}
@@ -1195,6 +1448,11 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
             const colorClass = getEntryColor(entry.displayType)
             const tileStyle = getEntryTileStyle(entry.displayType)
             const presentation = buildPresentation(entry)
+            const isEntryExpanded = Boolean(expandedEntries[entry.entry_id])
+            const summaryPreview = presentation.summary.length > 220
+              ? `${presentation.summary.slice(0, 217)}...`
+              : presentation.summary
+            const previewHighlights = presentation.highlights.slice(0, 2)
             
             return (
               <motion.div
@@ -1257,8 +1515,8 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
                           </div>
                         </div>
 
-                        {(entry.displayType === 'preference' || entry.displayType === 'user_preference') && onEditPreferences && (
-                          <div className="flex gap-1 flex-shrink-0">
+                        <div className="flex flex-shrink-0 items-center gap-1">
+                          {(entry.displayType === 'preference' || entry.displayType === 'user_preference') && onEditPreferences && (
                             <Button
                               variant="ghost"
                               size="icon"
@@ -1267,96 +1525,128 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
                             >
                               <Edit3 className="w-4 h-4" />
                             </Button>
-                          </div>
-                        )}
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 gap-1 px-2 text-[11px]"
+                            onClick={() => {
+                              setExpandedEntries((previous) => ({
+                                ...previous,
+                                [entry.entry_id]: !previous[entry.entry_id],
+                              }))
+                            }}
+                          >
+                            {isEntryExpanded ? 'Collapse' : 'Expand'}
+                            <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', isEntryExpanded && 'rotate-180')} />
+                          </Button>
+                        </div>
                       </div>
                       
                       <p className="text-muted-foreground mb-3 break-words whitespace-pre-wrap text-sm leading-relaxed">
-                        {presentation.summary}
+                        {isEntryExpanded ? presentation.summary : summaryPreview}
                       </p>
 
-                      {presentation.conversation?.userInput && (
-                        <div className="mb-3 rounded-lg border border-blue-200/60 bg-blue-50/50 p-3 dark:border-blue-900/60 dark:bg-blue-950/25">
-                          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">
-                            User Input
-                          </p>
-                          <p className="max-h-24 overflow-y-auto whitespace-pre-wrap break-words text-sm text-blue-900 dark:text-blue-100">
-                            {presentation.conversation.userInput}
-                          </p>
-                        </div>
-                      )}
-
-                      {presentation.conversation?.agentResponse && (
-                        <div className="mb-3 rounded-lg border border-emerald-200/60 bg-emerald-50/40 p-3 dark:border-emerald-900/60 dark:bg-emerald-950/20">
-                          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">
-                            AI Response
-                          </p>
-                          <p className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words text-sm text-emerald-900 dark:text-emerald-100">
-                            {presentation.conversation.agentResponse}
-                          </p>
-                        </div>
-                      )}
-
-                      {presentation.highlights.length > 0 && (
+                      {!isEntryExpanded && previewHighlights.length > 0 && (
                         <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                          {presentation.highlights.slice(0, 4).map((item, itemIndex) => {
-                            const HighlightIcon = item.icon || Tag
-
-                            return (
-                              <div
-                                key={`${entry.entry_id}-highlight-${itemIndex}`}
-                                className="flex items-start gap-2 rounded-lg border border-border/60 bg-muted/30 px-2 py-1.5"
-                              >
-                                <HighlightIcon className="mt-0.5 h-3.5 w-3.5 text-muted-foreground" />
-                                <div className="min-w-0">
-                                  <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{item.label}</p>
-                                  <p className="truncate text-xs font-medium text-foreground">{item.value}</p>
-                                </div>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      )}
-
-                      {presentation.contentRows.length > 0 && (
-                        <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                          {presentation.contentRows.map((row, rowIndex) => (
+                          {previewHighlights.map((item, itemIndex) => (
                             <div
-                              key={`${entry.entry_id}-content-row-${rowIndex}`}
+                              key={`${entry.entry_id}-preview-highlight-${itemIndex}`}
                               className="rounded-lg border border-border/60 bg-muted/20 px-2 py-1.5"
                             >
-                              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{row.label}</p>
-                              <p className="break-words text-xs font-medium text-foreground">{row.value}</p>
+                              <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{item.label}</p>
+                              <p className="truncate text-xs font-medium text-foreground">{item.value}</p>
                             </div>
                           ))}
                         </div>
                       )}
 
-                      {presentation.metadataRows.length > 0 && (
-                        <details className="mb-3 rounded-lg border border-border/60 bg-muted/15 px-3 py-2">
-                          <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                            AI Additional Context
-                          </summary>
-                          <div className="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2">
-                            {presentation.metadataRows.map((row, rowIndex) => (
-                              <div key={`${entry.entry_id}-metadata-row-${rowIndex}`} className="min-w-0">
-                                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{row.label}</p>
-                                <p className="break-words text-xs text-foreground">{row.value}</p>
+                      {isEntryExpanded && (
+                        <>
+                          {presentation.conversation?.userInput && (
+                            <div className="mb-3 rounded-lg border border-blue-200/60 bg-blue-50/50 p-3 dark:border-blue-900/60 dark:bg-blue-950/25">
+                              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">
+                                User Input
+                              </p>
+                              <p className="max-h-24 overflow-y-auto whitespace-pre-wrap break-words text-sm text-blue-900 dark:text-blue-100">
+                                {presentation.conversation.userInput}
+                              </p>
+                            </div>
+                          )}
+
+                          {presentation.conversation?.agentResponse && (
+                            <div className="mb-3 rounded-lg border border-emerald-200/60 bg-emerald-50/40 p-3 dark:border-emerald-900/60 dark:bg-emerald-950/20">
+                              <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">
+                                AI Response
+                              </p>
+                              <p className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words text-sm text-emerald-900 dark:text-emerald-100">
+                                {presentation.conversation.agentResponse}
+                              </p>
+                            </div>
+                          )}
+
+                          {presentation.highlights.length > 0 && (
+                            <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                              {presentation.highlights.slice(0, 4).map((item, itemIndex) => {
+                                const HighlightIcon = item.icon || Tag
+
+                                return (
+                                  <div
+                                    key={`${entry.entry_id}-highlight-${itemIndex}`}
+                                    className="flex items-start gap-2 rounded-lg border border-border/60 bg-muted/30 px-2 py-1.5"
+                                  >
+                                    <HighlightIcon className="mt-0.5 h-3.5 w-3.5 text-muted-foreground" />
+                                    <div className="min-w-0">
+                                      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{item.label}</p>
+                                      <p className="truncate text-xs font-medium text-foreground">{item.value}</p>
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+
+                          {presentation.contentRows.length > 0 && (
+                            <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                              {presentation.contentRows.map((row, rowIndex) => (
+                                <div
+                                  key={`${entry.entry_id}-content-row-${rowIndex}`}
+                                  className="rounded-lg border border-border/60 bg-muted/20 px-2 py-1.5"
+                                >
+                                  <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{row.label}</p>
+                                  <p className="break-words text-xs font-medium text-foreground">{row.value}</p>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {presentation.metadataRows.length > 0 && (
+                            <details className="mb-3 rounded-lg border border-border/60 bg-muted/15 px-3 py-2">
+                              <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                AI Additional Context
+                              </summary>
+                              <div className="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2">
+                                {presentation.metadataRows.map((row, rowIndex) => (
+                                  <div key={`${entry.entry_id}-metadata-row-${rowIndex}`} className="min-w-0">
+                                    <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{row.label}</p>
+                                    <p className="break-words whitespace-pre-wrap text-xs text-foreground">{row.value}</p>
+                                  </div>
+                                ))}
                               </div>
-                            ))}
-                          </div>
-                        </details>
-                      )}
-                      
-                      {entry.tags.length > 0 && (
-                        <div className="flex flex-wrap gap-1">
-                          {entry.tags.map((tag, tagIndex) => (
-                            <Badge key={`${entry.entry_id}-tag-${tagIndex}`} variant="outline" className="text-xs">
-                              <Tag className="w-3 h-3 mr-1" />
-                              {tag}
-                            </Badge>
-                          ))}
-                        </div>
+                            </details>
+                          )}
+
+                          {entry.tags.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {entry.tags.map((tag, tagIndex) => (
+                                <Badge key={`${entry.entry_id}-tag-${tagIndex}`} variant="outline" className="text-xs">
+                                  <Tag className="w-3 h-3 mr-1" />
+                                  {tag}
+                                </Badge>
+                              ))}
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
                   </div>
@@ -1371,7 +1661,7 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
             <Database className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
             <h3 className="text-lg font-semibold mb-2">No entries found</h3>
             <p className="text-muted-foreground">
-              {searchQuery || selectedCategory !== 'all' || selectedType !== 'all'
+              {searchQuery || selectedCategories.length > 0 || selectedTypes.length > 0
                 ? 'Try adjusting your search or filters'
                 : 'Your knowledge base is empty. Start interacting with agents to build your knowledge base.'}
             </p>

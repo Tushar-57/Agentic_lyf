@@ -23,6 +23,7 @@ const BUILTIN_ALTEREGO_RETURN_ORIGINS = [
   'http://localhost:5173',
   'http://localhost:3000',
 ]
+const SUPPORTED_VIEWS = ['chat', 'onboarding', 'knowledge', 'analytics', 'activity', 'profile'] as const
 
 interface Message {
   id: string
@@ -217,6 +218,16 @@ function App() {
   const mobileContentInsetClass = isMobile && !isEmbedMode
     ? 'pb-[calc(5.2rem+env(safe-area-inset-bottom))]'
     : ''
+  useEffect(() => {
+    const requestedView = new URLSearchParams(window.location.search).get('view')
+    if (!requestedView) {
+      return
+    }
+
+    if ((SUPPORTED_VIEWS as readonly string[]).includes(requestedView)) {
+      setCurrentView(requestedView)
+    }
+  }, [])
 
   // Theme management
   useEffect(() => {
@@ -680,7 +691,7 @@ function App() {
 
       {/* Sidebar */}
       {!isEmbedMode && (
-        <div className="relative z-20">
+        <div className={cn("relative z-20", !isMobile && "sticky top-0 h-[100dvh] self-start")}>
           <Sidebar
             collapsed={sidebarCollapsed}
             onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}

@@ -83,6 +83,7 @@ interface DailyCheckupResponse {
   date: string
   checkup_type: 'morning' | 'evening'
   coach_message: string
+  coach_message_html?: string
   generated_with: 'llm' | 'fallback' | string
   focus_target?: string
   intent_note?: string | null
@@ -142,6 +143,149 @@ interface CheckupFormState {
 type CheckupSectionKey = 'context' | 'planning' | 'focus' | 'execution' | 'notes'
 
 const DAILY_CHECKUP_MODAL_HINT_KEY = 'agentic-daily-checkup-modal-hint'
+
+const PREMIUM_CHECKUP_HTML_CLASSNAMES = [
+  'text-sm leading-relaxed text-foreground',
+  '[&_.daily-checkup]:space-y-4',
+  '[&_.dc-header]:rounded-2xl',
+  '[&_.dc-header]:border',
+  '[&_.dc-header]:border-slate-200/80',
+  '[&_.dc-header]:bg-gradient-to-br',
+  '[&_.dc-header]:from-slate-50/95',
+  '[&_.dc-header]:via-cyan-50/70',
+  '[&_.dc-header]:to-white',
+  '[&_.dc-header]:p-4',
+  'dark:[&_.dc-header]:border-slate-700/70',
+  'dark:[&_.dc-header]:from-slate-900/80',
+  'dark:[&_.dc-header]:via-cyan-950/40',
+  'dark:[&_.dc-header]:to-slate-900/90',
+  '[&_.dc-badge-row]:mb-2',
+  '[&_.dc-badge-row]:flex',
+  '[&_.dc-badge-row]:items-center',
+  '[&_.dc-badge-row]:justify-between',
+  '[&_.dc-kicker]:inline-flex',
+  '[&_.dc-kicker]:rounded-full',
+  '[&_.dc-kicker]:bg-cyan-100',
+  '[&_.dc-kicker]:px-2.5',
+  '[&_.dc-kicker]:py-1',
+  '[&_.dc-kicker]:text-[10px]',
+  '[&_.dc-kicker]:font-semibold',
+  '[&_.dc-kicker]:uppercase',
+  '[&_.dc-kicker]:tracking-[0.12em]',
+  '[&_.dc-kicker]:text-cyan-700',
+  'dark:[&_.dc-kicker]:bg-cyan-900/50',
+  'dark:[&_.dc-kicker]:text-cyan-100',
+  '[&_.dc-date]:text-xs',
+  '[&_.dc-date]:font-medium',
+  '[&_.dc-date]:text-slate-500',
+  'dark:[&_.dc-date]:text-slate-300',
+  '[&_.dc-focus]:text-base',
+  '[&_.dc-focus]:font-semibold',
+  '[&_.dc-focus]:tracking-tight',
+  '[&_.dc-subtitle]:mt-1',
+  '[&_.dc-subtitle]:text-xs',
+  '[&_.dc-subtitle]:text-slate-600',
+  'dark:[&_.dc-subtitle]:text-slate-300',
+  '[&_.dc-metrics]:grid',
+  '[&_.dc-metrics]:grid-cols-1',
+  '[&_.dc-metrics]:gap-2',
+  'sm:[&_.dc-metrics]:grid-cols-3',
+  '[&_.dc-metric]:rounded-xl',
+  '[&_.dc-metric]:border',
+  '[&_.dc-metric]:border-slate-200/80',
+  '[&_.dc-metric]:bg-slate-50/80',
+  '[&_.dc-metric]:px-3',
+  '[&_.dc-metric]:py-2.5',
+  'dark:[&_.dc-metric]:border-slate-700/70',
+  'dark:[&_.dc-metric]:bg-slate-800/60',
+  '[&_.dc-metric-label]:text-[11px]',
+  '[&_.dc-metric-label]:font-medium',
+  '[&_.dc-metric-label]:uppercase',
+  '[&_.dc-metric-label]:tracking-wide',
+  '[&_.dc-metric-label]:text-slate-500',
+  'dark:[&_.dc-metric-label]:text-slate-300',
+  '[&_.dc-metric-value]:mt-1',
+  '[&_.dc-metric-value]:text-lg',
+  '[&_.dc-metric-value]:font-semibold',
+  '[&_.dc-metric-value]:text-slate-900',
+  'dark:[&_.dc-metric-value]:text-slate-100',
+  '[&_.dc-panel]:rounded-2xl',
+  '[&_.dc-panel]:border',
+  '[&_.dc-panel]:border-slate-200/70',
+  '[&_.dc-panel]:bg-white/80',
+  '[&_.dc-panel]:p-4',
+  'dark:[&_.dc-panel]:border-slate-700/70',
+  'dark:[&_.dc-panel]:bg-slate-900/60',
+  '[&_.dc-panel-title]:text-xs',
+  '[&_.dc-panel-title]:font-semibold',
+  '[&_.dc-panel-title]:uppercase',
+  '[&_.dc-panel-title]:tracking-[0.12em]',
+  '[&_.dc-panel-title]:text-slate-600',
+  'dark:[&_.dc-panel-title]:text-slate-200',
+  '[&_.dc-panel-subtitle]:mt-1',
+  '[&_.dc-panel-subtitle]:text-xs',
+  '[&_.dc-panel-subtitle]:text-slate-500',
+  'dark:[&_.dc-panel-subtitle]:text-slate-300',
+  '[&_.dc-timeline]:mt-3',
+  '[&_.dc-timeline]:space-y-2.5',
+  '[&_.dc-block]:list-none',
+  '[&_.dc-block]:rounded-xl',
+  '[&_.dc-block]:border',
+  '[&_.dc-block]:p-3',
+  '[&_.dc-block]:shadow-sm',
+  '[&_.dc-block--high]:border-rose-200',
+  '[&_.dc-block--high]:bg-rose-50/80',
+  '[&_.dc-block--medium]:border-amber-200',
+  '[&_.dc-block--medium]:bg-amber-50/80',
+  '[&_.dc-block--low]:border-emerald-200',
+  '[&_.dc-block--low]:bg-emerald-50/80',
+  'dark:[&_.dc-block--high]:border-rose-800/70',
+  'dark:[&_.dc-block--high]:bg-rose-950/30',
+  'dark:[&_.dc-block--medium]:border-amber-800/70',
+  'dark:[&_.dc-block--medium]:bg-amber-950/30',
+  'dark:[&_.dc-block--low]:border-emerald-800/70',
+  'dark:[&_.dc-block--low]:bg-emerald-950/30',
+  '[&_.dc-time-wrap]:mb-1.5',
+  '[&_.dc-time-wrap]:flex',
+  '[&_.dc-time-wrap]:items-center',
+  '[&_.dc-time-wrap]:justify-between',
+  '[&_.dc-time]:text-[11px]',
+  '[&_.dc-time]:font-semibold',
+  '[&_.dc-time]:tracking-wide',
+  '[&_.dc-time]:text-slate-700',
+  'dark:[&_.dc-time]:text-slate-100',
+  '[&_.dc-priority]:text-[10px]',
+  '[&_.dc-priority]:font-semibold',
+  '[&_.dc-priority]:uppercase',
+  '[&_.dc-priority]:tracking-[0.12em]',
+  '[&_.dc-priority]:text-slate-500',
+  'dark:[&_.dc-priority]:text-slate-300',
+  '[&_.dc-block-title]:text-sm',
+  '[&_.dc-block-title]:font-semibold',
+  '[&_.dc-block-title]:text-slate-900',
+  'dark:[&_.dc-block-title]:text-slate-100',
+  '[&_.dc-block-reason]:mt-1',
+  '[&_.dc-block-reason]:text-xs',
+  '[&_.dc-block-reason]:leading-relaxed',
+  '[&_.dc-block-reason]:text-slate-600',
+  'dark:[&_.dc-block-reason]:text-slate-300',
+  '[&_.dc-notes]:mt-3',
+  '[&_.dc-notes]:space-y-1.5',
+  '[&_.dc-notes]:pl-4',
+  '[&_.dc-notes>li]:list-disc',
+  '[&_.dc-notes>li]:text-xs',
+  '[&_.dc-notes>li]:leading-relaxed',
+  '[&_.dc-journal]:bg-gradient-to-br',
+  '[&_.dc-journal]:from-slate-50/90',
+  '[&_.dc-journal]:to-cyan-50/70',
+  'dark:[&_.dc-journal]:from-slate-900/80',
+  'dark:[&_.dc-journal]:to-cyan-950/40',
+  '[&_.dc-journal-q]:mt-2',
+  '[&_.dc-journal-q]:text-xs',
+  '[&_.dc-journal-q]:leading-relaxed',
+  '[&_.dc-journal-q]:text-slate-700',
+  'dark:[&_.dc-journal-q]:text-slate-200',
+].join(' ')
 
 const createInitialCheckupForm = (): CheckupFormState => ({
   topPriority: '',
@@ -290,8 +434,85 @@ const formatCheckupTime = (checkupDate: string | undefined) => {
   })
 }
 
+const stripHtmlTags = (value?: string) => {
+  const normalized = (value || '').trim()
+  if (!normalized) {
+    return ''
+  }
+
+  return normalized
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+const escapeHtml = (value: string) =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+
+const sanitizeCheckupHtml = (value: string) => {
+  if (typeof window === 'undefined') {
+    return value
+  }
+
+  const parser = new window.DOMParser()
+  const documentFragment = parser.parseFromString(value, 'text/html')
+
+  documentFragment
+    .querySelectorAll('script, style, iframe, object, embed, link, meta')
+    .forEach((element) => element.remove())
+
+  documentFragment.querySelectorAll('*').forEach((element) => {
+    Array.from(element.attributes).forEach((attribute) => {
+      const attributeName = attribute.name.toLowerCase()
+      const attributeValue = attribute.value || ''
+
+      if (attributeName.startsWith('on')) {
+        element.removeAttribute(attribute.name)
+        return
+      }
+
+      if (attributeName === 'style') {
+        element.removeAttribute(attribute.name)
+        return
+      }
+
+      if ((attributeName === 'href' || attributeName === 'src') && /^\s*javascript:/i.test(attributeValue)) {
+        element.removeAttribute(attribute.name)
+      }
+    })
+  })
+
+  return documentFragment.body.innerHTML.trim()
+}
+
+const toRenderableCheckupHtml = (rawMessage?: string) => {
+  const normalized = (rawMessage || '').trim()
+  if (!normalized) {
+    return ''
+  }
+
+  const looksLikeHtml = /<\/?[a-z][\s\S]*>/i.test(normalized)
+  if (looksLikeHtml) {
+    return sanitizeCheckupHtml(normalized)
+  }
+
+  return normalized
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => `<p>${escapeHtml(line)}</p>`)
+    .join('')
+}
+
 const summarizeCheckupMessage = (message?: string) => {
-  const normalized = (message || '').trim().replace(/\s+/g, ' ')
+  const normalized = stripHtmlTags(message).replace(/\s+/g, ' ')
   if (!normalized) {
     return 'No checkup result yet.'
   }
@@ -361,6 +582,11 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         ? metadata.coach_message
         : (entry.content || '').trim()
 
+    const coachMessageHtml =
+      typeof metadata.coach_message_html === 'string' && metadata.coach_message_html.trim()
+        ? metadata.coach_message_html
+        : undefined
+
     if (!coachMessage) {
       return null
     }
@@ -390,6 +616,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       date: checkupDate,
       checkup_type: checkupType,
       coach_message: coachMessage,
+      coach_message_html: coachMessageHtml,
       generated_with: generatedWith,
       focus_target: focusTarget,
       intent_note: intentNote,
@@ -473,8 +700,12 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     }
   }
 
-  const loadAnalyticsData = async () => {
-    setIsLoading(true)
+  const loadAnalyticsData = async (options?: { silent?: boolean }) => {
+    const shouldToggleLoading = !options?.silent
+    if (shouldToggleLoading) {
+      setIsLoading(true)
+    }
+
     try {
       const response = await fetch(`/api/knowledge/analytics?range=${selectedTimeRange}`)
       if (!response.ok) {
@@ -561,7 +792,9 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       console.error('Failed to load analytics data:', error)
       setAnalyticsData(null)
     } finally {
-      setIsLoading(false)
+      if (shouldToggleLoading) {
+        setIsLoading(false)
+      }
     }
   }
 
@@ -580,7 +813,21 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       })
 
       if (!response.ok) {
-        throw new Error(`Checkup failed with status ${response.status}`)
+        let errorDetail = `Checkup failed with status ${response.status}`
+        try {
+          const errorPayload = await response.json()
+          const candidate =
+            (typeof errorPayload?.detail === 'string' && errorPayload.detail.trim()) ||
+            (typeof errorPayload?.message === 'string' && errorPayload.message.trim())
+
+          if (candidate) {
+            errorDetail = candidate
+          }
+        } catch {
+          // Ignore JSON parse failures and keep status-based fallback detail.
+        }
+
+        throw new Error(errorDetail)
       }
 
       const payload = (await response.json()) as DailyCheckupResponse
@@ -602,10 +849,13 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         }))
       }
 
-      await Promise.all([loadAnalyticsData(), loadLatestCheckups()])
+      // Keep the checkup UX stable: avoid full analytics refresh right after submit.
+      // A background checkup-entry refresh is enough to confirm persistence.
+      void loadLatestCheckups()
     } catch (error) {
       console.error(`Failed to run ${checkupType} checkup:`, error)
-      setCheckupError('Unable to run checkup right now. Please try again.')
+      const fallbackMessage = 'Unable to run checkup right now. Please try again.'
+      setCheckupError(error instanceof Error && error.message ? error.message : fallbackMessage)
     } finally {
       setCheckupLoading(null)
     }
@@ -775,6 +1025,14 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
 
   const activeCheckup = activeCheckupFlow === 'morning' ? morningCheckup : eveningCheckup
   const activeForm = activeCheckupFlow === 'morning' ? morningForm : eveningForm
+  const activeCheckupRenderedHtml = useMemo(() => {
+    const messageSource =
+      (activeCheckup?.coach_message_html && activeCheckup.coach_message_html.trim())
+        ? activeCheckup.coach_message_html
+        : activeCheckup?.coach_message
+
+    return toRenderableCheckupHtml(messageSource)
+  }, [activeCheckup?.coach_message, activeCheckup?.coach_message_html])
 
   const updateActiveFormField = <K extends keyof CheckupFormState>(field: K, value: CheckupFormState[K]) => {
     if (activeCheckupFlow === 'morning') {
@@ -990,6 +1248,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         <div className="flex flex-wrap gap-2">
           {(['7d', '30d', '90d'] as const).map((range) => (
             <button
+              type="button"
               key={range}
               onClick={() => setSelectedTimeRange(range)}
               className={cn(
@@ -1114,6 +1373,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                 : 'Evening checkup unlocks after morning checkup to preserve strategic sequence.'}
             </p>
             <Button
+              type="button"
               onClick={() => openCheckupFlow('evening')}
               variant="secondary"
               className="w-full gap-2"
@@ -1133,8 +1393,8 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       </Card>
 
       {isCheckupModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
-          <div className="flex h-[80vh] w-[min(1100px,94vw)] flex-col overflow-hidden rounded-2xl border border-border/70 bg-background shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/60 p-2 pt-[calc(1rem+env(safe-area-inset-top))] backdrop-blur-sm sm:items-center sm:p-4">
+          <div className="flex h-[100dvh] w-[min(1100px,96vw)] flex-col overflow-hidden rounded-xl border border-border/70 bg-background shadow-2xl sm:h-[88vh] sm:rounded-2xl">
             <div className="flex items-start justify-between gap-4 border-b border-border/70 px-5 py-4">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Interactive Daily Checkup</p>
@@ -1142,6 +1402,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                 <p className="mt-1 text-sm text-muted-foreground">{checkupSubLabel}</p>
               </div>
               <Button
+                type="button"
                 variant="ghost"
                 size="icon"
                 onClick={() => setIsCheckupModalOpen(false)}
@@ -1186,8 +1447,8 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
               </div>
             </div>
 
-            <div className="grid flex-1 overflow-hidden lg:grid-cols-[1.15fr,1fr]">
-              <div className="overflow-y-auto border-b border-border/60 p-5 lg:border-b-0 lg:border-r">
+            <div className="grid min-h-0 flex-1 overflow-y-auto lg:grid-cols-[1.15fr,1fr] lg:overflow-hidden">
+              <div className="border-b border-border/60 p-5 lg:overflow-y-auto lg:border-b-0 lg:border-r">
                 <div className="mb-4 rounded-xl border border-border/70 bg-card/60 p-4">
                   <p className="text-sm font-medium">
                     {activeCheckupFlow === 'morning'
@@ -1543,6 +1804,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
 
                 <div className="mt-5 flex flex-col gap-2 sm:flex-row">
                   <Button
+                    type="button"
                     onClick={() => void handleRunActiveCheckup()}
                     disabled={isActiveCheckupRunning || eveningRunLocked}
                     className="gap-2"
@@ -1553,6 +1815,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                       : `Run ${activeCheckupFlow === 'morning' ? 'Morning' : 'Evening'} Checkup`}
                   </Button>
                   <Button
+                    type="button"
                     variant="ghost"
                     onClick={() => setActiveNote('')}
                     disabled={isActiveCheckupRunning}
@@ -1560,6 +1823,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                     Clear Note
                   </Button>
                   <Button
+                    type="button"
                     variant="ghost"
                     onClick={() => {
                       if (activeCheckupFlow === 'morning') {
@@ -1575,7 +1839,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                 </div>
               </div>
 
-              <div className="overflow-y-auto bg-secondary/20 p-5">
+              <div className="bg-secondary/20 p-5 lg:overflow-y-auto">
                 <div className="mb-4 flex items-center justify-between">
                   <p className="text-sm font-semibold">Latest Output</p>
                   {activeCheckup && <Badge variant="secondary">{activeCheckup.generated_with}</Badge>}
@@ -1593,9 +1857,14 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                       <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                         {activeCheckupFlow === 'morning' ? 'Strategic Focus' : 'Reflection Summary'}
                       </p>
-                      <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">
-                        {activeCheckup.coach_message}
-                      </p>
+                      {activeCheckupRenderedHtml ? (
+                        <div
+                          className={PREMIUM_CHECKUP_HTML_CLASSNAMES}
+                          dangerouslySetInnerHTML={{ __html: activeCheckupRenderedHtml }}
+                        />
+                      ) : (
+                        <p className="text-sm leading-relaxed text-muted-foreground">No checkup output yet.</p>
+                      )}
                     </div>
 
                     {activeCheckup.focus_target && (
@@ -1649,11 +1918,12 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                   : 'Checkups are persisted as knowledge insights and reused in future coaching context.'}
               </p>
               <div className="flex gap-2 self-end sm:self-auto">
-                <Button variant="outline" onClick={() => setIsCheckupModalOpen(false)}>
+                <Button type="button" variant="outline" onClick={() => setIsCheckupModalOpen(false)}>
                   Close
                 </Button>
                 {activeCheckupFlow === 'morning' && (
                   <Button
+                    type="button"
                     variant="secondary"
                     onClick={() => setActiveCheckupFlow('evening')}
                     disabled={!canRunEveningCheckup && !eveningCompletedToday}

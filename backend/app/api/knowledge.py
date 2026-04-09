@@ -3,8 +3,10 @@ API endpoints for knowledge base operations.
 """
 
 import logging
+import re
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
+from html import escape
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -538,6 +540,250 @@ def _normalized_string_list(raw_value: Any) -> List[str]:
     return normalized
 
 
+def _strip_html_tags(value: str) -> str:
+    """Convert HTML fragments to plain text for storage/search compatibility."""
+    if not value:
+        return ""
+
+    stripped = re.sub(r"(?is)<(script|style).*?>.*?</\1>", "", value)
+    stripped = re.sub(r"(?i)<br\s*/?>", "\n", stripped)
+    stripped = re.sub(r"(?i)</p\s*>", "\n", stripped)
+    stripped = re.sub(r"(?i)<li\b[^>]*>", "\n- ", stripped)
+    stripped = re.sub(r"<[^>]+>", "", stripped)
+    stripped = re.sub(r"\n{3,}", "\n\n", stripped)
+    return stripped.strip()
+
+
+def _looks_like_html(value: str) -> bool:
+    if not value:
+        return False
+    return bool(re.search(r"</?[a-zA-Z][^>]*>", value))
+
+
+def _parse_hhmm_to_minutes(raw_value: str, default_minutes: int) -> int:
+    match = re.match(r"^\s*(\d{1,2}):(\d{2})\s*$", raw_value or "")
+    if not match:
+        return default_minutes
+
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+        return default_minutes
+    return hour * 60 + minute
+
+
+def _parse_work_hours_range(work_hours: str) -> tuple[int, int]:
+    default_start = 9 * 60
+    default_end = 17 * 60
+
+    if not isinstance(work_hours, str) or "-" not in work_hours:
+        return default_start, default_end
+
+    start_token, end_token = work_hours.split("-", 1)
+    start_minutes = _parse_hhmm_to_minutes(start_token, default_start)
+    end_minutes = _parse_hhmm_to_minutes(end_token, default_end)
+
+    if end_minutes <= start_minutes:
+        end_minutes = min(24 * 60, start_minutes + 8 * 60)
+
+    if end_minutes - start_minutes < 120:
+        end_minutes = min(24 * 60, start_minutes + 120)
+
+    return max(0, start_minutes), min(24 * 60, end_minutes)
+
+
+def _minutes_to_hhmm(total_minutes: int) -> str:
+    normalized = max(0, min(24 * 60, int(total_minutes)))
+    return f"{normalized // 60:02d}:{normalized % 60:02d}"
+
+
+def _minutes_to_display(total_minutes: int) -> str:
+    normalized = max(0, min(24 * 60, int(total_minutes)))
+    hour = normalized // 60
+    minute = normalized % 60
+    period = "AM" if hour < 12 else "PM"
+    hour_12 = hour % 12 or 12
+    return f"{hour_12}:{minute:02d} {period}"
+
+
+def _build_morning_schedule_blocks(
+    *,
+    focus_target: str,
+    focus_task_titles: List[str],
+    work_hours: str,
+    check_in_time: str,
+    planned_deep_work_minutes: float,
+    overdue_tasks: int,
+    due_today_tasks: int,
+    habits_total: int,
+    habits_completed_today: int,
+    avg_daily_minutes: float,
+) -> List[Dict[str, Any]]:
+    start_minutes, end_minutes = _parse_work_hours_range(work_hours)
+    check_in_minutes = _parse_hhmm_to_minutes(check_in_time, start_minutes)
+    cursor = max(start_minutes, min(end_minutes - 15, check_in_minutes))
+
+    schedule_blocks: List[Dict[str, Any]] = []
+
+    def add_block(duration: int, title: str, reason: str, priority: str = "medium") -> None:
+        nonlocal cursor
+        if cursor >= end_minutes:
+            return
+
+        safe_duration = max(10, int(duration))
+        block_start = cursor
+        block_end = min(end_minutes, block_start + safe_duration)
+        if block_end - block_start < 10:
+            return
+
+        schedule_blocks.append(
+            {
+                "start": _minutes_to_hhmm(block_start),
+                "end": _minutes_to_hhmm(block_end),
+                "start_label": _minutes_to_display(block_start),
+                "end_label": _minutes_to_display(block_end),
+                "title": title,
+                "reason": reason,
+                "priority": priority,
+            }
+        )
+        cursor = block_end
+
+    add_block(15, "Check-in and intent setup", "Anchor your day before context switching.", "high")
+    add_block(25, "Plan top priorities", "Lock the execution sequence around outcomes and constraints.", "high")
+
+    if overdue_tasks > 0 or due_today_tasks > 0:
+        add_block(
+            30,
+            "Deadline triage",
+            f"Resolve urgency first ({overdue_tasks} overdue, {due_today_tasks} due today).",
+            "high",
+        )
+
+    deep_work_seed = planned_deep_work_minutes if planned_deep_work_minutes > 0 else max(90.0, avg_daily_minutes * 0.45)
+    deep_work_target = int(max(60, min(240, round(deep_work_seed))))
+
+    focus_pool = [task for task in focus_task_titles if task] or ([focus_target] if focus_target else [])
+    primary_focus = focus_pool[0] if focus_pool else "Top-priority execution block"
+    secondary_focus = focus_pool[1] if len(focus_pool) > 1 else focus_target or primary_focus
+
+    first_block = min(120, max(50, deep_work_target // 2 if deep_work_target > 100 else deep_work_target))
+    remaining_deep_work = max(0, deep_work_target - first_block)
+
+    add_block(first_block, f"Deep work: {primary_focus}", "Protect focused time for highest-leverage progress.", "high")
+
+    if remaining_deep_work >= 40:
+        add_block(15, "Reset break", "Short reset to sustain decision quality.", "medium")
+        add_block(remaining_deep_work, f"Deep work: {secondary_focus}", "Advance the next critical task before reactive work.", "high")
+
+    if habits_total > 0:
+        add_block(
+            15,
+            "Habit anchor",
+            f"Maintain consistency ({habits_completed_today}/{habits_total} habits complete today).",
+            "medium",
+        )
+
+    remaining_minutes = end_minutes - cursor
+    if remaining_minutes >= 20:
+        add_block(
+            min(45, remaining_minutes),
+            "Admin, comms, and contingency buffer",
+            "Absorb interruptions without breaking deep-work outcomes.",
+            "medium",
+        )
+
+    return schedule_blocks
+
+
+def _build_morning_schedule_html(
+    *,
+    checkup_date: date,
+    focus_target: str,
+    fallback_lines: List[str],
+    schedule_blocks: List[Dict[str, Any]],
+) -> str:
+    total_scheduled_minutes = 0
+    high_priority_blocks = 0
+
+    for block in schedule_blocks:
+        block_start = _parse_hhmm_to_minutes(str(block.get("start", "")), 0)
+        block_end = _parse_hhmm_to_minutes(str(block.get("end", "")), block_start)
+        total_scheduled_minutes += max(0, block_end - block_start)
+
+        if str(block.get("priority", "")).strip().lower() == "high":
+            high_priority_blocks += 1
+
+    if not schedule_blocks:
+        schedule_blocks = [
+            {
+                "start": "09:00",
+                "end": "09:45",
+                "start_label": "9:00 AM",
+                "end_label": "9:45 AM",
+                "title": focus_target or "Primary focus block",
+                "reason": "Start with the highest-leverage task before reactive work.",
+                "priority": "high",
+            }
+        ]
+        total_scheduled_minutes = 45
+        high_priority_blocks = 1
+
+    block_items = "".join(
+        [
+            (
+                f"<li class=\"dc-block dc-block--{escape(str(block.get('priority', 'medium')).strip().lower() or 'medium')}\">"
+                "<div class=\"dc-time-wrap\">"
+                f"<span class=\"dc-time\">{escape(str(block.get('start_label', '')))} - {escape(str(block.get('end_label', '')))}</span>"
+                f"<span class=\"dc-priority\">{escape(str(block.get('priority', 'medium')).strip().title() or 'Medium')} Priority</span>"
+                "</div>"
+                "<div class=\"dc-block-copy\">"
+                f"<p class=\"dc-block-title\">{escape(str(block.get('title', 'Focus Block')))}</p>"
+                f"<p class=\"dc-block-reason\">{escape(str(block.get('reason', '')))}</p>"
+                "</div>"
+                "</li>"
+            )
+            for block in schedule_blocks
+        ]
+    )
+
+    highlights = "".join([f"<li>{escape(line)}</li>" for line in fallback_lines[:6]])
+
+    return (
+        "<section class=\"daily-checkup\">"
+        "<header class=\"dc-header\">"
+        "<div class=\"dc-badge-row\">"
+        "<span class=\"dc-kicker\">Morning Checkup</span>"
+        f"<span class=\"dc-date\">{escape(checkup_date.isoformat())}</span>"
+        "</div>"
+        f"<h3 class=\"dc-focus\">Primary Focus: {escape(focus_target or 'Execute the highest-priority task first')}</h3>"
+        "<p class=\"dc-subtitle\">Built from your goals, priorities, deadlines, habits, and tracked time context.</p>"
+        "</header>"
+        "<section class=\"dc-metrics\">"
+        f"<div class=\"dc-metric\"><p class=\"dc-metric-label\">Scheduled Blocks</p><p class=\"dc-metric-value\">{len(schedule_blocks)}</p></div>"
+        f"<div class=\"dc-metric\"><p class=\"dc-metric-label\">High Priority</p><p class=\"dc-metric-value\">{high_priority_blocks}</p></div>"
+        f"<div class=\"dc-metric\"><p class=\"dc-metric-label\">Planned Duration</p><p class=\"dc-metric-value\">{escape(_format_minutes(total_scheduled_minutes))}</p></div>"
+        "</section>"
+        "<section class=\"daily-schedule dc-panel\">"
+        "<div class=\"dc-panel-head\">"
+        "<p class=\"dc-panel-title\">Time-Blocked Plan</p>"
+        "<p class=\"dc-panel-subtitle\">Protect deep work first, then absorb reactive work with intent.</p>"
+        "</div>"
+        f"<ol class=\"dc-timeline\">{block_items}</ol>"
+        "</section>"
+        "<section class=\"execution-notes dc-panel\">"
+        "<p class=\"dc-panel-title\">Execution Notes</p>"
+        f"<ul class=\"dc-notes\">{highlights}</ul>"
+        "</section>"
+        "<section class=\"journal dc-panel dc-journal\">"
+        "<p class=\"dc-panel-title\">Accountability + Journal</p>"
+        "<p class=\"dc-journal-q\">Accountability: Which schedule block will you protect first if your day compresses?</p>"
+        "<p class=\"dc-journal-q\">Journal prompt: What one behavior makes today a win even if everything else changes?</p>"
+        "</section>"
+        "</section>"
+    )
+
+
 def _extract_communication_profile(all_entries: List[KnowledgeEntry]) -> Dict[str, Any]:
     latest_profile_entry: Optional[KnowledgeEntry] = None
     for entry in all_entries:
@@ -647,6 +893,7 @@ async def _generate_checkup_message(
     prompt: str,
     max_tokens: int = 280,
     style_directive: Optional[str] = None,
+    force_html: bool = False,
 ) -> Optional[str]:
     """Generate optional LLM-enhanced coaching text, if provider is initialized."""
     try:
@@ -657,10 +904,18 @@ async def _generate_checkup_message(
         if not llm_service or not llm_service._initialized:
             return None
 
-        system_content = (
-            "You are a concise accountability coach. Keep responses practical, specific, "
-            "and under 140 words. Use short bullet points when useful."
-        )
+        if force_html:
+            system_content = (
+                "You are a precise productivity coach and schedule designer. "
+                "Return ONLY valid HTML markup that can be directly rendered in a web UI. "
+                "Do NOT use markdown, code fences, or explanations outside HTML. "
+                "Do NOT emit <html>, <head>, <body>, <script>, or <style> tags."
+            )
+        else:
+            system_content = (
+                "You are a concise accountability coach. Keep responses practical, specific, "
+                "and under 140 words. Use short bullet points when useful."
+            )
         if style_directive:
             system_content += f" Align the voice with this communication profile: {style_directive}"
 
@@ -1142,6 +1397,34 @@ async def run_morning_checkup(request: DailyCheckupRequest):
         if avg_focus_score is not None:
             fallback_lines.append(f"Recent focus baseline: {avg_focus_score}/10")
 
+        schedule_blocks = _build_morning_schedule_blocks(
+            focus_target=focus_target,
+            focus_task_titles=focus_task_titles,
+            work_hours=work_hours,
+            check_in_time=check_in_time,
+            planned_deep_work_minutes=planned_deep_work_minutes,
+            overdue_tasks=overdue_tasks,
+            due_today_tasks=due_today_tasks,
+            habits_total=habits_total,
+            habits_completed_today=habits_completed_today,
+            avg_daily_minutes=avg_daily_minutes,
+        )
+
+        schedule_seed = " | ".join(
+            [
+                f"{block['start_label']}-{block['end_label']}: {block['title']} ({block['reason']})"
+                for block in schedule_blocks
+            ]
+        )
+
+        fallback_html = _build_morning_schedule_html(
+            checkup_date=checkup_date,
+            focus_target=focus_target,
+            fallback_lines=fallback_lines,
+            schedule_blocks=schedule_blocks,
+        )
+        fallback_text = _build_fallback_checkup_message(fallback_lines, communication_profile, "morning")
+
         llm_prompt = (
             f"Date: {checkup_date.isoformat()}\n"
             f"Intent note: {note or 'none'}\n"
@@ -1166,13 +1449,29 @@ async def run_morning_checkup(request: DailyCheckupRequest):
             f"Planned deep work minutes: {planned_deep_work_minutes}\n"
             f"User confidence: {confidence_score if confidence_score > 0 else 'n/a'}\n"
             f"Today existing entries: {len(today_entries)}\n"
-            "Create an immersive morning checkup with: 1) one focus sentence, "
-            "2) three action bullets tied to goals/deadlines/habits, "
-            "3) one accountability question, 4) one short journaling prompt."
+            f"Schedule seed blocks: {schedule_seed or 'none'}\n"
+            "Reason over task priorities, deadlines, habits, and tracked time to produce a practical daily schedule. "
+            "Return ONLY valid HTML that can be rendered directly. "
+            "Use this exact semantic structure and class names: "
+            "<section class='daily-checkup'>"
+            "<header class='dc-header'><div class='dc-badge-row'><span class='dc-kicker'>Morning Checkup</span><span class='dc-date'>date label</span></div><h3 class='dc-focus'>one focus sentence</h3><p class='dc-subtitle'>short strategic context sentence</p></header>"
+            "<section class='dc-metrics'><div class='dc-metric'><p class='dc-metric-label'>Scheduled Blocks</p><p class='dc-metric-value'>numeric value</p></div><div class='dc-metric'><p class='dc-metric-label'>High Priority</p><p class='dc-metric-value'>numeric value</p></div><div class='dc-metric'><p class='dc-metric-label'>Planned Duration</p><p class='dc-metric-value'>duration label</p></div></section>"
+            "<section class='daily-schedule dc-panel'><div class='dc-panel-head'><p class='dc-panel-title'>Time-Blocked Plan</p><p class='dc-panel-subtitle'>short subtitle</p></div><ol class='dc-timeline'><li class='dc-block dc-block--high|medium|low'><div class='dc-time-wrap'><span class='dc-time'>start - end</span><span class='dc-priority'>Priority label</span></div><div class='dc-block-copy'><p class='dc-block-title'>block title</p><p class='dc-block-reason'>why this block matters</p></div></li></ol></section>"
+            "<section class='execution-notes dc-panel'><p class='dc-panel-title'>Execution Notes</p><ul class='dc-notes'><li>three concise action bullets tied to deadlines/habits/priorities</li></ul></section>"
+            "<section class='journal dc-panel dc-journal'><p class='dc-panel-title'>Accountability + Journal</p><p class='dc-journal-q'>Accountability: one direct accountability question.</p><p class='dc-journal-q'>Journal prompt: one reflective prompt.</p></section>"
+            "</section>. "
+            "Requirements: 4-7 timeline blocks with explicit start/end times, concise copy, no markdown fences, no scripts, and no inline styles."
         )
 
-        llm_message = await _generate_checkup_message(llm_prompt, style_directive=style_directive)
-        coach_message = llm_message or _build_fallback_checkup_message(fallback_lines, communication_profile, "morning")
+        llm_message = await _generate_checkup_message(
+            llm_prompt,
+            max_tokens=720,
+            style_directive=style_directive,
+            force_html=True,
+        )
+        llm_html = llm_message.strip() if llm_message and _looks_like_html(llm_message) else None
+        coach_message_html = llm_html or fallback_html
+        coach_message = _strip_html_tags(coach_message_html) or fallback_text
 
         response_payload = {
             "date": checkup_date.isoformat(),
@@ -1226,7 +1525,9 @@ async def run_morning_checkup(request: DailyCheckupRequest):
             "context_snapshot": context_snapshot,
             "style_profile": _public_style_profile(communication_profile),
             "coach_message": coach_message,
-            "generated_with": "llm" if llm_message else "fallback",
+            "coach_message_html": coach_message_html,
+            "daily_schedule": schedule_blocks,
+            "generated_with": "llm_html" if llm_html else "fallback_html",
         }
 
         insight_content = (
