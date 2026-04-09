@@ -579,6 +579,26 @@ def _is_structured_morning_checkup_html(value: str) -> bool:
     return all(token in normalized for token in required_tokens)
 
 
+def _is_structured_evening_checkup_html(value: str) -> bool:
+    """Validate that generated evening checkup HTML contains required semantic sections."""
+    if not _looks_like_html(value):
+        return False
+
+    normalized = value.lower()
+    required_tokens = [
+        "daily-checkup",
+        "evening-checkup",
+        "dc-header",
+        "dc-metrics",
+        "daily-schedule",
+        "dc-timeline",
+        "execution-notes",
+        "dc-journal",
+        "dc-block",
+    ]
+    return all(token in normalized for token in required_tokens)
+
+
 def _parse_hhmm_to_minutes(raw_value: str, default_minutes: int) -> int:
     match = re.match(r"^\s*(\d{1,2}):(\d{2})\s*$", raw_value or "")
     if not match:
@@ -806,6 +826,99 @@ def _build_morning_schedule_html(
         "<p class=\"dc-panel-title\">Accountability + Journal</p>"
         "<p class=\"dc-journal-q\">Accountability: Which schedule block will you protect first if your day compresses?</p>"
         "<p class=\"dc-journal-q\">Journal prompt: What one behavior makes today a win even if everything else changes?</p>"
+        "</section>"
+        "</section>"
+    )
+
+
+def _build_evening_reflection_html(
+    *,
+    checkup_date: date,
+    recap_line: str,
+    total_minutes: float,
+    billable_minutes: float,
+    performance_score: float,
+    avg_focus: Optional[float],
+    avg_energy: Optional[float],
+    wins: List[str],
+    blockers: List[str],
+    tomorrow_focus: List[str],
+    focus_task_titles: List[str],
+    top_projects: List[str],
+) -> str:
+    focus_energy_label = (
+        f"{round(avg_focus, 1)}/10 focus - {round(avg_energy, 1)}/10 energy"
+        if avg_focus is not None and avg_energy is not None
+        else f"{round(avg_focus, 1)}/10 focus"
+        if avg_focus is not None
+        else f"{round(avg_energy, 1)}/10 energy"
+        if avg_energy is not None
+        else "n/a"
+    )
+
+    normalized_wins = wins[:3] if wins else ["You maintained execution momentum by reflecting on your day."]
+    normalized_blockers = blockers[:2]
+    normalized_tomorrow = tomorrow_focus[:4] if tomorrow_focus else ["Define tomorrow's top task before you start."]
+
+    action_items = "".join(
+        [
+            (
+                f"<li class=\"dc-block dc-block--{'high' if index == 0 else 'medium'}\">"
+                "<div class=\"dc-time-wrap\">"
+                f"<span class=\"dc-time\">Action {index + 1}</span>"
+                f"<span class=\"dc-priority\">{'High' if index == 0 else 'Medium'} Priority</span>"
+                "</div>"
+                "<div class=\"dc-block-copy\">"
+                f"<p class=\"dc-block-title\">{escape(item)}</p>"
+                "<p class=\"dc-block-reason\">"
+                "Tie this to deadline pressure, habit consistency, or deep-work protection."
+                "</p>"
+                "</div>"
+                "</li>"
+            )
+            for index, item in enumerate(normalized_tomorrow)
+        ]
+    )
+
+    note_lines = [f"Win: {item}" for item in normalized_wins]
+    if normalized_blockers:
+        note_lines.extend([f"Friction to reduce: {item}" for item in normalized_blockers])
+    if focus_task_titles:
+        note_lines.append(f"Focus tasks reviewed: {', '.join(focus_task_titles[:3])}")
+    if top_projects:
+        note_lines.append(f"Project momentum: {', '.join(top_projects[:2])}")
+    notes_html = "".join([f"<li>{escape(line)}</li>" for line in note_lines])
+
+    return (
+        "<section class=\"daily-checkup evening-checkup\">"
+        "<header class=\"dc-header\">"
+        "<div class=\"dc-badge-row\">"
+        "<span class=\"dc-kicker\">Evening Checkup</span>"
+        f"<span class=\"dc-date\">{escape(checkup_date.isoformat())}</span>"
+        "</div>"
+        f"<h3 class=\"dc-focus\">{escape(recap_line)}</h3>"
+        "<p class=\"dc-subtitle\">Review today's outcomes, extract evidence, and lock tomorrow's first actions.</p>"
+        "</header>"
+        "<section class=\"dc-metrics\">"
+        f"<div class=\"dc-metric\"><p class=\"dc-metric-label\">Logged Time</p><p class=\"dc-metric-value\">{escape(_format_minutes(total_minutes))}</p></div>"
+        f"<div class=\"dc-metric\"><p class=\"dc-metric-label\">Billable Time</p><p class=\"dc-metric-value\">{escape(_format_minutes(billable_minutes))}</p></div>"
+        f"<div class=\"dc-metric\"><p class=\"dc-metric-label\">Performance</p><p class=\"dc-metric-value\">{escape(str(round(performance_score, 1)))}/10</p></div>"
+        "</section>"
+        "<section class=\"daily-schedule dc-panel\">"
+        "<div class=\"dc-panel-head\">"
+        "<p class=\"dc-panel-title\">Tomorrow Commitments</p>"
+        f"<p class=\"dc-panel-subtitle\">Focus and energy signal: {escape(focus_energy_label)}</p>"
+        "</div>"
+        f"<ol class=\"dc-timeline\">{action_items}</ol>"
+        "</section>"
+        "<section class=\"execution-notes dc-panel\">"
+        "<p class=\"dc-panel-title\">Wins + Friction</p>"
+        f"<ul class=\"dc-notes\">{notes_html}</ul>"
+        "</section>"
+        "<section class=\"journal dc-panel dc-journal\">"
+        "<p class=\"dc-panel-title\">Reflection + Accountability</p>"
+        "<p class=\"dc-journal-q\">Reflection: What moved your day forward the most, and why?</p>"
+        "<p class=\"dc-journal-q\">Accountability: What is the first 30-minute block you will protect tomorrow?</p>"
         "</section>"
         "</section>"
     )
@@ -1760,6 +1873,25 @@ async def run_evening_checkup(request: DailyCheckupRequest):
         communication_profile = _extract_communication_profile(all_entries)
         style_directive = _build_style_directive(communication_profile, "evening")
 
+        recap_line = (
+            f"You logged {_format_minutes(total_minutes)} across {len(today_entries)} sessions with an estimated score of {performance_score}/10."
+        )
+        fallback_html = _build_evening_reflection_html(
+            checkup_date=checkup_date,
+            recap_line=recap_line,
+            total_minutes=total_minutes,
+            billable_minutes=billable_minutes,
+            performance_score=performance_score,
+            avg_focus=avg_focus,
+            avg_energy=avg_energy,
+            wins=wins,
+            blockers=blockers,
+            tomorrow_focus=tomorrow_focus,
+            focus_task_titles=focus_task_titles,
+            top_projects=top_projects,
+        )
+        fallback_text = _build_fallback_checkup_message(fallback_lines, communication_profile, "evening")
+
         llm_prompt = (
             f"Date: {checkup_date.isoformat()}\n"
             f"Reflection note: {note or 'none'}\n"
@@ -1785,13 +1917,30 @@ async def run_evening_checkup(request: DailyCheckupRequest):
             f"Planned deep work minutes: {planned_deep_work_minutes}\n"
             f"Self-rating: {subjective_score if subjective_score is not None else 'n/a'}\n"
             f"Objective score: {objective_score}/10\n"
-            "Provide an immersive evening checkup with: 1) one recap sentence, "
-            "2) two evidence-based wins, 3) two concrete tomorrow actions tied to deadlines/habits, "
-            "4) one short reflection prompt."
+            f"Precomputed wins: {', '.join(wins) if wins else 'none'}\n"
+            f"Precomputed tomorrow focus: {', '.join(tomorrow_focus) if tomorrow_focus else 'none'}\n"
+            "Return ONLY valid HTML that can be rendered directly. "
+            "Use this exact semantic structure and class names: "
+            "<section class='daily-checkup evening-checkup'>"
+            "<header class='dc-header'><div class='dc-badge-row'><span class='dc-kicker'>Evening Checkup</span><span class='dc-date'>date label</span></div><h3 class='dc-focus'>one recap sentence</h3><p class='dc-subtitle'>one concise strategic summary</p></header>"
+            "<section class='dc-metrics'><div class='dc-metric'><p class='dc-metric-label'>Logged Time</p><p class='dc-metric-value'>duration</p></div><div class='dc-metric'><p class='dc-metric-label'>Billable Time</p><p class='dc-metric-value'>duration</p></div><div class='dc-metric'><p class='dc-metric-label'>Performance</p><p class='dc-metric-value'>score/10</p></div></section>"
+            "<section class='daily-schedule dc-panel'><div class='dc-panel-head'><p class='dc-panel-title'>Tomorrow Commitments</p><p class='dc-panel-subtitle'>focus/energy signal</p></div><ol class='dc-timeline'><li class='dc-block dc-block--high|medium|low'><div class='dc-time-wrap'><span class='dc-time'>Action 1</span><span class='dc-priority'>priority label</span></div><div class='dc-block-copy'><p class='dc-block-title'>concrete action</p><p class='dc-block-reason'>why this action matters</p></div></li></ol></section>"
+            "<section class='execution-notes dc-panel'><p class='dc-panel-title'>Wins + Friction</p><ul class='dc-notes'><li>two evidence-based wins and up to two friction points</li></ul></section>"
+            "<section class='journal dc-panel dc-journal'><p class='dc-panel-title'>Reflection + Accountability</p><p class='dc-journal-q'>reflection question</p><p class='dc-journal-q'>accountability question</p></section>"
+            "</section>. "
+            "Requirements: include 2-4 tomorrow commitments, tie actions to deadlines/habits/deep-work context, no markdown fences, no scripts, and no inline styles."
         )
 
-        llm_message = await _generate_checkup_message(llm_prompt, style_directive=style_directive)
-        coach_message = llm_message or _build_fallback_checkup_message(fallback_lines, communication_profile, "evening")
+        llm_message = await _generate_checkup_message(
+            llm_prompt,
+            max_tokens=760,
+            style_directive=style_directive,
+            force_html=True,
+        )
+        llm_candidate = llm_message.strip() if llm_message and _looks_like_html(llm_message) else None
+        llm_html = llm_candidate if llm_candidate and _is_structured_evening_checkup_html(llm_candidate) else None
+        coach_message_html = llm_html or fallback_html
+        coach_message = _strip_html_tags(coach_message_html) or fallback_text
 
         timeline = [
             {
@@ -1873,7 +2022,8 @@ async def run_evening_checkup(request: DailyCheckupRequest):
             "timeline": timeline,
             "style_profile": _public_style_profile(communication_profile),
             "coach_message": coach_message,
-            "generated_with": "llm" if llm_message else "fallback",
+            "coach_message_html": coach_message_html,
+            "generated_with": "llm_html" if llm_html else "fallback_html",
         }
 
         insight_content = (
