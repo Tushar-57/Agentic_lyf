@@ -184,6 +184,45 @@ const toDisplayLabel = (rawValue: string) => {
     .replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
+const formatDurationMinutes = (value: unknown): string | null => {
+  const numericValue = Number(value)
+  if (!Number.isFinite(numericValue) || numericValue <= 0) {
+    return null
+  }
+
+  const roundedMinutes = Math.round(numericValue)
+  const hours = Math.floor(roundedMinutes / 60)
+  const minutes = roundedMinutes % 60
+
+  if (hours > 0 && minutes > 0) {
+    return `${hours} hour${hours === 1 ? '' : 's'} ${minutes} minute${minutes === 1 ? '' : 's'}`
+  }
+
+  if (hours > 0) {
+    return `${hours} hour${hours === 1 ? '' : 's'}`
+  }
+
+  return `${minutes} minute${minutes === 1 ? '' : 's'}`
+}
+
+const normalizeDurationTokensInText = (value: string): string => {
+  return value.replace(/\b(\d+(?:\.\d+)?)\s*(?:m|min|mins|minute|minutes)\b/gi, (match, rawMinutes) => {
+    const formatted = formatDurationMinutes(rawMinutes)
+    return formatted || match
+  })
+}
+
+const isDurationLikeKey = (key: string): boolean => {
+  const normalizedKey = key.toLowerCase()
+  return (
+    normalizedKey === 'duration'
+    || normalizedKey === 'minutes'
+    || normalizedKey.includes('duration')
+    || normalizedKey.endsWith('_minutes')
+    || normalizedKey.includes('minutes_')
+  )
+}
+
 const resolveEntryCategory = (entry: KnowledgeEntry): string => {
   const metadata = entry.metadata || {}
   const context = (metadata.context || {}) as Record<string, any>
@@ -252,7 +291,7 @@ const resolveDisplayTitle = (entry: KnowledgeEntry, displayType: string): string
   }
 
   if (!shouldUseDerivedTimeEntryTitle(entry.title)) {
-    return entry.title
+    return normalizeDurationTokensInText(entry.title)
   }
 
   const metadata = entry.metadata || {}
@@ -260,9 +299,9 @@ const resolveDisplayTitle = (entry: KnowledgeEntry, displayType: string): string
 
   const project = String(context.project_name || '').trim()
   const activity = String(context.description || context.task_name || '').trim()
-  const rawDuration = Number(context.duration_minutes)
-  const durationSuffix = Number.isFinite(rawDuration) && rawDuration > 0
-    ? ` (${Math.round(rawDuration)}m)`
+  const durationLabel = formatDurationMinutes(context.duration_minutes)
+  const durationSuffix = durationLabel
+    ? ` (${durationLabel})`
     : ''
 
   let base = ''
@@ -314,26 +353,6 @@ const tryParseJson = (value: string): unknown => {
   }
 }
 
-const formatDurationMinutes = (value: unknown): string | null => {
-  const numericValue = Number(value)
-  if (!Number.isFinite(numericValue) || numericValue <= 0) {
-    return null
-  }
-
-  const hours = Math.floor(numericValue / 60)
-  const minutes = Math.round(numericValue % 60)
-
-  if (hours > 0 && minutes > 0) {
-    return `${hours}h ${minutes}m`
-  }
-
-  if (hours > 0) {
-    return `${hours}h`
-  }
-
-  return `${minutes}m`
-}
-
 const flattenStructuredRecord = (record: Record<string, any>): string => {
   const preferredKeys = [
     'title',
@@ -364,7 +383,8 @@ const flattenStructuredRecord = (record: Record<string, any>): string => {
       return
     }
 
-    highlightedParts.push(`${toDisplayLabel(key)}: ${formatValue(rawValue)}`)
+    const durationValue = isDurationLikeKey(key) ? formatDurationMinutes(rawValue) : null
+    highlightedParts.push(`${toDisplayLabel(key)}: ${durationValue || formatValue(rawValue)}`)
   })
 
   if (highlightedParts.length > 0) {
@@ -375,7 +395,10 @@ const flattenStructuredRecord = (record: Record<string, any>): string => {
     .filter(([, value]) => value !== undefined && value !== null && value !== '')
     .filter(([, value]) => typeof value !== 'object' || Array.isArray(value))
     .slice(0, 4)
-    .map(([key, value]) => `${toDisplayLabel(key)}: ${formatValue(value)}`)
+    .map(([key, value]) => {
+      const durationValue = isDurationLikeKey(key) ? formatDurationMinutes(value) : null
+      return `${toDisplayLabel(key)}: ${durationValue || formatValue(value)}`
+    })
 
   if (scalarPairs.length > 0) {
     return scalarPairs.join(' | ')
@@ -399,7 +422,7 @@ const formatValue = (value: unknown): string => {
       return 'Not provided'
     }
 
-    return normalizedValue
+    return normalizeDurationTokensInText(normalizedValue)
   }
 
   if (typeof value === 'number' || typeof value === 'boolean') {
@@ -447,7 +470,8 @@ const toKeyValueRows = (
       return
     }
 
-    const formattedValue = formatValue(value)
+    const formattedDuration = isDurationLikeKey(key) ? formatDurationMinutes(value) : null
+    const formattedValue = formattedDuration || formatValue(value)
     if (!formattedValue || formattedValue === 'Not provided') {
       return
     }
@@ -507,10 +531,141 @@ const pickFirstValue = (
   return null
 }
 
+const toShortTextList = (value: unknown, limit = 2): string[] => {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  return value
+    .map((item) => formatValue(item).replace(/\s+/g, ' ').trim())
+    .filter((item) => item.length > 0 && item !== 'Not provided')
+    .slice(0, limit)
+}
+
+const deriveDailyCheckupSummary = (
+  contentRecord: Record<string, any>,
+  metadataRecord: Record<string, any>,
+): string | null => {
+  const checkupType = String(
+    pickFirstValue([contentRecord, metadataRecord], ['checkup_type']) || '',
+  ).toLowerCase()
+
+  const focusTarget = pickFirstValue([contentRecord, metadataRecord], ['focus_target'])
+  const intentNote = pickFirstValue([contentRecord, metadataRecord], ['intent_note'])
+  const reflectionNote = pickFirstValue([contentRecord, metadataRecord], ['reflection_note'])
+
+  const journalingRoot = isRecord(metadataRecord.journaling)
+    ? metadataRecord.journaling
+    : isRecord(metadataRecord.reflection_journal)
+      ? metadataRecord.reflection_journal
+      : {}
+
+  const focusCommitment = isRecord(journalingRoot.focus_commitment)
+    ? journalingRoot.focus_commitment
+    : isRecord(journalingRoot.evidence)
+      ? journalingRoot.evidence
+      : {}
+
+  const decisionMetrics = isRecord(metadataRecord.decision_metrics)
+    ? metadataRecord.decision_metrics
+    : {}
+
+  const deadlinePressure = isRecord(focusCommitment.deadline_pressure)
+    ? focusCommitment.deadline_pressure
+    : {}
+
+  const overdue = Math.max(0, Math.round(Number(deadlinePressure.overdue ?? decisionMetrics.overdue_tasks ?? 0) || 0))
+  const dueToday = Math.max(0, Math.round(Number(deadlinePressure.due_today ?? decisionMetrics.due_today_tasks ?? 0) || 0))
+  const upcoming = Math.max(
+    0,
+    Math.round(Number(deadlinePressure.upcoming_7d ?? decisionMetrics.upcoming_deadlines_7d ?? 0) || 0),
+  )
+
+  const focusTasks = toShortTextList(
+    pickFirstValue([focusCommitment, metadataRecord], ['focus_tasks']),
+    2,
+  )
+  const wins = toShortTextList(
+    pickFirstValue([metadataRecord, journalingRoot], ['wins']),
+    2,
+  )
+  const blockers = toShortTextList(
+    pickFirstValue([metadataRecord, journalingRoot], ['blockers', 'friction_points']),
+    2,
+  )
+  const tomorrowFocus = toShortTextList(
+    pickFirstValue([metadataRecord, journalingRoot], ['tomorrow_focus', 'tomorrow_commitments']),
+    2,
+  )
+
+  const parts: string[] = []
+
+  if (checkupType === 'morning') {
+    parts.push('Morning strategy')
+  } else if (checkupType === 'evening') {
+    parts.push('Evening reflection')
+  }
+
+  if (focusTarget) {
+    parts.push(`Focus: ${formatValue(focusTarget)}`)
+  }
+
+  if (checkupType === 'morning' && typeof intentNote === 'string' && intentNote.trim()) {
+    parts.push(`Intent: ${formatValue(intentNote)}`)
+  }
+
+  if (checkupType === 'evening' && typeof reflectionNote === 'string' && reflectionNote.trim()) {
+    parts.push(`Reflection: ${formatValue(reflectionNote)}`)
+  }
+
+  if (focusTasks.length > 0) {
+    parts.push(`Focus tasks: ${focusTasks.join(', ')}`)
+  }
+
+  if (wins.length > 0) {
+    parts.push(`Wins: ${wins.join('; ')}`)
+  }
+
+  if (blockers.length > 0) {
+    parts.push(`Blockers: ${blockers.join('; ')}`)
+  }
+
+  if (tomorrowFocus.length > 0) {
+    parts.push(`Tomorrow: ${tomorrowFocus.join('; ')}`)
+  }
+
+  if (overdue > 0 || dueToday > 0 || upcoming > 0) {
+    const deadlineBits: string[] = []
+    if (overdue > 0) {
+      deadlineBits.push(`${overdue} overdue`)
+    }
+    if (dueToday > 0) {
+      deadlineBits.push(`${dueToday} due today`)
+    }
+    if (upcoming > 0) {
+      deadlineBits.push(`${upcoming} upcoming`)
+    }
+
+    parts.push(`Deadlines: ${deadlineBits.join(', ')}`)
+  }
+
+  if (parts.length === 0) {
+    return null
+  }
+
+  const summary = parts.join(' | ')
+  return summary.length > 340 ? `${summary.slice(0, 337)}...` : summary
+}
+
 const deriveSummary = (
   entry: DisplayKnowledgeEntry,
   contentRecord: Record<string, any>,
 ): string => {
+  const metadataRecord = isRecord(entry.metadata) ? entry.metadata : {}
+  const checkupSummary = entry.displayCategory === 'daily_checkup'
+    ? deriveDailyCheckupSummary(contentRecord, metadataRecord)
+    : null
+
   const summaryKeys = [
     'summary',
     'agent_response',
@@ -527,16 +682,26 @@ const deriveSummary = (
     'observation',
   ]
 
-  const summaryValue = pickFirstValue([contentRecord, entry.metadata || {}], summaryKeys)
+  const summaryValue = pickFirstValue([contentRecord, metadataRecord], summaryKeys)
   if (typeof summaryValue === 'string' && summaryValue.trim().length > 0) {
-    return summaryValue.trim().replace(/\s+/g, ' ')
+    const normalized = normalizeDurationTokensInText(summaryValue.trim().replace(/\s+/g, ' '))
+    if (checkupSummary) {
+      const combinedSummary = `${checkupSummary} | ${normalized}`
+      return combinedSummary.length > 360 ? `${combinedSummary.slice(0, 357)}...` : combinedSummary
+    }
+
+    return normalized
+  }
+
+  if (checkupSummary) {
+    return checkupSummary
   }
 
   const contentAsText = typeof entry.content === 'string' ? entry.content.trim() : ''
   if (contentAsText) {
     const parsed = tryParseJson(contentAsText)
     if (!parsed) {
-      return contentAsText.replace(/\s+/g, ' ')
+      return normalizeDurationTokensInText(contentAsText.replace(/\s+/g, ' '))
     }
   }
 

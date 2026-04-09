@@ -52,7 +52,12 @@ export function writeEmbeddingsCache(data: any[]): void {
 
 export async function prefetchEmbeddingsVisualization(): Promise<any[] | null> {
   try {
-    const response = await fetch('/api/knowledge/embeddings/visualization')
+    const response = await fetch('/api/knowledge/embeddings/visualization', {
+      cache: 'no-store',
+      headers: {
+        'Cache-Control': 'no-cache',
+      },
+    })
     if (!response.ok) {
       return null
     }

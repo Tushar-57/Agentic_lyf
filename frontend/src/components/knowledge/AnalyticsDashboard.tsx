@@ -434,6 +434,27 @@ const formatCheckupTime = (checkupDate: string | undefined) => {
   })
 }
 
+const formatMinutesLabel = (value: unknown): string => {
+  const numericValue = Number(value)
+  if (!Number.isFinite(numericValue) || numericValue <= 0) {
+    return '0 minutes'
+  }
+
+  const roundedMinutes = Math.round(numericValue)
+  const hours = Math.floor(roundedMinutes / 60)
+  const minutes = roundedMinutes % 60
+
+  if (hours > 0 && minutes > 0) {
+    return `${hours} hour${hours === 1 ? '' : 's'} ${minutes} minute${minutes === 1 ? '' : 's'}`
+  }
+
+  if (hours > 0) {
+    return `${hours} hour${hours === 1 ? '' : 's'}`
+  }
+
+  return `${minutes} minute${minutes === 1 ? '' : 's'}`
+}
+
 const stripHtmlTags = (value?: string) => {
   const normalized = (value || '').trim()
   if (!normalized) {
@@ -524,6 +545,78 @@ const summarizeCheckupMessage = (message?: string) => {
   }
 
   return normalized.length > 140 ? `${normalized.slice(0, 137)}...` : normalized
+}
+
+const summarizeCheckupList = (items: string[] | undefined, label: string): string | null => {
+  if (!Array.isArray(items) || items.length === 0) {
+    return null
+  }
+
+  const normalizedItems = items
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 2)
+
+  if (normalizedItems.length === 0) {
+    return null
+  }
+
+  return `${label}: ${normalizedItems.join('; ')}`
+}
+
+const buildCheckupCardSummary = (
+  checkup: DailyCheckupResponse | null,
+  checkupType: 'morning' | 'evening',
+): string => {
+  if (!checkup) {
+    return 'No checkup result yet.'
+  }
+
+  const fragments: string[] = []
+
+  if (typeof checkup.focus_target === 'string' && checkup.focus_target.trim()) {
+    fragments.push(`Focus: ${checkup.focus_target.trim()}`)
+  }
+
+  if (checkupType === 'morning' && typeof checkup.intent_note === 'string' && checkup.intent_note.trim()) {
+    fragments.push(`Intent: ${checkup.intent_note.trim()}`)
+  }
+
+  if (checkupType === 'evening' && typeof checkup.reflection_note === 'string' && checkup.reflection_note.trim()) {
+    fragments.push(`Reflection: ${checkup.reflection_note.trim()}`)
+  }
+
+  const winsSummary = summarizeCheckupList(checkup.wins, 'Wins')
+  if (winsSummary) {
+    fragments.push(winsSummary)
+  }
+
+  const blockersSummary = summarizeCheckupList(checkup.blockers, 'Blockers')
+  if (blockersSummary) {
+    fragments.push(blockersSummary)
+  }
+
+  const tomorrowSummary = summarizeCheckupList(checkup.tomorrow_focus, 'Tomorrow')
+  if (tomorrowSummary) {
+    fragments.push(tomorrowSummary)
+  }
+
+  const messageSource =
+    (checkup.coach_message_html && checkup.coach_message_html.trim())
+      ? checkup.coach_message_html
+      : checkup.coach_message
+  const messageSummary = summarizeCheckupMessage(messageSource)
+
+  if (fragments.length < 3 && messageSummary !== 'No checkup result yet.') {
+    fragments.push(messageSummary)
+  }
+
+  if (fragments.length === 0) {
+    return messageSummary
+  }
+
+  const combined = fragments.join(' | ')
+  return combined.length > 220 ? `${combined.slice(0, 217)}...` : combined
 }
 
 export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
@@ -1387,7 +1480,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
               Last run: {formatCheckupTime(morningCheckup?.date)}
             </p>
             <p className="mb-3 rounded-lg border border-border/60 bg-background/60 px-3 py-2 text-xs text-muted-foreground">
-              {summarizeCheckupMessage(morningCheckup?.coach_message)}
+              {buildCheckupCardSummary(morningCheckup, 'morning')}
             </p>
             <Button onClick={() => openCheckupFlow('morning')} className="w-full gap-2">
               <Compass className="h-4 w-4" />
@@ -1409,7 +1502,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
             </p>
             <p className="mb-3 rounded-lg border border-border/60 bg-background/60 px-3 py-2 text-xs text-muted-foreground">
               {canRunEveningCheckup
-                ? summarizeCheckupMessage(eveningCheckup?.coach_message)
+                ? buildCheckupCardSummary(eveningCheckup, 'evening')
                 : 'Evening checkup unlocks after morning checkup to preserve strategic sequence.'}
             </p>
             <Button
@@ -1521,10 +1614,10 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                             {yesterdaySnapshot.interactions} interactions logged
                           </p>
                           <p className="mt-1 text-xs text-muted-foreground">
-                            Estimated focused time: {Math.round(yesterdaySnapshot.estimatedFocusedMinutes)} min
+                            Estimated focused time: {formatMinutesLabel(yesterdaySnapshot.estimatedFocusedMinutes)}
                           </p>
                           <p className="text-xs text-muted-foreground">
-                            Avg session: {Math.round(yesterdaySnapshot.avgSessionMinutes)} min
+                            Avg session: {formatMinutesLabel(yesterdaySnapshot.avgSessionMinutes)}
                           </p>
                         </div>
 
@@ -2250,8 +2343,8 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                 <p className="text-2xl font-bold">{analyticsData.insights.time_entry_billable_records}</p>
               </div>
               <div className="rounded-xl border bg-secondary/40 p-4">
-                <p className="text-sm text-muted-foreground">Average Logged Minutes</p>
-                <p className="text-2xl font-bold">{analyticsData.insights.avg_time_entry_minutes}</p>
+                <p className="text-sm text-muted-foreground">Average Logged Time</p>
+                <p className="text-2xl font-bold">{formatMinutesLabel(analyticsData.insights.avg_time_entry_minutes)}</p>
               </div>
               <div className="rounded-xl border bg-secondary/40 p-4">
                 <p className="text-sm text-muted-foreground">Most Used Agent</p>

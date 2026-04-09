@@ -82,6 +82,7 @@ interface DeepAgentState {
 
 function App() {
   const appShellRef = useRef<HTMLDivElement | null>(null)
+  const viewScrollPositionsRef = useRef<Record<string, number>>({})
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
@@ -218,6 +219,20 @@ function App() {
   const mobileContentInsetClass = isMobile && !isEmbedMode
     ? 'pb-[calc(5.2rem+env(safe-area-inset-bottom))]'
     : ''
+
+  const handleViewChange = (nextView: string) => {
+    if (nextView === currentView) {
+      return
+    }
+
+    const activeRegion = document.querySelector<HTMLElement>('[data-app-scroll-region="true"]')
+    if (activeRegion) {
+      viewScrollPositionsRef.current[currentView] = activeRegion.scrollTop
+    }
+
+    setCurrentView(nextView)
+  }
+
   useEffect(() => {
     const requestedView = new URLSearchParams(window.location.search).get('view')
     if (!requestedView) {
@@ -267,23 +282,17 @@ function App() {
   }, [mobileSidebarOpen])
 
   useEffect(() => {
-    const resetScrollPosition = () => {
-      window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
-      document.documentElement.scrollTop = 0
-      document.body.scrollTop = 0
-
-      if (appShellRef.current) {
-        appShellRef.current.scrollTop = 0
+    const restoreScrollPosition = () => {
+      const activeRegion = document.querySelector<HTMLElement>('[data-app-scroll-region="true"]')
+      if (!activeRegion) {
+        return
       }
 
-      document
-        .querySelectorAll<HTMLElement>('[data-app-scroll-region="true"]')
-        .forEach((region) => {
-          region.scrollTop = 0
-        })
+      const savedScrollTop = viewScrollPositionsRef.current[currentView]
+      activeRegion.scrollTop = Number.isFinite(savedScrollTop) ? savedScrollTop : 0
     }
 
-    const raf = window.requestAnimationFrame(resetScrollPosition)
+    const raf = window.requestAnimationFrame(restoreScrollPosition)
     return () => window.cancelAnimationFrame(raf)
   }, [currentView])
 
@@ -698,7 +707,7 @@ function App() {
             currentAgent={currentAgent}
             onAgentChange={handleAgentChange}
             currentView={currentView}
-            onViewChange={setCurrentView}
+            onViewChange={handleViewChange}
             isDarkMode={isDarkMode}
             onToggleTheme={toggleTheme}
             isMobile={isMobile}
@@ -868,9 +877,9 @@ function App() {
           <div data-app-scroll-region="true" className={cn("flex min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-3 sm:px-4 sm:pb-5 sm:pt-5", mobileContentInsetClass)}>
             <div className="panel-surface mx-auto h-full w-full max-w-[1600px] overflow-hidden">
               <ChatOnboarding 
-                onComplete={(data) => {
-                  console.log('Onboarding completed:', data);
-                  setCurrentView('chat');
+                onComplete={() => {
+                  console.log('Onboarding completed');
+                  handleViewChange('chat');
                 }}
               />
             </div>
@@ -899,8 +908,8 @@ function App() {
           <div data-app-scroll-region="true" className={cn("flex min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-3 sm:px-4 sm:pb-5 sm:pt-5", mobileContentInsetClass)}>
             <div className="panel-surface mx-auto h-full w-full max-w-[1600px] overflow-auto">
               <ProfileWorkspace
-                onStartOnboarding={() => setCurrentView('onboarding')}
-                onContinueToChat={() => setCurrentView('chat')}
+                onStartOnboarding={() => handleViewChange('onboarding')}
+                onContinueToChat={() => handleViewChange('chat')}
               />
             </div>
           </div>
@@ -915,7 +924,7 @@ function App() {
               <button
                 key={view.id}
                 type="button"
-                onClick={() => setCurrentView(view.id)}
+                onClick={() => handleViewChange(view.id)}
                 className={cn(
                   "flex flex-col items-center justify-center rounded-xl py-2 text-[11px] font-semibold transition",
                   isActive

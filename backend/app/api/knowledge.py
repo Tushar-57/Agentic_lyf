@@ -367,6 +367,28 @@ async def get_embedding_details(entry_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to get embedding details: {str(e)}")
 
 
+@router.get("/embeddings/quality")
+async def get_embeddings_quality_report():
+    """Return diagnostics about embedding integrity and semantic signal coverage."""
+    try:
+        kb_service = get_knowledge_base_service()
+        return await kb_service.get_embedding_quality_report()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get embedding quality report: {str(e)}")
+
+
+@router.post("/embeddings/quality/rebuild")
+async def rebuild_zero_signal_embeddings(
+    limit: int = Query(0, ge=0, le=500, description="Max zero-signal entries to rebuild (0 = all)")
+):
+    """Rebuild missing/zero-signal embeddings and return refreshed quality diagnostics."""
+    try:
+        kb_service = get_knowledge_base_service()
+        return await kb_service.rebuild_zero_signal_embeddings(limit=limit)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to rebuild zero-signal embeddings: {str(e)}")
+
+
 class OnboardingData(BaseModel):
     """Model for onboarding data."""
     role: str

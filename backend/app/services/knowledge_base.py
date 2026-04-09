@@ -133,36 +133,6 @@ class KnowledgeBaseService:
         self._embedding_cache_loaded = False
         self._embedding_provider_cooldown_until = 0.0
 
-    def _generate_fallback_embedding(self, text: str) -> List[float]:
-        """
-        Build a deterministic lexical embedding when provider embeddings are unavailable.
-
-        This keeps retrieval and visualization usable instead of collapsing all vectors to zeros.
-        """
-        dimension = self.vector_store.dimension
-        vector = [0.0] * dimension
-
-        tokens = re.findall(r"[a-zA-Z0-9_]+", text.lower())
-        if not tokens:
-            tokens = ["empty"]
-
-        for token in tokens:
-            digest = hashlib.sha256(token.encode("utf-8")).digest()
-            for offset in range(0, len(digest), 4):
-                chunk = digest[offset:offset + 4]
-                if len(chunk) < 4:
-                    continue
-                value = int.from_bytes(chunk, byteorder="big", signed=False)
-                idx = value % dimension
-                sign = 1.0 if (value & 1) == 0 else -1.0
-                vector[idx] += sign
-
-        norm = sum(value * value for value in vector) ** 0.5
-        if norm == 0:
-            return vector
-
-        return [value / norm for value in vector]
-
     def _truncate_for_log(self, value: Any, limit: int = 140) -> str:
         text = " ".join(str(value or "").split())
         if len(text) <= limit:
@@ -232,25 +202,21 @@ class KnowledgeBaseService:
     
     async def _generate_embedding(self, text: str) -> List[float]:
         """Generate embedding for text using the configured LLM provider."""
-        try:
-            if monotonic() < self._embedding_provider_cooldown_until:
-                return self._generate_fallback_embedding(text)
+        if monotonic() < self._embedding_provider_cooldown_until:
+            raise RuntimeError("Embedding provider is temporarily unavailable due to recent failures")
 
-            # Check if LLM service is already initialized before trying to get it
+        try:
             from ..llm import service as llm_service_module
-            if not llm_service_module._llm_service or not llm_service_module._llm_service._initialized:
-                logger.warning("LLM service not initialized, using deterministic fallback embedding")
-                return self._generate_fallback_embedding(text)
-            
-            llm_service = llm_service_module._llm_service
-            
+        except ImportError as e:
+            raise RuntimeError(f"Embedding dependencies are unavailable: {e}") from e
+
+        llm_service = llm_service_module._llm_service
+        if not llm_service or not llm_service._initialized:
+            raise RuntimeError("LLM service is not initialized for embedding generation")
+
+        try:
             request = EmbeddingRequest(text=text)
             response = await llm_service.generate_embedding(request)
-            self._embedding_provider_cooldown_until = 0.0
-            return response.embedding
-        except ImportError as e:
-            logger.warning(f"Missing dependencies for embedding generation: {e}")
-            return self._generate_fallback_embedding(text)
         except Exception as e:
             error_text = str(e).lower()
             if (
@@ -262,8 +228,14 @@ class KnowledgeBaseService:
                 or "api connection" in error_text
             ):
                 self._embedding_provider_cooldown_until = monotonic() + EMBEDDING_PROVIDER_COOLDOWN_SECONDS
-            logger.warning(f"Embedding generation failed: {e}")
-            return self._generate_fallback_embedding(text)
+            raise RuntimeError(f"Embedding generation failed: {e}") from e
+
+        embedding = list(response.embedding or [])
+        if not self._embedding_has_signal(embedding):
+            raise RuntimeError("Embedding provider returned a zero-signal vector")
+
+        self._embedding_provider_cooldown_until = 0.0
+        return embedding
 
     def _normalize_embedding_label(self, value: Any) -> str:
         if hasattr(value, "value"):
@@ -578,7 +550,7 @@ class KnowledgeBaseService:
         return self._build_embedding_cache_key(fallback_text)
 
     def _cache_embedding_value(self, embedding_key: str, embedding: Optional[List[float]]) -> None:
-        if not embedding_key or not embedding:
+        if not embedding_key or not self._embedding_has_signal(embedding):
             return
         self._embedding_cache[embedding_key] = list(embedding)
 
@@ -603,6 +575,12 @@ class KnowledgeBaseService:
             entry = self.vector_store.get_entry(entry_id)
             self._cache_entry_embedding(entry)
 
+    def _embedding_has_signal(self, embedding: Optional[List[float]]) -> bool:
+        if not embedding:
+            return False
+
+        return any(abs(float(value)) > 1e-9 for value in embedding)
+
     async def _resolve_embedding(
         self,
         embedding_text: str,
@@ -611,7 +589,7 @@ class KnowledgeBaseService:
     ) -> List[float]:
         await self._ensure_embedding_cache_loaded()
 
-        if existing_entry and existing_entry.embedding:
+        if existing_entry and self._embedding_has_signal(existing_entry.embedding):
             existing_key = self._extract_embedding_cache_key(existing_entry)
             if existing_key == embedding_key:
                 resolved = list(existing_entry.embedding)
@@ -619,10 +597,12 @@ class KnowledgeBaseService:
                 return resolved
 
         cached_embedding = self._embedding_cache.get(embedding_key)
-        if cached_embedding:
+        if self._embedding_has_signal(cached_embedding):
             return list(cached_embedding)
 
         generated_embedding = await self._generate_embedding_for_text(embedding_text)
+        if not self._embedding_has_signal(generated_embedding):
+            raise RuntimeError("Generated embedding has no semantic signal")
         self._cache_embedding_value(embedding_key, generated_embedding)
         return generated_embedding
 
@@ -1098,14 +1078,87 @@ class KnowledgeBaseService:
         category = str(entry.category or "uncategorized").strip().lower()
         return category if category else "uncategorized"
 
+    def _normalize_visual_entry_type_label(self, entry_type: Any) -> str:
+        """Normalize enum-like labels (including legacy serialized values) for UI filtering."""
+        if hasattr(entry_type, "value"):
+            raw_value = str(entry_type.value)
+        else:
+            raw_value = str(entry_type or "")
+
+        normalized = raw_value.strip().lower()
+        if not normalized:
+            return "memory"
+
+        if "." in normalized:
+            normalized = normalized.split(".")[-1]
+
+        return normalized or "memory"
+
     def _normalize_visual_type(self, entry: KnowledgeEntry, normalized_category: str) -> str:
         if normalized_category == "time_entry":
             return "time_entry"
 
-        if hasattr(entry.entry_type, "value"):
-            return str(entry.entry_type.value)
+        return self._normalize_visual_entry_type_label(entry.entry_type)
 
-        return str(entry.entry_type)
+    async def _ensure_embedding_for_visualization_entry(self, entry: KnowledgeEntry) -> Optional[List[float]]:
+        """Backfill embeddings for legacy entries that were saved without vectors."""
+        existing_embedding = self.vector_store.get_embedding(entry.entry_id)
+        if self._embedding_has_signal(existing_embedding):
+            return existing_embedding
+
+        metadata_payload = dict(entry.metadata or {})
+        normalized_entry_type = self._normalize_visual_entry_type_label(entry.entry_type)
+        try:
+            resolved_entry_type = KnowledgeEntryType(normalized_entry_type)
+        except Exception:
+            resolved_entry_type = KnowledgeEntryType.MEMORY
+
+        try:
+            if isinstance(entry.entry_sub_type, KnowledgeEntrySubType):
+                resolved_entry_sub_type = entry.entry_sub_type
+            else:
+                resolved_entry_sub_type = KnowledgeEntrySubType(str(entry.entry_sub_type))
+        except Exception:
+            resolved_entry_sub_type = KnowledgeEntrySubType.MISC_INTERACTION
+
+        embedding_text = self._build_embedding_text(
+            title=entry.title,
+            content=entry.content,
+            tags=entry.tags,
+            category=entry.category,
+            metadata=metadata_payload,
+            entry_type=resolved_entry_type,
+            entry_sub_type=resolved_entry_sub_type,
+        )
+        embedding_key = self._build_embedding_cache_key(embedding_text)
+        metadata_payload[EMBEDDING_CACHE_KEY_FIELD] = embedding_key
+
+        self._log_embedding_payload(
+            action="backfill",
+            embedding_key=embedding_key,
+            embedding_text=embedding_text,
+            chunks=self._chunk_embedding_text(embedding_text),
+            entry_id=entry.entry_id,
+            category=entry.category,
+        )
+
+        generated_embedding = await self._resolve_embedding(
+            embedding_text,
+            embedding_key,
+            existing_entry=entry,
+        )
+        if not generated_embedding:
+            return None
+
+        updated_entry = entry.model_copy()
+        updated_entry.metadata = metadata_payload
+        updated_entry.updated_at = datetime.utcnow()
+        self.vector_store.update_entry(updated_entry, generated_embedding)
+        self._index_sync_event_key(updated_entry)
+        self._cache_entry_embedding(updated_entry)
+
+        logger.info("Backfilled missing embedding for entry %s", entry.entry_id)
+        return generated_embedding
 
     def _infer_interaction_category_and_sub_type(
         self,
@@ -2565,9 +2618,17 @@ class KnowledgeBaseService:
             entries_info = []
             
             for entry in all_entries:
-                # Get embedding from vector store
-                embedding = self.vector_store.get_embedding(entry.entry_id)
-                if embedding is not None:
+                try:
+                    embedding = await self._ensure_embedding_for_visualization_entry(entry)
+                except Exception as embedding_error:
+                    logger.warning(
+                        "Skipping entry %s in visualization due to invalid embedding: %s",
+                        entry.entry_id,
+                        embedding_error,
+                    )
+                    continue
+
+                if self._embedding_has_signal(embedding):
                     embeddings.append(embedding)
                     entries_info.append(entry)
             
@@ -2575,94 +2636,58 @@ class KnowledgeBaseService:
                 return []
 
             import numpy as np
-            
-            # Try to use PCA for dimensionality reduction, fallback to simple projection
-            try:
-                from sklearn.decomposition import PCA
-                
-                # Reduce dimensionality to 3D using PCA
-                embeddings_array = np.array(embeddings, dtype=float)
 
-                if embeddings_array.shape[0] < 3:
-                    raise ValueError("Not enough points for PCA")
+            embeddings_array = np.array(embeddings, dtype=float)
+            if not np.isfinite(embeddings_array).all():
+                raise ValueError("Embeddings contain non-finite values")
 
-                if not np.isfinite(embeddings_array).all():
-                    raise ValueError("Embeddings contain non-finite values")
+            positions_3d: np.ndarray
+            pca_error_reason: Optional[str] = None
 
-                if np.allclose(embeddings_array, embeddings_array[0], atol=1e-9):
-                    raise ValueError("Embeddings have near-zero variance")
+            # Primary path: PCA from full embedding space.
+            if (
+                embeddings_array.shape[0] >= 3
+                and embeddings_array.shape[1] >= 3
+                and not np.allclose(embeddings_array, embeddings_array[0], atol=1e-9)
+            ):
+                try:
+                    from sklearn.decomposition import PCA
 
-                pca = PCA(n_components=3)
-                positions_3d = pca.fit_transform(embeddings_array)
+                    pca = PCA(n_components=3)
+                    pca_positions = pca.fit_transform(embeddings_array)
+                    if not np.isfinite(pca_positions).all():
+                        raise ValueError("PCA returned non-finite coordinates")
 
-                if not np.isfinite(positions_3d).all():
-                    raise ValueError("PCA returned non-finite coordinates")
-                
-                # Normalize positions to a reasonable range for visualization
-                positions_3d = positions_3d * 10  # Scale up for better visualization
-                
-                logger.info("Using PCA for dimensionality reduction")
-                
-            except Exception as pca_error:
-                logger.warning(f"PCA failed ({pca_error}), using fallback projection")
-                
-                # Deterministic fallback layout grouped by category.
-                import math
-                unique_categories = sorted({self._normalize_visual_category(entry) for entry in entries_info})
-                category_index = {category: idx for idx, category in enumerate(unique_categories)}
-                category_counts: Dict[str, int] = {}
-                positions_3d = []
+                    positions_3d = pca_positions
+                    logger.info("Using PCA for dimensionality reduction")
+                except Exception as pca_error:
+                    pca_error_reason = str(pca_error)
+                    positions_3d = np.empty((0, 3), dtype=float)
+            else:
+                positions_3d = np.empty((0, 3), dtype=float)
 
-                for entry in entries_info:
-                    normalized_category = self._normalize_visual_category(entry)
-                    group_idx = category_index.get(normalized_category, 0)
-                    group_angle = (group_idx / max(len(unique_categories), 1)) * 2 * math.pi
-                    cluster_x = math.cos(group_angle) * 26
-                    cluster_z = math.sin(group_angle) * 26
+            # Strict secondary path: direct projection from real embedding dimensions.
+            if positions_3d.size == 0:
+                if embeddings_array.shape[1] < 3:
+                    raise ValueError("Embedding dimension is below 3; cannot project to 3D")
 
-                    local_index = category_counts.get(normalized_category, 0)
-                    category_counts[normalized_category] = local_index + 1
+                if pca_error_reason:
+                    logger.warning("PCA projection unavailable: %s. Using direct semantic projection.", pca_error_reason)
 
-                    ring = 1 + (local_index // 8)
-                    local_angle = ((local_index % 8) / 8) * 2 * math.pi
-                    local_radius = ring * 4.5
+                positions_3d = embeddings_array[:, :3].copy()
+                centroid = positions_3d.mean(axis=0)
+                positions_3d = positions_3d - centroid
 
-                    x = cluster_x + math.cos(local_angle) * local_radius
-                    y = ((local_index % 5) - 2) * 3
-                    z = cluster_z + math.sin(local_angle) * local_radius
-                    
-                    positions_3d.append([x, y, z])
+                raw_norms = np.linalg.norm(positions_3d, axis=1)
+                max_raw_norm = float(np.max(raw_norms)) if raw_norms.size > 0 else 0.0
+                if max_raw_norm > 0:
+                    positions_3d = (positions_3d / max_raw_norm) * 35.0
+
+                logger.info("Using direct semantic projection from embedding dimensions")
 
             positions_array = np.array(positions_3d, dtype=float)
 
-            # Apply a light repulsion pass to reduce overlap in dense clusters.
-            if positions_array.shape[0] > 1:
-                min_node_distance = 2.2
-                for _ in range(12):
-                    moved = False
-                    for i in range(len(positions_array)):
-                        for j in range(i + 1, len(positions_array)):
-                            delta = positions_array[i] - positions_array[j]
-                            distance = float(np.linalg.norm(delta))
-
-                            if distance <= 1e-9:
-                                delta = np.array([
-                                    0.13 * (i + 1),
-                                    0.07 * (j + 1),
-                                    0.11 * ((i + j) + 1),
-                                ], dtype=float)
-                                distance = float(np.linalg.norm(delta))
-
-                            if distance < min_node_distance:
-                                push = (min_node_distance - distance) * 0.5
-                                direction = delta / max(distance, 1e-9)
-                                positions_array[i] += direction * push
-                                positions_array[j] -= direction * push
-                                moved = True
-
-                    if not moved:
-                        break
-
+            if positions_array.shape[0] > 0:
                 max_norm = float(np.max(np.linalg.norm(positions_array, axis=1)))
                 if max_norm > 0:
                     positions_array = (positions_array / max_norm) * 35.0
@@ -2741,8 +2766,16 @@ class KnowledgeBaseService:
             entry = self.vector_store.get_entry(entry_id)
             if not entry:
                 return None
-            
-            embedding = self.vector_store.get_embedding(entry_id)
+
+            try:
+                embedding = await self._ensure_embedding_for_visualization_entry(entry)
+            except Exception as embedding_error:
+                logger.warning(
+                    "Embedding details for %s have no valid vector: %s",
+                    entry_id,
+                    embedding_error,
+                )
+                embedding = None
             
             # Find similar entries
             if embedding:
@@ -2800,6 +2833,215 @@ class KnowledgeBaseService:
         except Exception as e:
             logger.error(f"Failed to get embedding details for {entry_id}: {e}")
             return None
+
+    async def get_embedding_quality_report(self) -> Dict[str, Any]:
+        """Return quality diagnostics for stored embeddings so UI can expose integrity status."""
+        try:
+            all_entries = self.vector_store.get_all_entries()
+            if not all_entries:
+                return {
+                    "checked_entries": 0,
+                    "signal_embeddings": 0,
+                    "zero_signal_embeddings": 0,
+                    "coverage": 0.0,
+                    "insight_total": 0,
+                    "insight_signal": 0,
+                    "insight_coverage": 0.0,
+                    "status": "empty",
+                    "avg_embedding_norm": 0.0,
+                    "min_embedding_norm": 0.0,
+                    "max_embedding_norm": 0.0,
+                    "dimension_histogram": {},
+                    "categories": [],
+                    "suspicious_entries": [],
+                    "sample_entries": [],
+                    "checked_at": datetime.utcnow().isoformat(),
+                }
+
+            checked_entries = 0
+            signal_embeddings = 0
+            insight_total = 0
+            insight_signal = 0
+            norms: List[float] = []
+            dimension_histogram: Dict[str, int] = {}
+            category_stats: Dict[str, Dict[str, int]] = {}
+            suspicious_entries: List[Dict[str, Any]] = []
+            sample_entries: List[Dict[str, Any]] = []
+
+            for entry in all_entries:
+                embedding = self.vector_store.get_embedding(entry.entry_id)
+                checked_entries += 1
+
+                normalized_category = self._normalize_visual_category(entry)
+                normalized_type = self._normalize_visual_type(entry, normalized_category)
+                has_signal = self._embedding_has_signal(embedding)
+                dimension = len(embedding) if embedding else 0
+
+                dimension_histogram[str(dimension)] = dimension_histogram.get(str(dimension), 0) + 1
+
+                category_bucket = category_stats.setdefault(normalized_category, {"total": 0, "signal": 0})
+                category_bucket["total"] += 1
+
+                if normalized_type == "insight" or normalized_category == "insight":
+                    insight_total += 1
+
+                if has_signal:
+                    signal_embeddings += 1
+                    category_bucket["signal"] += 1
+                    if normalized_type == "insight" or normalized_category == "insight":
+                        insight_signal += 1
+
+                    resolved_norm = math.sqrt(sum(float(value) * float(value) for value in (embedding or [])))
+                    norms.append(float(resolved_norm))
+                else:
+                    if len(suspicious_entries) < 25:
+                        suspicious_entries.append({
+                            "entry_id": entry.entry_id,
+                            "title": entry.title,
+                            "category": normalized_category,
+                            "entry_type": normalized_type,
+                            "created_at": entry.created_at.isoformat(),
+                            "updated_at": entry.updated_at.isoformat(),
+                        })
+
+                if len(sample_entries) < 8:
+                    sample_entries.append({
+                        "entry_id": entry.entry_id,
+                        "title": entry.title,
+                        "category": normalized_category,
+                        "entry_type": normalized_type,
+                        "dimension": dimension,
+                        "has_signal": has_signal,
+                        "embedding_preview": (embedding[:8] if embedding else []),
+                    })
+
+            coverage = signal_embeddings / checked_entries if checked_entries else 0.0
+            insight_coverage = insight_signal / insight_total if insight_total else 1.0
+            zero_signal_embeddings = checked_entries - signal_embeddings
+
+            if checked_entries == 0:
+                status = "empty"
+            elif coverage < 0.5 or insight_coverage < 0.5:
+                status = "critical"
+            elif coverage < 0.85 or insight_coverage < 0.85:
+                status = "degraded"
+            else:
+                status = "healthy"
+
+            categories = [
+                {
+                    "category": category,
+                    "total": stats["total"],
+                    "signal": stats["signal"],
+                    "coverage": (stats["signal"] / stats["total"]) if stats["total"] else 0.0,
+                }
+                for category, stats in category_stats.items()
+            ]
+            categories.sort(key=lambda item: item["total"], reverse=True)
+
+            return {
+                "checked_entries": checked_entries,
+                "signal_embeddings": signal_embeddings,
+                "zero_signal_embeddings": zero_signal_embeddings,
+                "coverage": coverage,
+                "insight_total": insight_total,
+                "insight_signal": insight_signal,
+                "insight_coverage": insight_coverage,
+                "status": status,
+                "avg_embedding_norm": (sum(norms) / len(norms)) if norms else 0.0,
+                "min_embedding_norm": min(norms) if norms else 0.0,
+                "max_embedding_norm": max(norms) if norms else 0.0,
+                "dimension_histogram": dimension_histogram,
+                "categories": categories,
+                "suspicious_entries": suspicious_entries,
+                "sample_entries": sample_entries,
+                "checked_at": datetime.utcnow().isoformat(),
+            }
+        except Exception as e:
+            logger.error("Failed to compute embedding quality report: %s", e)
+            return {
+                "checked_entries": 0,
+                "signal_embeddings": 0,
+                "zero_signal_embeddings": 0,
+                "coverage": 0.0,
+                "insight_total": 0,
+                "insight_signal": 0,
+                "insight_coverage": 0.0,
+                "status": "error",
+                "avg_embedding_norm": 0.0,
+                "min_embedding_norm": 0.0,
+                "max_embedding_norm": 0.0,
+                "dimension_histogram": {},
+                "categories": [],
+                "suspicious_entries": [],
+                "sample_entries": [],
+                "checked_at": datetime.utcnow().isoformat(),
+                "error": str(e),
+            }
+
+    async def rebuild_zero_signal_embeddings(self, limit: int = 0) -> Dict[str, Any]:
+        """Rebuild embeddings that are missing signal and return post-repair quality metrics."""
+        try:
+            all_entries = self.vector_store.get_all_entries()
+            candidates: List[KnowledgeEntry] = []
+
+            for entry in all_entries:
+                existing_embedding = self.vector_store.get_embedding(entry.entry_id)
+                if not self._embedding_has_signal(existing_embedding):
+                    candidates.append(entry)
+
+            if limit > 0:
+                candidates = candidates[:limit]
+
+            rebuilt_count = 0
+            failed_count = 0
+            rebuilt_entry_ids: List[str] = []
+            failed_entry_ids: List[str] = []
+
+            for entry in candidates:
+                try:
+                    resolved_embedding = await self._ensure_embedding_for_visualization_entry(entry)
+                    if self._embedding_has_signal(resolved_embedding):
+                        rebuilt_count += 1
+                        if len(rebuilt_entry_ids) < 50:
+                            rebuilt_entry_ids.append(entry.entry_id)
+                    else:
+                        failed_count += 1
+                        if len(failed_entry_ids) < 50:
+                            failed_entry_ids.append(entry.entry_id)
+                except Exception as repair_error:
+                    logger.warning(
+                        "Failed to rebuild embedding for entry %s: %s",
+                        entry.entry_id,
+                        repair_error,
+                    )
+                    failed_count += 1
+                    if len(failed_entry_ids) < 50:
+                        failed_entry_ids.append(entry.entry_id)
+
+            post_repair_quality = await self.get_embedding_quality_report()
+            return {
+                "requested_limit": limit,
+                "total_candidates": len(candidates),
+                "rebuilt_count": rebuilt_count,
+                "failed_count": failed_count,
+                "rebuilt_entry_ids": rebuilt_entry_ids,
+                "failed_entry_ids": failed_entry_ids,
+                "repaired_at": datetime.utcnow().isoformat(),
+                "post_repair_quality": post_repair_quality,
+            }
+        except Exception as e:
+            logger.error("Failed to rebuild zero-signal embeddings: %s", e)
+            return {
+                "requested_limit": limit,
+                "total_candidates": 0,
+                "rebuilt_count": 0,
+                "failed_count": 0,
+                "rebuilt_entry_ids": [],
+                "failed_entry_ids": [],
+                "repaired_at": datetime.utcnow().isoformat(),
+                "error": str(e),
+            }
 
 
 # Per-user service instances

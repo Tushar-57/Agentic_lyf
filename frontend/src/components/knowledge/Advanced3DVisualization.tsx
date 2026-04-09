@@ -23,7 +23,12 @@ import {
     ChevronLeft,
     ChevronRight,
     AlertCircle,
-    CheckCircle2
+    CheckCircle2,
+    ShieldAlert,
+    ShieldCheck,
+    RefreshCw,
+    Wrench,
+    Activity
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -32,7 +37,6 @@ import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Slider } from '@/components/ui/slider'
-import { readEmbeddingsCache, writeEmbeddingsCache } from '@/lib/embeddingsCache'
 import { toast } from 'sonner'
 
 // Color scheme helper function
@@ -44,9 +48,37 @@ const getCategoryColor = (category: string): string => {
         'journal': '#a855f7',
         'system': '#64748b',
         'interaction': '#f472b6',
-        'time_entry': '#3b82f6'
+        'time_entry': '#3b82f6',
+        'insight': '#f59e0b',
+        'daily_checkup': '#22d3ee'
     }
     return categoryColors[category] || '#64748b'
+}
+
+const normalizeEnumLikeValue = (value: string): string => {
+    const normalized = String(value || '').trim().toLowerCase()
+    if (!normalized) {
+        return ''
+    }
+
+    const dequalified = normalized.includes('.')
+        ? normalized.split('.').pop() || normalized
+        : normalized
+
+    return dequalified.replace(/[\s-]+/g, '_')
+}
+
+const normalizeTypeToken = (value: string): string => {
+    const normalized = normalizeEnumLikeValue(value)
+    if (!normalized) {
+        return 'memory'
+    }
+
+    if (normalized === 'userpreference' || normalized === 'user_preference') {
+        return 'preference'
+    }
+
+    return normalized
 }
 
 const toDisplayLabel = (value: string) =>
@@ -77,8 +109,16 @@ const normalizePointCategory = (category: string, entryType: string, tags: strin
         return 'time_entry'
     }
 
-    const normalized = String(category || '').trim().toLowerCase()
-    return normalized || 'uncategorized'
+    const normalized = normalizeEnumLikeValue(category)
+    if (!normalized) {
+        return 'uncategorized'
+    }
+
+    if (normalized === 'important_insight' || normalized === 'deep_insight') {
+        return 'insight'
+    }
+
+    return normalized
 }
 
 const normalizePointType = (entryType: string, normalizedCategory: string, tags: string[] = []) => {
@@ -89,8 +129,20 @@ const normalizePointType = (entryType: string, normalizedCategory: string, tags:
         return 'time_entry'
     }
 
-    const normalized = String(entryType || '').trim().toLowerCase()
+    const normalized = normalizeTypeToken(entryType)
     return normalized || 'memory'
+}
+
+const isInsightSignal = (category: string, entryType: string, tags: string[] = []) => {
+    const normalizedCategory = normalizePointCategory(category, entryType, tags)
+    const normalizedType = normalizePointType(entryType, normalizedCategory, tags)
+    const normalizedTags = tags.map((tag) => normalizeEnumLikeValue(String(tag || '')))
+
+    return (
+        normalizedType === 'insight'
+        || normalizedCategory === 'insight'
+        || normalizedTags.includes('insight')
+    )
 }
 
 interface EmbeddingPoint {
@@ -109,6 +161,9 @@ interface EmbeddingPoint {
         similarity: number
     }>
 }
+
+const isInsightPoint = (point: EmbeddingPoint) =>
+    isInsightSignal(point.category, point.entry_type, point.tags)
 
 interface EmbeddingDetails {
     entry: {
@@ -141,22 +196,95 @@ interface EmbeddingDetails {
     }
 }
 
+interface EmbeddingQualityReport {
+    checked_entries: number
+    signal_embeddings: number
+    zero_signal_embeddings: number
+    coverage: number
+    insight_total: number
+    insight_signal: number
+    insight_coverage: number
+    status: string
+    avg_embedding_norm: number
+    min_embedding_norm: number
+    max_embedding_norm: number
+    dimension_histogram: Record<string, number>
+    categories: Array<{
+        category: string
+        total: number
+        signal: number
+        coverage: number
+    }>
+    suspicious_entries: Array<{
+        entry_id: string
+        title: string
+        category: string
+        entry_type: string
+        created_at: string
+        updated_at: string
+    }>
+    sample_entries: Array<{
+        entry_id: string
+        title: string
+        category: string
+        entry_type: string
+        dimension: number
+        has_signal: boolean
+        embedding_preview: number[]
+    }>
+    checked_at: string
+    error?: string
+}
+
+const formatPercent = (value: number) => `${(Math.max(0, Math.min(1, value || 0)) * 100).toFixed(0)}%`
+
+const getQualityTone = (status: string) => {
+    if (status === 'healthy') {
+        return {
+            badgeClass: 'border-emerald-400/50 bg-emerald-500/15 text-emerald-100',
+            progressClass: 'bg-emerald-400',
+            icon: ShieldCheck,
+            label: 'Healthy',
+        }
+    }
+
+    if (status === 'degraded') {
+        return {
+            badgeClass: 'border-amber-400/55 bg-amber-500/15 text-amber-100',
+            progressClass: 'bg-amber-400',
+            icon: ShieldAlert,
+            label: 'Degraded',
+        }
+    }
+
+    if (status === 'critical') {
+        return {
+            badgeClass: 'border-red-400/60 bg-red-500/15 text-red-100',
+            progressClass: 'bg-red-400',
+            icon: ShieldAlert,
+            label: 'Critical',
+        }
+    }
+
+    if (status === 'empty') {
+        return {
+            badgeClass: 'border-slate-400/45 bg-slate-500/15 text-slate-100',
+            progressClass: 'bg-slate-400',
+            icon: Activity,
+            label: 'Empty',
+        }
+    }
+
+    return {
+        badgeClass: 'border-red-400/60 bg-red-500/15 text-red-100',
+        progressClass: 'bg-red-400',
+        icon: ShieldAlert,
+        label: 'Error',
+    }
+}
+
 const POSITION_EPSILON = 1e-4
 const DEFAULT_CONNECTION_THRESHOLD = 0.72
-
-function stableHash(value: string): number {
-    let hash = 2166136261
-    for (let i = 0; i < value.length; i += 1) {
-        hash ^= value.charCodeAt(i)
-        hash = Math.imul(hash, 16777619)
-    }
-    return hash >>> 0
-}
-
-function seededOffset(seed: string, salt: number, amplitude: number): number {
-    const normalized = ((stableHash(`${seed}:${salt}`) % 10000) / 10000) - 0.5
-    return normalized * amplitude * 2
-}
 
 function hasMeaningfulCoordinates(points: EmbeddingPoint[]): boolean {
     if (points.length < 2) {
@@ -199,103 +327,6 @@ function normalizeSemanticPositions(points: EmbeddingPoint[]): EmbeddingPoint[] 
         return {
             ...point,
             position_3d: [normalized.x, normalized.y, normalized.z],
-        }
-    })
-}
-
-function buildStableFallbackLayout(rawPoints: EmbeddingPoint[]): EmbeddingPoint[] {
-    const categoryGroups: Record<string, EmbeddingPoint[]> = {}
-    rawPoints.forEach((point) => {
-        if (!categoryGroups[point.category]) {
-            categoryGroups[point.category] = []
-        }
-        categoryGroups[point.category].push(point)
-    })
-
-    const processedPoints: EmbeddingPoint[] = []
-    const sortedCategories = Object.keys(categoryGroups).sort((a, b) => a.localeCompare(b))
-    const clusterRadius = 34
-
-    sortedCategories.forEach((category, categoryIndex) => {
-        const categoryPoints = [...categoryGroups[category]].sort((a, b) => a.entry_id.localeCompare(b.entry_id))
-        const angle = (categoryIndex / Math.max(sortedCategories.length, 1)) * Math.PI * 2
-        const clusterCenterX = Math.cos(angle) * clusterRadius + seededOffset(category, 1, 2.5)
-        const clusterCenterZ = Math.sin(angle) * clusterRadius + seededOffset(category, 2, 2.5)
-        const clusterCenterY = seededOffset(category, 3, 4)
-
-        categoryPoints.forEach((point, pointIndex) => {
-            const ring = 1 + Math.floor(pointIndex / 8)
-            const ringStep = 7
-            const localAngle = (
-                (pointIndex % 8) / 8
-            ) * Math.PI * 2 + seededOffset(point.entry_id, 4, 0.4)
-            const distance = ring * ringStep + seededOffset(point.entry_id, 5, 1.5)
-
-            const x = clusterCenterX + Math.cos(localAngle) * distance + seededOffset(point.entry_id, 6, 1.5)
-            const y = clusterCenterY + seededOffset(point.entry_id, 7, 5)
-            const z = clusterCenterZ + Math.sin(localAngle) * distance + seededOffset(point.entry_id, 8, 1.5)
-
-            processedPoints.push({
-                ...point,
-                position_3d: [x, y, z],
-            })
-        })
-    })
-
-    return processedPoints
-}
-
-function spreadNodesWithRepulsion(
-    points: EmbeddingPoint[],
-    minDistance: number,
-    iterations: number,
-): EmbeddingPoint[] {
-    if (points.length < 2) {
-        return points
-    }
-
-    const vectors = points.map((point) => new THREE.Vector3(...point.position_3d))
-
-    for (let iteration = 0; iteration < iterations; iteration += 1) {
-        for (let i = 0; i < vectors.length; i += 1) {
-            for (let j = i + 1; j < vectors.length; j += 1) {
-                const delta = vectors[i].clone().sub(vectors[j])
-                let distance = delta.length()
-
-                if (distance <= POSITION_EPSILON) {
-                    const jitterSeed = `${points[i].entry_id}:${points[j].entry_id}:${iteration}`
-                    delta.set(
-                        seededOffset(jitterSeed, 11, 0.35) || 0.08,
-                        seededOffset(jitterSeed, 12, 0.35) || 0.08,
-                        seededOffset(jitterSeed, 13, 0.35) || 0.08,
-                    )
-                    distance = delta.length()
-                }
-
-                if (distance < minDistance) {
-                    const pushDistance = (minDistance - distance) * 0.5
-                    const push = delta.normalize().multiplyScalar(pushDistance)
-                    vectors[i].add(push)
-                    vectors[j].sub(push)
-                }
-            }
-        }
-    }
-
-    const centroid = vectors
-        .reduce((acc, vector) => acc.add(vector), new THREE.Vector3())
-        .divideScalar(vectors.length)
-
-    const centeredVectors = vectors.map((vector) => vector.clone().sub(centroid))
-    const maxDistance = centeredVectors.reduce((max, vector) => Math.max(max, vector.length()), 1)
-    const targetRadius = 58
-    const normalizationScale = targetRadius / maxDistance
-
-    return points.map((point, index) => {
-        const stabilized = centeredVectors[index].clone().multiplyScalar(normalizationScale)
-        return {
-            ...point,
-            position_3d: [stabilized.x, stabilized.y, stabilized.z],
         }
     })
 }
@@ -348,6 +379,9 @@ const EmbeddingNode: React.FC<{
 
         switch (colorScheme) {
             case 'category':
+                if (isInsightPoint(point)) {
+                    return '#f59e0b'
+                }
                 return getCategoryColor(point.category)
 
             case 'type':
@@ -356,7 +390,8 @@ const EmbeddingNode: React.FC<{
                     'interaction': '#00d084',
                     'time_entry': '#3b82f6',
                     'insight': '#ffb347',
-                    'pattern': '#a855f7'
+                    'pattern': '#a855f7',
+                    'memory': '#94a3b8'
                 }
                 return typeColors[point.entry_type] || '#64748b'
 
@@ -487,24 +522,32 @@ const ConnectionLines: React.FC<{
         [points],
     )
 
-    const calcFallbackSimilarity = (a: EmbeddingPoint, b: EmbeddingPoint) => {
-        let similarity = 0
-        if (a.category && b.category && a.category === b.category) {
-            similarity += 0.45
+    const calcSemanticSimilarity = (a: EmbeddingPoint, b: EmbeddingPoint) => {
+        if (!Array.isArray(a.embedding) || !Array.isArray(b.embedding)) {
+            return 0
         }
 
-        if (a.entry_type && b.entry_type && a.entry_type === b.entry_type) {
-            similarity += 0.15
+        const dimension = Math.min(a.embedding.length, b.embedding.length)
+        if (dimension === 0) {
+            return 0
         }
 
-        const tagsA = Array.isArray(a.tags) ? a.tags : []
-        const tagsB = Array.isArray(b.tags) ? b.tags : []
-        const commonTags = tagsA.filter((tag) => tagsB.includes(tag)).length
-        if (tagsA.length > 0 && tagsB.length > 0) {
-            similarity += (commonTags / Math.max(tagsA.length, tagsB.length)) * 0.4
+        let dot = 0
+        let normA = 0
+        let normB = 0
+        for (let index = 0; index < dimension; index += 1) {
+            const valueA = Number(a.embedding[index] || 0)
+            const valueB = Number(b.embedding[index] || 0)
+            dot += valueA * valueB
+            normA += valueA * valueA
+            normB += valueB * valueB
         }
 
-        return Math.min(similarity, 1)
+        if (normA <= POSITION_EPSILON || normB <= POSITION_EPSILON) {
+            return 0
+        }
+
+        return dot / Math.sqrt(normA * normB)
     }
 
     const distanceBetween = (a: EmbeddingPoint, b: EmbeddingPoint) => {
@@ -514,12 +557,12 @@ const ConnectionLines: React.FC<{
         return Math.sqrt((dx * dx) + (dy * dy) + (dz * dz))
     }
 
-    const getFallbackNeighbors = (source: EmbeddingPoint, maxNeighbors: number) => {
+    const getSemanticNeighbors = (source: EmbeddingPoint, maxNeighbors: number) => {
         return points
             .filter((point) => point.entry_id !== source.entry_id)
             .map((point) => ({
                 target: point,
-                similarity: calcFallbackSimilarity(source, point),
+                similarity: calcSemanticSimilarity(source, point),
             }))
             .filter((candidate) => candidate.similarity > 0)
             .sort((a, b) => b.similarity - a.similarity)
@@ -601,7 +644,7 @@ const ConnectionLines: React.FC<{
                     return
                 }
 
-                getFallbackNeighbors(point, perNodeLimit).forEach((candidate) => {
+                getSemanticNeighbors(point, perNodeLimit).forEach((candidate) => {
                     if (candidate.similarity >= similarityThreshold) {
                         addConnection(point, candidate.target, candidate.similarity)
                     }
@@ -625,7 +668,7 @@ const ConnectionLines: React.FC<{
                         }
                     })
             } else {
-                getFallbackNeighbors(selected, 4).forEach((candidate) => {
+                getSemanticNeighbors(selected, 4).forEach((candidate) => {
                     if (candidate.similarity >= similarityThreshold) {
                         addConnection(selected, candidate.target, candidate.similarity)
                     }
@@ -961,6 +1004,16 @@ interface Advanced3DVisualizationProps {
     onClose: () => void
 }
 
+type FocusPreset = 'all' | 'insights' | 'interactions' | 'time_entries' | 'preferences'
+
+const FOCUS_PRESET_OPTIONS: Array<{ value: FocusPreset; label: string }> = [
+    { value: 'all', label: 'All' },
+    { value: 'insights', label: 'Insights' },
+    { value: 'interactions', label: 'Interactions' },
+    { value: 'time_entries', label: 'Time Entries' },
+    { value: 'preferences', label: 'Preferences' },
+]
+
 export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = ({
     isOpen,
     onClose
@@ -971,9 +1024,14 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
     const [hoveredPoint, setHoveredPoint] = useState<EmbeddingPoint | null>(null)
     const [selectedDetails, setSelectedDetails] = useState<EmbeddingDetails | null>(null)
     const [isLoading, setIsLoading] = useState(false)
+    const [embeddingQuality, setEmbeddingQuality] = useState<EmbeddingQualityReport | null>(null)
+    const [isQualityLoading, setIsQualityLoading] = useState(false)
+    const [isRepairingEmbeddings, setIsRepairingEmbeddings] = useState(false)
+    const [lastRepairSummary, setLastRepairSummary] = useState<string | null>(null)
     const [searchQuery, setSearchQuery] = useState('')
     const [categoryFilter, setCategoryFilter] = useState<string>('all')
     const [typeFilter, setTypeFilter] = useState<string>('all')
+    const [focusPreset, setFocusPreset] = useState<FocusPreset>('all')
     const [colorScheme, setColorScheme] = useState<string>('category')
     const [showLabels, setShowLabels] = useState(false)
     const [showConnections, setShowConnections] = useState(true)
@@ -1024,6 +1082,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
     useEffect(() => {
         if (isOpen) {
             loadEmbeddingsData()
+            loadEmbeddingQuality(true)
             if (typeof window !== 'undefined' && window.innerWidth < 1024) {
                 setIsControlPanelOpen(false)
             }
@@ -1060,19 +1119,13 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
         }
     }, [])
 
-    // Preserve semantic coordinates when available, otherwise build deterministic fallback coordinates.
+    // Preserve and render strict semantic coordinates only.
     const processPointsForVisualization = (rawPoints: EmbeddingPoint[]): EmbeddingPoint[] => {
         if (rawPoints.length === 0) {
             return []
         }
 
-        if (hasMeaningfulCoordinates(rawPoints)) {
-            const semanticLayout = normalizeSemanticPositions(rawPoints)
-            return spreadNodesWithRepulsion(semanticLayout, 8.5, 16)
-        }
-
-        const fallbackLayout = buildStableFallbackLayout(rawPoints)
-        return spreadNodesWithRepulsion(fallbackLayout, 9.5, 12)
+        return normalizeSemanticPositions(rawPoints)
     }
 
     // Process points when raw points change
@@ -1084,6 +1137,21 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
     }, [points])
 
     // Filter points based on search and filters
+    const matchesFocusPreset = (point: EmbeddingPoint) => {
+        switch (focusPreset) {
+            case 'insights':
+                return isInsightPoint(point)
+            case 'interactions':
+                return point.entry_type === 'interaction'
+            case 'time_entries':
+                return point.entry_type === 'time_entry' || point.category === 'time_entry'
+            case 'preferences':
+                return point.entry_type === 'preference'
+            default:
+                return true
+        }
+    }
+
     const filteredPoints = processedPoints.filter(point => {
         const matchesSearch = searchQuery === '' ||
             point.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -1092,8 +1160,9 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
 
         const matchesCategory = categoryFilter === 'all' || point.category === categoryFilter
         const matchesType = typeFilter === 'all' || point.entry_type === typeFilter
+        const matchesFocus = matchesFocusPreset(point)
 
-        return matchesSearch && matchesCategory && matchesType
+        return matchesSearch && matchesCategory && matchesType && matchesFocus
     })
 
     const visualizationHealth = useMemo(() => {
@@ -1102,7 +1171,6 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
 
         return {
             hasSemanticCoordinates,
-            usesFallbackLayout: points.length > 0 && !hasSemanticCoordinates,
             nonZeroEmbeddingCount,
             embeddingCoverage: points.length > 0 ? nonZeroEmbeddingCount / points.length : 0,
         }
@@ -1119,6 +1187,45 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
             .slice(0, 5)
     }, [filteredPoints])
 
+    const insightStats = useMemo(() => {
+        const totalInsights = processedPoints.filter((point) => isInsightPoint(point)).length
+        const visibleInsights = filteredPoints.filter((point) => isInsightPoint(point)).length
+
+        return {
+            totalInsights,
+            visibleInsights,
+        }
+    }, [processedPoints, filteredPoints])
+
+    const activeFilterCount = useMemo(() => {
+        let count = 0
+        if (searchQuery.trim().length > 0) count += 1
+        if (categoryFilter !== 'all') count += 1
+        if (typeFilter !== 'all') count += 1
+        if (focusPreset !== 'all') count += 1
+        return count
+    }, [searchQuery, categoryFilter, typeFilter, focusPreset])
+
+    const qualityTone = useMemo(
+        () => getQualityTone(embeddingQuality?.status || 'empty'),
+        [embeddingQuality?.status],
+    )
+    const QualityToneIcon = qualityTone.icon
+
+    const dominantEmbeddingDimension = useMemo(() => {
+        if (!embeddingQuality?.dimension_histogram) {
+            return null
+        }
+
+        const dimensionEntries = Object.entries(embeddingQuality.dimension_histogram)
+        if (dimensionEntries.length === 0) {
+            return null
+        }
+
+        dimensionEntries.sort((a, b) => b[1] - a[1])
+        return dimensionEntries[0][0]
+    }, [embeddingQuality])
+
     const applyEmbeddingsPayload = (data: EmbeddingPoint[]) => {
         const normalizedData = data.map((point) => {
             const normalizedCategory = normalizePointCategory(point.category, point.entry_type, point.tags)
@@ -1132,32 +1239,43 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
         })
 
         setPoints(normalizedData)
-        const uniqueCategories = [...new Set(normalizedData.map((point) => point.category))] as string[]
-        const uniqueTypes = [...new Set(normalizedData.map((point) => point.entry_type))] as string[]
+        const uniqueCategories = [...new Set(normalizedData.map((point) => point.category))]
+            .sort((a, b) => toDisplayLabel(a).localeCompare(toDisplayLabel(b))) as string[]
+        const uniqueTypes = [...new Set(normalizedData.map((point) => point.entry_type))]
+            .sort((a, b) => toDisplayLabel(a).localeCompare(toDisplayLabel(b))) as string[]
         setCategories(uniqueCategories)
         setTypes(uniqueTypes)
     }
 
+    useEffect(() => {
+        if (categoryFilter !== 'all' && !categories.includes(categoryFilter)) {
+            setCategoryFilter('all')
+        }
+    }, [categories, categoryFilter])
+
+    useEffect(() => {
+        if (typeFilter !== 'all' && !types.includes(typeFilter)) {
+            setTypeFilter('all')
+        }
+    }, [types, typeFilter])
+
     const loadEmbeddingsData = async () => {
         setIsLoading(true)
-        const cachedData = readEmbeddingsCache()
-        const hasCachedData = Array.isArray(cachedData) && cachedData.length > 0
-
-        if (hasCachedData) {
-            applyEmbeddingsPayload(cachedData as EmbeddingPoint[])
-            setIsLoading(false)
-        }
 
         try {
-            const response = await fetch('/api/knowledge/embeddings/visualization')
+            const response = await fetch('/api/knowledge/embeddings/visualization', {
+                cache: 'no-store',
+                headers: {
+                    'Cache-Control': 'no-cache',
+                },
+            })
             if (response.ok) {
                 const data = (await response.json()) as EmbeddingPoint[]
                 applyEmbeddingsPayload(data)
-                writeEmbeddingsCache(data)
 
                 if (data.length === 0) {
                     toast.info('No embeddings available yet. Add some knowledge entries first!')
-                } else if (!hasCachedData) {
+                } else {
                     toast.success(`Loaded ${data.length} embeddings for 3D visualization`)
                 }
             } else {
@@ -1165,13 +1283,80 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
             }
         } catch (error) {
             console.error('Failed to load embeddings:', error)
-            if (!hasCachedData) {
-                toast.error('Failed to load embeddings data')
+            setPoints([])
+            setProcessedPoints([])
+            toast.error('Failed to load embeddings data')
+        } finally {
+            setIsLoading(false)
+        }
+    }
+
+    const loadEmbeddingQuality = async (silent = true) => {
+        setIsQualityLoading(true)
+
+        try {
+            const response = await fetch('/api/knowledge/embeddings/quality', {
+                cache: 'no-store',
+                headers: {
+                    'Cache-Control': 'no-cache',
+                },
+            })
+
+            if (!response.ok) {
+                throw new Error('Failed to load embedding quality diagnostics')
+            }
+
+            const report = (await response.json()) as EmbeddingQualityReport
+            setEmbeddingQuality(report)
+
+            if (!silent && report.status === 'healthy') {
+                toast.success('Embedding integrity looks healthy')
+            }
+        } catch (error) {
+            console.error('Failed to load embedding quality report:', error)
+            if (!silent) {
+                toast.error('Failed to load embedding quality report')
             }
         } finally {
-            if (!hasCachedData) {
-                setIsLoading(false)
+            setIsQualityLoading(false)
+        }
+    }
+
+    const handleRepairEmbeddings = async () => {
+        setIsRepairingEmbeddings(true)
+
+        try {
+            const response = await fetch('/api/knowledge/embeddings/quality/rebuild?limit=0', {
+                method: 'POST',
+                cache: 'no-store',
+                headers: {
+                    'Cache-Control': 'no-cache',
+                },
+            })
+
+            if (!response.ok) {
+                throw new Error('Failed to repair embeddings')
             }
+
+            const payload = await response.json()
+            const rebuilt = Number(payload?.rebuilt_count || 0)
+            const failed = Number(payload?.failed_count || 0)
+            const summary = `Rebuilt ${rebuilt} embeddings${failed > 0 ? `, ${failed} still need attention` : ''}`
+            setLastRepairSummary(summary)
+
+            if (payload?.post_repair_quality) {
+                setEmbeddingQuality(payload.post_repair_quality as EmbeddingQualityReport)
+            } else {
+                await loadEmbeddingQuality(true)
+            }
+
+            await loadEmbeddingsData()
+            toast.success(summary)
+        } catch (error) {
+            console.error('Failed to repair embeddings:', error)
+            toast.error('Failed to repair suspicious embeddings')
+        } finally {
+            setIsRepairingEmbeddings(false)
         }
     }
 
@@ -1180,7 +1365,12 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
         setHoveredPoint(point)
 
         try {
-            const response = await fetch(`/api/knowledge/embeddings/${point.entry_id}/details`)
+            const response = await fetch(`/api/knowledge/embeddings/${point.entry_id}/details`, {
+                cache: 'no-store',
+                headers: {
+                    'Cache-Control': 'no-cache',
+                },
+            })
             if (response.ok) {
                 const details = await response.json()
                 const normalizedCategory = normalizePointCategory(
@@ -1230,6 +1420,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
         setSearchQuery('')
         setCategoryFilter('all')
         setTypeFilter('all')
+        setFocusPreset('all')
     }
 
     const toggleFullscreen = () => {
@@ -1341,7 +1532,9 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                                             onClick={() => handlePointClick(point)}
                                             className={`p-3 rounded-lg cursor-pointer transition-colors ${selectedPoint?.entry_id === point.entry_id
                                                 ? 'bg-blue-600/30 border border-blue-500'
-                                                : 'bg-gray-800 hover:bg-gray-700'
+                                                : isInsightPoint(point)
+                                                    ? 'bg-gray-800/90 border border-amber-500/40 hover:bg-gray-700'
+                                                    : 'bg-gray-800 hover:bg-gray-700'
                                                 }`}
                                         >
                                             <div className="flex items-start justify-between">
@@ -1360,6 +1553,11 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                                                         <Badge variant="outline" className="text-xs bg-amber-500/20 text-amber-300 border-amber-500/50">
                                                             {toDisplayLabel(point.entry_type)}
                                                         </Badge>
+                                                        {isInsightPoint(point) && (
+                                                            <Badge variant="outline" className="text-xs bg-yellow-500/20 text-yellow-200 border-yellow-400/60">
+                                                                Insight
+                                                            </Badge>
+                                                        )}
                                                     </div>
                                                 </div>
                                                 <div className="ml-2">
@@ -1529,14 +1727,14 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
 
                 {points.length > 0 && (
                     <div className={`absolute left-1/2 z-20 w-[min(40rem,calc(100vw-2rem))] -translate-x-1/2 px-2 pointer-events-none sm:px-0 ${isMobileViewport ? 'top-[calc(6.75rem+env(safe-area-inset-top))]' : 'top-3 sm:top-4'}`}>
-                        {visualizationHealth.usesFallbackLayout ? (
+                        {!visualizationHealth.hasSemanticCoordinates ? (
                             <div className="rounded-lg border border-amber-400/40 bg-amber-950/70 px-3 py-2 text-xs text-amber-100 backdrop-blur-sm sm:text-sm">
                                 <div className="flex items-center gap-2 font-medium">
                                     <AlertCircle className="h-4 w-4" />
-                                    Fallback layout active
+                                    Semantic coordinates unavailable
                                 </div>
                                 <p className="mt-1 text-amber-100/90">
-                                    Semantic coordinates are not distinct yet, so the graph is currently clustered by category.
+                                    This graph will not invent synthetic positions. Repair invalid embeddings to restore semantic layout.
                                 </p>
                             </div>
                         ) : (
@@ -1546,10 +1744,114 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                                     Semantic layout active
                                 </div>
                                 <p className="mt-1 text-emerald-100/90">
-                                    Node positions are driven by backend embedding coordinates.
+                                    Node positions are driven by real backend embedding coordinates.
                                 </p>
                             </div>
                         )}
+                    </div>
+                )}
+
+                {points.length > 0 && (
+                    <div className={`absolute left-1/2 z-20 w-[min(44rem,calc(100vw-1rem))] -translate-x-1/2 px-2 sm:px-0 ${isMobileViewport ? 'top-[calc(10.9rem+env(safe-area-inset-top))]' : 'top-[5.65rem]'}`}>
+                        <div className="pointer-events-auto rounded-xl border border-cyan-400/30 bg-slate-950/80 p-2.5 text-white shadow-xl backdrop-blur-sm">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <span className="px-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-300">Focus Lens</span>
+                                {FOCUS_PRESET_OPTIONS.map((option) => (
+                                    <Button
+                                        key={option.value}
+                                        type="button"
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={() => setFocusPreset(option.value)}
+                                        className={`h-7 rounded-full px-3 text-xs ${focusPreset === option.value
+                                            ? 'bg-cyan-500/20 text-cyan-100 hover:bg-cyan-500/30'
+                                            : 'text-slate-200 hover:bg-white/10 hover:text-white'
+                                            }`}
+                                    >
+                                        {option.label}
+                                    </Button>
+                                ))}
+                            </div>
+
+                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <Badge variant="outline" className="border-amber-300/45 bg-amber-950/35 text-amber-100">
+                                    Insights {insightStats.visibleInsights}/{insightStats.totalInsights}
+                                </Badge>
+                                <Badge variant="outline" className="border-cyan-300/45 bg-cyan-950/35 text-cyan-100">
+                                    Nodes {filteredPoints.length}/{processedPoints.length}
+                                </Badge>
+                                {activeFilterCount > 0 && (
+                                    <Badge variant="outline" className="border-slate-300/40 bg-slate-900/50 text-slate-100">
+                                        {activeFilterCount} active filters
+                                    </Badge>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {points.length > 0 && (
+                    <div className={`absolute left-1/2 z-20 w-[min(58rem,calc(100vw-1rem))] -translate-x-1/2 px-2 sm:px-0 ${isMobileViewport ? 'top-[calc(16.2rem+env(safe-area-inset-top))]' : 'top-[9.55rem]'}`}>
+                        <div className="pointer-events-auto rounded-xl border border-white/10 bg-slate-950/80 p-2.5 text-white shadow-xl backdrop-blur-sm">
+                            <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-4">
+                                <div className="rounded-lg border border-sky-400/25 bg-sky-950/20 p-2.5">
+                                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-sky-200">Visibility</p>
+                                    <p className="mt-1 text-xl font-semibold text-white">{filteredPoints.length}</p>
+                                    <p className="text-xs text-sky-100/80">of {processedPoints.length} nodes in view</p>
+                                </div>
+
+                                <div className="rounded-lg border border-amber-400/25 bg-amber-950/20 p-2.5">
+                                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-200">Insight Coverage</p>
+                                    <p className="mt-1 text-xl font-semibold text-white">
+                                        {embeddingQuality ? formatPercent(embeddingQuality.insight_coverage) : '--'}
+                                    </p>
+                                    <p className="text-xs text-amber-100/80">
+                                        {insightStats.visibleInsights}/{insightStats.totalInsights} visible insight nodes
+                                    </p>
+                                </div>
+
+                                <div className="rounded-lg border border-emerald-400/25 bg-emerald-950/20 p-2.5">
+                                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-200">Embedding Integrity</p>
+                                    <div className="mt-1 flex items-center gap-2">
+                                        <QualityToneIcon className="h-4 w-4 text-emerald-200" />
+                                        <p className="text-xl font-semibold text-white">{embeddingQuality ? formatPercent(embeddingQuality.coverage) : '--'}</p>
+                                    </div>
+                                    <p className="text-xs text-emerald-100/80">
+                                        {embeddingQuality ? `${embeddingQuality.zero_signal_embeddings} suspicious vectors` : 'Checking quality...'}
+                                    </p>
+                                </div>
+
+                                <div className="rounded-lg border border-violet-400/25 bg-violet-950/20 p-2.5">
+                                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-violet-200">Integrity Actions</p>
+                                    <div className="mt-1 flex gap-2">
+                                        <Button
+                                            type="button"
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() => loadEmbeddingQuality(false)}
+                                            disabled={isQualityLoading}
+                                            className="h-7 border-violet-300/40 bg-violet-500/10 text-violet-100 hover:bg-violet-500/20"
+                                        >
+                                            <RefreshCw className={`mr-1 h-3.5 w-3.5 ${isQualityLoading ? 'animate-spin' : ''}`} />
+                                            Scan
+                                        </Button>
+                                        <Button
+                                            type="button"
+                                            size="sm"
+                                            onClick={handleRepairEmbeddings}
+                                            disabled={isRepairingEmbeddings}
+                                            className="h-7 bg-violet-500/80 px-2 text-xs text-white hover:bg-violet-500"
+                                        >
+                                            <Wrench className={`mr-1 h-3.5 w-3.5 ${isRepairingEmbeddings ? 'animate-spin' : ''}`} />
+                                            Repair
+                                        </Button>
+                                    </div>
+                                    <p className="mt-1 line-clamp-1 text-xs text-violet-100/80">
+                                        {lastRepairSummary || 'Run repair if suspicious vectors remain high.'}
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 )}
 
@@ -1583,6 +1885,15 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                             <Badge variant="outline" className="border-amber-300/40 bg-amber-950/35 text-amber-100">
                                 {toDisplayLabel(selectedDetails.entry.entry_type)}
                             </Badge>
+                            {isInsightSignal(
+                                selectedDetails.entry.category,
+                                selectedDetails.entry.entry_type,
+                                selectedDetails.entry.tags,
+                            ) && (
+                                <Badge variant="outline" className="border-yellow-300/45 bg-yellow-950/35 text-yellow-100">
+                                    Insight Node
+                                </Badge>
+                            )}
                             <Badge variant="outline" className="border-slate-300/35 bg-slate-900/50 text-slate-200">
                                 {selectedDetails.statistics.tag_count} tags
                             </Badge>
@@ -1610,19 +1921,35 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                                     <span className="text-blue-300">{filteredPoints.length} visible nodes</span>
                                 </div>
                                 <div className="flex justify-between">
+                                    <span className="text-amber-300">{insightStats.visibleInsights} visible insights</span>
+                                </div>
+                                <div className="flex justify-between">
                                     <span className="text-emerald-300">{topCategoryCounts.length} active categories</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-slate-300">Focus: {toDisplayLabel(focusPreset)}</span>
                                 </div>
                                 <div className="flex justify-between">
                                     <span className="text-cyan-300">{showConnections ? 'Connections on' : 'Connections off'}</span>
                                 </div>
                                 <div className="flex justify-between">
                                     <span className="text-amber-300">
-                                        {visualizationHealth.usesFallbackLayout ? 'Category fallback layout' : 'Semantic layout'}
+                                        {visualizationHealth.hasSemanticCoordinates ? 'Strict semantic layout' : 'Semantic coordinates unavailable'}
                                     </span>
                                 </div>
                                 <div className="flex justify-between">
                                     <span className="text-sky-300">
                                         Embedding coverage {(visualizationHealth.embeddingCoverage * 100).toFixed(0)}%
+                                    </span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-violet-300">
+                                        Integrity {embeddingQuality ? qualityTone.label : 'Checking'}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-rose-300">
+                                        {embeddingQuality ? `${embeddingQuality.zero_signal_embeddings} suspicious vectors` : 'Scanning vectors'}
                                     </span>
                                 </div>
                             </div>
@@ -1709,6 +2036,112 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                     } ${isMobileViewport && !isControlPanelOpen ? 'pointer-events-none translate-x-full' : 'pointer-events-auto translate-x-0'} ${!isControlPanelOpen && !isMobileViewport ? 'border-l-0' : ''}`}
             >
                 <div className={`space-y-4 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] ${!isControlPanelOpen && !isMobileViewport ? 'hidden' : ''}`}>
+                    <Card className="p-4">
+                        <div className="mb-3 flex items-center justify-between gap-2">
+                            <h3 className="font-semibold">Embedding Integrity</h3>
+                            <Badge variant="outline" className={qualityTone.badgeClass}>
+                                {qualityTone.label}
+                            </Badge>
+                        </div>
+
+                        <div className="space-y-3">
+                            <div>
+                                <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+                                    <span>Signal Coverage</span>
+                                    <span>{embeddingQuality ? formatPercent(embeddingQuality.coverage) : '--'}</span>
+                                </div>
+                                <div className="h-2 rounded-full bg-muted">
+                                    <div
+                                        className={`h-2 rounded-full transition-all ${qualityTone.progressClass}`}
+                                        style={{ width: `${embeddingQuality ? Math.max(3, Math.min(100, embeddingQuality.coverage * 100)) : 3}%` }}
+                                    />
+                                </div>
+                            </div>
+
+                            <div>
+                                <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+                                    <span>Insight Coverage</span>
+                                    <span>{embeddingQuality ? formatPercent(embeddingQuality.insight_coverage) : '--'}</span>
+                                </div>
+                                <div className="h-2 rounded-full bg-muted">
+                                    <div
+                                        className="h-2 rounded-full bg-amber-400 transition-all"
+                                        style={{ width: `${embeddingQuality ? Math.max(3, Math.min(100, embeddingQuality.insight_coverage * 100)) : 3}%` }}
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2 text-xs">
+                                <div className="rounded-md border border-border/70 bg-muted/40 p-2">
+                                    <p className="text-muted-foreground">Checked</p>
+                                    <p className="text-sm font-semibold">{embeddingQuality?.checked_entries ?? '--'}</p>
+                                </div>
+                                <div className="rounded-md border border-border/70 bg-muted/40 p-2">
+                                    <p className="text-muted-foreground">Zero-Signal</p>
+                                    <p className="text-sm font-semibold">{embeddingQuality?.zero_signal_embeddings ?? '--'}</p>
+                                </div>
+                                <div className="rounded-md border border-border/70 bg-muted/40 p-2">
+                                    <p className="text-muted-foreground">Dominant Dim</p>
+                                    <p className="text-sm font-semibold">{dominantEmbeddingDimension || '--'}</p>
+                                </div>
+                                <div className="rounded-md border border-border/70 bg-muted/40 p-2">
+                                    <p className="text-muted-foreground">Avg Norm</p>
+                                    <p className="text-sm font-semibold">
+                                        {embeddingQuality ? embeddingQuality.avg_embedding_norm.toFixed(3) : '--'}
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div className="flex flex-wrap gap-2">
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => loadEmbeddingQuality(false)}
+                                    disabled={isQualityLoading}
+                                >
+                                    <RefreshCw className={`mr-1 h-4 w-4 ${isQualityLoading ? 'animate-spin' : ''}`} />
+                                    Refresh Scan
+                                </Button>
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    onClick={handleRepairEmbeddings}
+                                    disabled={isRepairingEmbeddings}
+                                >
+                                    <Wrench className={`mr-1 h-4 w-4 ${isRepairingEmbeddings ? 'animate-spin' : ''}`} />
+                                    Repair Suspicious
+                                </Button>
+                            </div>
+
+                            {lastRepairSummary && (
+                                <p className="rounded-md border border-border/60 bg-muted/30 p-2 text-xs text-muted-foreground">
+                                    {lastRepairSummary}
+                                </p>
+                            )}
+
+                            {embeddingQuality?.suspicious_entries?.length ? (
+                                <div>
+                                    <p className="mb-2 text-xs font-medium text-amber-300">Suspicious Entries</p>
+                                    <div className="max-h-32 space-y-1 overflow-y-auto rounded-md border border-amber-400/20 bg-amber-950/10 p-2">
+                                        {embeddingQuality.suspicious_entries.slice(0, 6).map((entry) => (
+                                            <div key={entry.entry_id} className="rounded border border-border/40 bg-background/70 p-1.5 text-xs">
+                                                <p className="line-clamp-1 font-medium">{entry.title}</p>
+                                                <p className="text-muted-foreground">
+                                                    {toDisplayLabel(entry.category)} • {toDisplayLabel(entry.entry_type)}
+                                                </p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ) : (
+                                <p className="text-xs text-muted-foreground">
+                                    {embeddingQuality ? 'No suspicious entries in latest scan.' : 'Loading embedding quality diagnostics...'}
+                                </p>
+                            )}
+                        </div>
+                    </Card>
+
                     {/* Search and Filters */}
                     <Card className="p-4">
                         <h3 className="font-semibold mb-3">Filters & Search</h3>
@@ -1725,6 +2158,29 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                                         className="pl-10"
                                     />
                                 </div>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium mb-2">Focus Lens</label>
+                                <div className="flex flex-wrap gap-2">
+                                    {FOCUS_PRESET_OPTIONS.map((option) => (
+                                        <Button
+                                            key={option.value}
+                                            type="button"
+                                            size="sm"
+                                            variant="outline"
+                                            onClick={() => setFocusPreset(option.value)}
+                                            className={focusPreset === option.value
+                                                ? 'border-cyan-400/50 bg-cyan-500/10 text-cyan-100'
+                                                : 'border-border text-foreground'}
+                                        >
+                                            {option.label}
+                                        </Button>
+                                    ))}
+                                </div>
+                                <p className="mt-2 text-xs text-muted-foreground">
+                                    Quickly spotlight insight-heavy clusters without losing the full graph context.
+                                </p>
                             </div>
 
                             <div>
@@ -1759,6 +2215,12 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                                         ))}
                                     </SelectContent>
                                 </Select>
+                            </div>
+
+                            <div className="rounded-md border border-border/60 bg-muted/30 p-2 text-xs text-muted-foreground">
+                                {activeFilterCount > 0
+                                    ? `${activeFilterCount} filters active`
+                                    : 'No active filters'}
                             </div>
                         </div>
                     </Card>
@@ -1881,6 +2343,15 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                                 <div className="flex flex-wrap gap-1">
                                     <Badge variant="outline">{toDisplayLabel(selectedDetails.entry.category)}</Badge>
                                     <Badge variant="secondary">{toDisplayLabel(selectedDetails.entry.entry_type)}</Badge>
+                                    {isInsightSignal(
+                                        selectedDetails.entry.category,
+                                        selectedDetails.entry.entry_type,
+                                        selectedDetails.entry.tags,
+                                    ) && (
+                                        <Badge variant="outline" className="border-yellow-500/60 bg-yellow-500/15 text-yellow-200">
+                                            Insight
+                                        </Badge>
+                                    )}
                                     {selectedDetails.entry.tags.slice(0, 3).map(tag => (
                                         <Badge key={tag} variant="outline" className="text-xs">{tag}</Badge>
                                     ))}
@@ -1922,8 +2393,11 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                             <div>• <strong>Mouse:</strong> Rotate view</div>
                             <div>• <strong>Scroll:</strong> Zoom in/out</div>
                             <div>• <strong>Right-click + drag:</strong> Pan</div>
+                            <div>• <strong>Touch drag:</strong> Orbit graph on mobile</div>
+                            <div>• <strong>Pinch:</strong> Zoom on touch devices</div>
                             <div>• <strong>Click point:</strong> Select and show details</div>
                             <div>• <strong>Hover point:</strong> Quick info</div>
+                            <div>• <strong>Focus Lens:</strong> Spotlight insights, interactions, or time entries instantly</div>
                             <div>• <strong>Settings:</strong> Customize visualization</div>
                         </div>
                     </Card>
