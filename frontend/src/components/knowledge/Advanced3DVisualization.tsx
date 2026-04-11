@@ -1752,7 +1752,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                     </div>
                 )}
 
-                {points.length > 0 && (
+                {points.length > 0 && viewMode === 'graph' && (
                     <div className={`absolute left-1/2 z-20 w-[min(44rem,calc(100vw-1rem))] -translate-x-1/2 px-2 sm:px-0 ${isMobileViewport ? 'top-[calc(10.9rem+env(safe-area-inset-top))]' : 'top-[5.65rem]'}`}>
                         <div className="pointer-events-auto relative overflow-hidden rounded-2xl border border-cyan-300/45 bg-slate-950/86 p-3 text-white shadow-[0_22px_60px_-28px_rgba(34,211,238,0.55)] backdrop-blur-md">
                             <div className="absolute -right-10 -top-16 h-36 w-36 rounded-full bg-cyan-400/12 blur-3xl" />
