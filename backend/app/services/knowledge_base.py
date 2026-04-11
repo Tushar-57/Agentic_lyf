@@ -4,13 +4,13 @@ Knowledge base service providing CRUD operations and RAG functionality.
 import os
 import hashlib
 import json
-import uuid
 import logging
+import pickle
 import re
-import math
-from time import monotonic
-from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Any, Optional, Set, Tuple
+import time
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..models.knowledge import (
     KnowledgeEntry,
@@ -34,6 +34,29 @@ embedding_logger = get_embedding_category_logger("app.embedding.knowledge")
 
 EMBEDDING_CACHE_KEY_FIELD = "_embedding_cache_key"
 EMBEDDING_PROVIDER_COOLDOWN_SECONDS = 30.0
+
+
+def _generate_deterministic_entry_id(sync_event_key: str, user_id: str) -> str:
+    """Generate deterministic entry ID from sync key to prevent duplicates across workers.
+    
+    Uses SHA-256 hash of user_id + sync_event_key to create a stable UUID v4-like ID.
+    This ensures that concurrent workers generate the same ID for the same sync key,
+    allowing Pinecone upsert to handle conflicts without creating duplicates.
+    """
+    if not sync_event_key:
+        return str(uuid.uuid4())
+    
+    # Create deterministic hash
+    hash_input = f"{user_id}:{sync_event_key}"
+    hash_bytes = hashlib.sha256(hash_input.encode()).digest()
+    
+    # Convert to UUID v4 format (version 4 has specific bits set)
+    # Use first 16 bytes, set version (0100) and variant (10) bits
+    uuid_bytes = bytearray(hash_bytes[:16])
+    uuid_bytes[6] = (uuid_bytes[6] & 0x0f) | 0x40  # Version 4
+    uuid_bytes[8] = (uuid_bytes[8] & 0x3f) | 0x80  # Variant RFC 4122
+    
+    return str(uuid.UUID(bytes=bytes(uuid_bytes)))
 
 
 def _parse_bool_env(name: str, default: bool) -> bool:
@@ -1424,8 +1447,12 @@ class KnowledgeBaseService:
                 semantic_sections=semantic_sections,
             )
 
-            # Generate unique ID
-            entry_id = str(uuid.uuid4())
+            # Extract sync_event_key for deterministic ID generation (prevents duplicates)
+            context_from_meta = metadata_payload.get("context") if isinstance(metadata_payload.get("context"), dict) else {}
+            sync_event_key = str(context_from_meta.get("sync_event_key", "")).strip()
+            
+            # Generate deterministic ID based on sync_event_key, or random UUID if no sync key
+            entry_id = _generate_deterministic_entry_id(sync_event_key, self.user_id)
             
             # Create entry
             entry = KnowledgeEntry(
