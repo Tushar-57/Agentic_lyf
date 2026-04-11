@@ -763,9 +763,11 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       }
 
       const payload = await response.json()
-      const entries = Array.isArray(payload?.entries)
-        ? (payload.entries as DailyCheckupInsightEntry[])
-        : []
+      const entries = Array.isArray(payload)
+        ? (payload as DailyCheckupInsightEntry[])
+        : Array.isArray(payload?.entries)
+          ? (payload.entries as DailyCheckupInsightEntry[])
+          : []
 
       const sortedEntries = [...entries].sort((a, b) => {
         const aTime = new Date(a.updated_at || a.created_at || 0).getTime()
@@ -1779,6 +1781,9 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                             <Clock3 className="h-3.5 w-3.5" />
                             Time Metrics
                           </p>
+                          <p className="mb-2 text-[11px] leading-relaxed text-muted-foreground/90">
+                            Estimated = planned focused minutes for today. Spent = actual tracked minutes completed so far.
+                          </p>
                           <div className="grid grid-cols-2 gap-2">
                             <label className="space-y-1">
                               <span className="text-[11px] text-muted-foreground">Estimated</span>
@@ -1816,7 +1821,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                             </label>
                           </div>
                           <p className="mt-2 text-xs text-muted-foreground">
-                            Deep-work coverage: {Math.round(activeDeepWorkCoverage)}%
+                            Deep-work coverage: {Math.round(activeDeepWorkCoverage)}% (spent / estimated)
                           </p>
                         </div>
 
@@ -1824,6 +1829,9 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                           <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                             <Activity className="h-3.5 w-3.5" />
                             Habit Pulse
+                          </p>
+                          <p className="mb-2 text-[11px] leading-relaxed text-muted-foreground/90">
+                            Total = habits expected today. Completed = habits already checked off today.
                           </p>
                           <div className="grid grid-cols-2 gap-2">
                             <label className="space-y-1">

@@ -39,6 +39,8 @@ import { Switch } from '@/components/ui/switch'
 import { Slider } from '@/components/ui/slider'
 import { toast } from 'sonner'
 
+const INSIGHT_NODE_COLOR = '#f87171'
+
 // Color scheme helper function
 const getCategoryColor = (category: string): string => {
     const categoryColors: Record<string, string> = {
@@ -49,8 +51,8 @@ const getCategoryColor = (category: string): string => {
         'system': '#64748b',
         'interaction': '#f472b6',
         'time_entry': '#3b82f6',
-        'insight': '#f59e0b',
-        'daily_checkup': '#22d3ee'
+        'insight': INSIGHT_NODE_COLOR,
+        'daily_checkup': INSIGHT_NODE_COLOR
     }
     return categoryColors[category] || '#64748b'
 }
@@ -380,7 +382,7 @@ const EmbeddingNode: React.FC<{
         switch (colorScheme) {
             case 'category':
                 if (isInsightPoint(point)) {
-                    return '#f59e0b'
+                    return INSIGHT_NODE_COLOR
                 }
                 return getCategoryColor(point.category)
 
@@ -389,7 +391,7 @@ const EmbeddingNode: React.FC<{
                     'preference': '#4a9eff',
                     'interaction': '#00d084',
                     'time_entry': '#3b82f6',
-                    'insight': '#ffb347',
+                    'insight': INSIGHT_NODE_COLOR,
                     'pattern': '#a855f7',
                     'memory': '#94a3b8'
                 }

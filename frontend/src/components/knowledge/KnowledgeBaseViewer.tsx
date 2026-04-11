@@ -25,6 +25,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
+import { getAgenticBridgeUserKey } from '@/lib/agenticBridgeSession'
 
 interface KnowledgeEntry {
   entry_id: string
@@ -96,15 +97,25 @@ interface KnowledgeSnapshotCache {
   lastSyncedAt: string | null
 }
 
-const KNOWLEDGE_CACHE_KEY = 'agentic-knowledge-view-cache-v3'
-const KNOWLEDGE_CACHE_VERSION = 3
+const KNOWLEDGE_CACHE_KEY_PREFIX = 'agentic-knowledge-view-cache-v4'
+const KNOWLEDGE_CACHE_VERSION = 4
 const KNOWLEDGE_CACHE_TTL_MS = 90 * 1000
 
-let inMemoryKnowledgeSnapshot: KnowledgeSnapshotCache | null = null
+const resolveKnowledgeCacheKey = (): string => {
+  if (typeof window === 'undefined') {
+    return `${KNOWLEDGE_CACHE_KEY_PREFIX}.single_user`
+  }
+
+  const userKey = getAgenticBridgeUserKey()
+  return `${KNOWLEDGE_CACHE_KEY_PREFIX}.${userKey || 'single_user'}`
+}
+
+const inMemoryKnowledgeSnapshots: Record<string, KnowledgeSnapshotCache> = {}
 
 const readCachedSnapshot = (): KnowledgeSnapshotCache | null => {
-  if (inMemoryKnowledgeSnapshot) {
-    return inMemoryKnowledgeSnapshot
+  const cacheKey = resolveKnowledgeCacheKey()
+  if (inMemoryKnowledgeSnapshots[cacheKey]) {
+    return inMemoryKnowledgeSnapshots[cacheKey]
   }
 
   if (typeof window === 'undefined') {
@@ -112,7 +123,7 @@ const readCachedSnapshot = (): KnowledgeSnapshotCache | null => {
   }
 
   try {
-    const raw = window.localStorage.getItem(KNOWLEDGE_CACHE_KEY)
+    const raw = window.localStorage.getItem(cacheKey)
     if (!raw) {
       return null
     }
@@ -122,7 +133,7 @@ const readCachedSnapshot = (): KnowledgeSnapshotCache | null => {
       return null
     }
 
-    inMemoryKnowledgeSnapshot = parsed
+    inMemoryKnowledgeSnapshots[cacheKey] = parsed
     return parsed
   } catch {
     return null
@@ -130,14 +141,15 @@ const readCachedSnapshot = (): KnowledgeSnapshotCache | null => {
 }
 
 const writeCachedSnapshot = (snapshot: KnowledgeSnapshotCache) => {
-  inMemoryKnowledgeSnapshot = snapshot
+  const cacheKey = resolveKnowledgeCacheKey()
+  inMemoryKnowledgeSnapshots[cacheKey] = snapshot
 
   if (typeof window === 'undefined') {
     return
   }
 
   try {
-    window.localStorage.setItem(KNOWLEDGE_CACHE_KEY, JSON.stringify(snapshot))
+    window.localStorage.setItem(cacheKey, JSON.stringify(snapshot))
   } catch {
     // Cache write failures should never block UI rendering.
   }
@@ -255,6 +267,10 @@ const resolveEntryType = (entry: KnowledgeEntry, resolvedCategory: string): stri
 
   if (resolvedCategory === 'time_entry') {
     return 'time_entry'
+  }
+
+  if (resolvedCategory === 'habit_snapshot' || resolvedCategory === 'habit_progress') {
+    return 'habit_snapshot'
   }
 
   if (resolvedCategory === 'insight' && String(entry.entry_type || '').toLowerCase() === 'interaction') {
@@ -662,9 +678,48 @@ const deriveSummary = (
   contentRecord: Record<string, any>,
 ): string => {
   const metadataRecord = isRecord(entry.metadata) ? entry.metadata : {}
+  const contextRecord = isRecord(metadataRecord.context) ? metadataRecord.context : {}
   const checkupSummary = entry.displayCategory === 'daily_checkup'
     ? deriveDailyCheckupSummary(contentRecord, metadataRecord)
     : null
+
+  if (entry.displayCategory === 'habit_snapshot') {
+    const totalHabits = Number(
+      pickFirstValue([contentRecord, contextRecord, metadataRecord], ['total_habits']) || 0,
+    )
+    const totalEvents = Number(
+      pickFirstValue([contentRecord, contextRecord, metadataRecord], ['total_completion_events']) || 0,
+    )
+    const activeDays = Number(
+      pickFirstValue([contentRecord, contextRecord, metadataRecord], ['active_days']) || 0,
+    )
+    const longestRun = Number(
+      pickFirstValue([contentRecord, contextRecord, metadataRecord], ['longest_run']) || 0,
+    )
+
+    const highlightsRaw = pickFirstValue([contentRecord, contextRecord, metadataRecord], ['habit_highlights'])
+    const highlights = toShortTextList(highlightsRaw, 2)
+
+    const parts: string[] = [
+      'Habit progress snapshot',
+      `${Math.max(0, Math.round(totalHabits))} habits`,
+      `${Math.max(0, Math.round(totalEvents))} completion events`,
+    ]
+
+    if (activeDays > 0) {
+      parts.push(`${Math.round(activeDays)} active days`)
+    }
+
+    if (longestRun > 0) {
+      parts.push(`${Math.round(longestRun)}-day best run`)
+    }
+
+    if (highlights.length > 0) {
+      parts.push(`Highlights: ${highlights.join('; ')}`)
+    }
+
+    return parts.join(' | ')
+  }
 
   const summaryKeys = [
     'summary',
@@ -911,6 +966,32 @@ const buildPresentation = (entry: DisplayKnowledgeEntry): EntryPresentation => {
       ...journalingRows,
       ...commitmentRows,
     ]
+  } else if (entry.displayCategory === 'habit_snapshot') {
+    metadataRows = toKeyValueRows(
+      { ...contextRecord, ...metadataRecord },
+      [
+        'captured_at',
+        'total_habits',
+        'total_completion_events',
+        'active_days',
+        'current_run',
+        'longest_run',
+        'habit_highlights',
+        'daily_completion_digest',
+        'source_action',
+      ],
+      10,
+      {
+        excludeKeys: [
+          'context',
+          'summary',
+          'habits',
+          'daily_completion_counts',
+          'user_input',
+          'agent_response',
+        ],
+      },
+    )
   } else {
     metadataRows = toKeyValueRows(
       { ...metadataRecord, ...contextRecord },
@@ -1139,7 +1220,15 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
     void loadKnowledgeData()
   }, [loadKnowledgeData, refreshKey])
 
-  const displayEntries: DisplayKnowledgeEntry[] = [...entries]
+  const visibleEntries = entries.filter((entry) => {
+    const entryType = String(entry.entry_type || '').toLowerCase()
+    const category = String(entry.category || '').toLowerCase()
+    const title = String(entry.title || '').trim().toLowerCase()
+
+    return !(entryType === 'preference' && category === 'system' && title === 'user preferences')
+  })
+
+  const displayEntries: DisplayKnowledgeEntry[] = [...visibleEntries]
     .map((entry) => {
       const displayCategory = resolveEntryCategory(entry)
       const displayType = resolveEntryType(entry, displayCategory)
@@ -1257,6 +1346,7 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
       case 'time_entry': return Calendar
       case 'interaction': return Brain
       case 'pattern': return TrendingUp
+      case 'habit_snapshot': return TrendingUp
       case 'insight': return BarChart3
       case 'memory': return Database
       default: return Database

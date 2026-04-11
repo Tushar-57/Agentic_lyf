@@ -187,6 +187,18 @@ EMBEDDING_METADATA_ALLOWLIST: Dict[str, Set[str]] = {
         "checkup_date",
         "summary",
     },
+    "habit_snapshot": {
+        "agent_type",
+        "summary",
+        "captured_at",
+        "total_habits",
+        "total_completion_events",
+        "active_days",
+        "current_run",
+        "longest_run",
+        "habit_highlights",
+        "daily_completion_digest",
+    },
     "system": {
         "last_updated",
     },
@@ -232,6 +244,18 @@ EMBEDDING_CONTEXT_ALLOWLIST: Dict[str, Set[str]] = {
         "source",
         "source_action",
     },
+    "habit_snapshot": {
+        "source",
+        "source_action",
+        "captured_at",
+        "total_habits",
+        "total_completion_events",
+        "active_days",
+        "current_run",
+        "longest_run",
+        "habit_highlights",
+        "daily_completion_digest",
+    },
 }
 
 EMBEDDING_CHUNK_PROFILE: Dict[str, Dict[str, Any]] = {
@@ -274,6 +298,12 @@ EMBEDDING_CHUNK_PROFILE: Dict[str, Dict[str, Any]] = {
     "insight": {
         "max_chars": 380,
         "overlap": 40,
+        "max_chunks": 2,
+        "semantic": True,
+    },
+    "habit_snapshot": {
+        "max_chars": 360,
+        "overlap": 30,
         "max_chunks": 2,
         "semantic": True,
     },
@@ -340,12 +370,8 @@ class KnowledgeBaseService:
         self.knowledge_db_store.clear_user_entries(self.user_id)
 
     def _bootstrap_knowledge_db_store(self) -> None:
-        """Backfill SQL store from persisted vector metadata when DB is newly enabled."""
+        """Reconcile SQL store from persisted vector metadata for this user."""
         if not self.knowledge_db_store or not self.knowledge_db_store.is_available:
-            return
-
-        existing_count = self.knowledge_db_store.count_user_entries(self.user_id)
-        if existing_count > 0:
             return
 
         vector_entries = [
@@ -357,16 +383,21 @@ class KnowledgeBaseService:
         if not vector_entries:
             return
 
+        existing_count = self.knowledge_db_store.count_user_entries(self.user_id)
+        if existing_count >= len(vector_entries):
+            return
+
         persisted_count = 0
         for entry in vector_entries:
             if self.knowledge_db_store.upsert_entry(entry):
                 persisted_count += 1
 
         logger.info(
-            "Knowledge DB bootstrap persisted %d/%d entries for user %s",
+            "Knowledge DB reconciliation persisted %d/%d entries for user %s (db_before=%d)",
             persisted_count,
             len(vector_entries),
             self.user_id,
+            existing_count,
         )
 
     def _merge_preference_payload(
@@ -636,6 +667,9 @@ class KnowledgeBaseService:
         if normalized_entry_type == "insight" or normalized_entry_sub_type.endswith("insight"):
             return "insight"
 
+        if normalized_category in {"habit_snapshot", "habit_progress"}:
+            return "habit_snapshot"
+
         if normalized_category in {"system", "config", "configuration"}:
             return "system"
 
@@ -773,6 +807,30 @@ class KnowledgeBaseService:
             add_fact(facts, "Insight", normalized_title)
             add_fact(facts, "Observation", normalized_content)
             add_fact(facts, "Source", metadata_payload.get("source"))
+            return facts
+
+        if strategy_category == "habit_snapshot":
+            add_fact(facts, "Snapshot", normalized_title or "Habit progress snapshot")
+            add_fact(facts, "Captured at", context_payload.get("captured_at") or metadata_payload.get("captured_at"))
+            add_fact(facts, "Total habits", context_payload.get("total_habits") or metadata_payload.get("total_habits"))
+            add_fact(
+                facts,
+                "Completion events",
+                context_payload.get("total_completion_events") or metadata_payload.get("total_completion_events"),
+            )
+            add_fact(facts, "Active days", context_payload.get("active_days") or metadata_payload.get("active_days"))
+            add_fact(facts, "Current run", context_payload.get("current_run") or metadata_payload.get("current_run"))
+            add_fact(facts, "Longest run", context_payload.get("longest_run") or metadata_payload.get("longest_run"))
+            add_fact(
+                facts,
+                "Highlights",
+                context_payload.get("habit_highlights") or metadata_payload.get("habit_highlights"),
+            )
+            add_fact(
+                facts,
+                "Daily trend",
+                context_payload.get("daily_completion_digest") or metadata_payload.get("daily_completion_digest"),
+            )
             return facts
 
         if strategy_category == "system":
@@ -1639,6 +1697,25 @@ class KnowledgeBaseService:
                     except Exception as snapshot_error:
                         logger.warning(f"Failed to parse system preference snapshot: {snapshot_error}")
 
+                sectioned_pref_entries = [
+                    entry
+                    for entry in all_entries
+                    if entry.entry_type == KnowledgeEntryType.PREFERENCE
+                    and isinstance(entry.metadata, dict)
+                    and str(entry.metadata.get("preference_section") or "").strip().lower() in prefs_dict
+                ]
+
+                for entry in sectioned_pref_entries:
+                    metadata = entry.metadata or {}
+                    section = str(metadata.get("preference_section") or "").strip().lower()
+                    if section not in prefs_dict or not isinstance(prefs_dict.get(section), dict):
+                        continue
+
+                    section_values = metadata.get("preference_values")
+                    if isinstance(section_values, dict):
+                        prefs_dict[section].update(section_values)
+                        loaded_from_knowledge = True
+
                 user_entries = [
                     entry
                     for entry in all_entries
@@ -1886,6 +1963,29 @@ class KnowledgeBaseService:
                 ["insight", "approved", normalized_agent],
             )
 
+        if forced_category in {
+            "habit_snapshot",
+            "habit_progress",
+            "project_catalog",
+            "tag_catalog",
+            "planner",
+            "schedule",
+            "goal",
+            "goals",
+        }:
+            if normalized_agent == "health":
+                sub_type = KnowledgeEntrySubType.HEALTH_INTERACTION
+            elif normalized_agent in {"productivity", "finance", "scheduling", "habit_progress"}:
+                sub_type = KnowledgeEntrySubType.WORK_INTERACTION
+            else:
+                sub_type = KnowledgeEntrySubType.MISC_INTERACTION
+
+            return (
+                forced_category,
+                sub_type,
+                ["interaction", "history", forced_category, normalized_agent],
+            )
+
         if normalized_agent == "health":
             sub_type = KnowledgeEntrySubType.HEALTH_INTERACTION
         elif normalized_agent in {"productivity", "finance", "scheduling"}:
@@ -1927,6 +2027,229 @@ class KnowledgeBaseService:
 
         return f"Time Entry{duration_suffix}" if duration_suffix else "Time Entry"
 
+    @staticmethod
+    def _safe_int(value: Any, default: int = 0) -> int:
+        try:
+            return int(round(float(value)))
+        except (TypeError, ValueError):
+            return default
+
+    def _build_habit_highlights(self, habits_payload: Any, limit: int = 4) -> List[str]:
+        if not isinstance(habits_payload, list):
+            return []
+
+        scored_habits: List[Tuple[int, str]] = []
+        for item in habits_payload:
+            if not isinstance(item, dict):
+                continue
+
+            name = str(item.get("name") or item.get("title") or item.get("habit") or "").strip()
+            if not name:
+                continue
+
+            completed = self._safe_int(
+                item.get("completedCount")
+                or item.get("completionCount")
+                or item.get("completed")
+                or 0,
+                default=0,
+            )
+            streak = self._safe_int(item.get("streak") or item.get("currentStreak") or 0, default=0)
+            score = max(completed, 0) + max(streak, 0)
+
+            if completed > 0 and streak > 0:
+                descriptor = f"{name}: {completed} completions, {streak}-day streak"
+            elif completed > 0:
+                descriptor = f"{name}: {completed} completions"
+            elif streak > 0:
+                descriptor = f"{name}: {streak}-day streak"
+            else:
+                descriptor = f"{name}: active"
+
+            scored_habits.append((score, descriptor))
+
+        if not scored_habits:
+            return []
+
+        scored_habits.sort(key=lambda item: item[0], reverse=True)
+        return [descriptor for _, descriptor in scored_habits[: max(1, limit)]]
+
+    def _build_daily_completion_digest(self, counts_payload: Any) -> Dict[str, Any]:
+        if not isinstance(counts_payload, dict):
+            return {}
+
+        normalized_pairs: List[Tuple[str, int]] = []
+        for raw_day, raw_count in counts_payload.items():
+            day = str(raw_day or "").strip()
+            if not day:
+                continue
+            normalized_pairs.append((day, max(0, self._safe_int(raw_count, default=0))))
+
+        if not normalized_pairs:
+            return {}
+
+        normalized_pairs.sort(key=lambda item: item[0])
+        total = sum(count for _, count in normalized_pairs)
+        best_day, best_count = max(normalized_pairs, key=lambda item: item[1])
+
+        recent = normalized_pairs[-7:]
+        return {
+            "total_events": total,
+            "active_days": sum(1 for _, count in normalized_pairs if count > 0),
+            "best_day": best_day,
+            "best_day_count": best_count,
+            "recent": [{"day": day, "count": count} for day, count in recent],
+        }
+
+    def _compact_interaction_context_for_storage(
+        self,
+        category: str,
+        context_payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if category not in {"habit_snapshot", "habit_progress"}:
+            return context_payload
+
+        summary_payload = context_payload.get("summary") if isinstance(context_payload.get("summary"), dict) else {}
+        habits_payload = context_payload.get("habits")
+        daily_counts_payload = context_payload.get("daily_completion_counts")
+
+        total_habits = self._safe_int(
+            context_payload.get("total_habits") or summary_payload.get("totalHabits") or 0,
+            default=0,
+        )
+        total_events = self._safe_int(
+            context_payload.get("total_completion_events") or summary_payload.get("totalCompletionEvents") or 0,
+            default=0,
+        )
+        active_days = self._safe_int(
+            context_payload.get("active_days") or summary_payload.get("activeDays") or 0,
+            default=0,
+        )
+        current_run = self._safe_int(
+            context_payload.get("current_run") or summary_payload.get("currentRun") or 0,
+            default=0,
+        )
+        longest_run = self._safe_int(
+            context_payload.get("longest_run") or summary_payload.get("longestRun") or 0,
+            default=0,
+        )
+
+        compact_context: Dict[str, Any] = {
+            "source": context_payload.get("source"),
+            "source_action": context_payload.get("source_action"),
+            "category": "habit_snapshot",
+            "captured_at": context_payload.get("captured_at"),
+            "sync_event_key": context_payload.get("sync_event_key"),
+            "user_id": context_payload.get("user_id"),
+            "user_email": context_payload.get("user_email"),
+            "total_habits": total_habits,
+            "total_completion_events": total_events,
+            "active_days": active_days,
+            "current_run": current_run,
+            "longest_run": longest_run,
+        }
+
+        highlights = self._build_habit_highlights(habits_payload)
+        if highlights:
+            compact_context["habit_highlights"] = highlights
+
+        digest = self._build_daily_completion_digest(daily_counts_payload)
+        if digest:
+            compact_context["daily_completion_digest"] = digest
+
+        return {key: value for key, value in compact_context.items() if value not in (None, "", [], {})}
+
+    def _build_habit_snapshot_title(self, context_payload: Optional[Dict[str, Any]] = None) -> str:
+        payload = context_payload or {}
+        captured_at = str(payload.get("captured_at") or "").strip()
+        total_habits = self._safe_int(payload.get("total_habits"), default=0)
+        total_events = self._safe_int(payload.get("total_completion_events"), default=0)
+
+        date_hint = captured_at[:10] if len(captured_at) >= 10 else ""
+        if date_hint and total_habits > 0:
+            return f"Habit Snapshot - {date_hint} ({total_habits} habits, {total_events} events)"
+        if date_hint:
+            return f"Habit Snapshot - {date_hint}"
+        if total_habits > 0:
+            return f"Habit Snapshot ({total_habits} habits, {total_events} events)"
+        return "Habit Snapshot"
+
+    def _build_habit_snapshot_content(
+        self,
+        user_input: str,
+        agent_response: str,
+        context_payload: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        payload = context_payload or {}
+        captured_at = str(payload.get("captured_at") or "").strip() or "unknown"
+        total_habits = self._safe_int(payload.get("total_habits"), default=0)
+        total_events = self._safe_int(payload.get("total_completion_events"), default=0)
+        active_days = self._safe_int(payload.get("active_days"), default=0)
+        current_run = self._safe_int(payload.get("current_run"), default=0)
+        longest_run = self._safe_int(payload.get("longest_run"), default=0)
+        highlights = payload.get("habit_highlights") if isinstance(payload.get("habit_highlights"), list) else []
+
+        digest_payload = payload.get("daily_completion_digest") if isinstance(payload.get("daily_completion_digest"), dict) else {}
+        best_day = str(digest_payload.get("best_day") or "").strip()
+        best_day_count = self._safe_int(digest_payload.get("best_day_count"), default=0)
+
+        lines: List[str] = [
+            "Habit progress snapshot recorded.",
+            f"Captured at: {captured_at}",
+            (
+                "Progress metrics: "
+                f"{total_habits} habits, {total_events} completion events, "
+                f"{active_days} active days, {current_run}-day current run, {longest_run}-day longest run"
+            ),
+        ]
+
+        if highlights:
+            lines.append("Habit highlights: " + "; ".join(str(item) for item in highlights[:4]))
+
+        if best_day and best_day_count > 0:
+            lines.append(f"Best completion day: {best_day} ({best_day_count} completions)")
+
+        if user_input.strip():
+            lines.append(f"Sync trigger: {user_input.strip()}")
+
+        if agent_response.strip():
+            lines.append(f"Source summary: {agent_response.strip()}")
+
+        return "\n".join(lines)
+
+    def _build_interaction_content(
+        self,
+        *,
+        category: str,
+        agent_type: str,
+        user_input: str,
+        agent_response: str,
+        context_payload: Dict[str, Any],
+        approved_by_user: bool,
+        approved_at: Optional[str],
+        knowledge_sources: List[Any],
+    ) -> str:
+        if category == "time_entry":
+            return f"User: {user_input}\nAgent ({agent_type}): {agent_response}"
+
+        if category in {"habit_snapshot", "habit_progress"}:
+            return self._build_habit_snapshot_content(user_input, agent_response, context_payload)
+
+        lines = [
+            f"Interaction category: {category}",
+            f"Agent: {agent_type}",
+            f"User input: {user_input.strip() or 'n/a'}",
+            f"Agent response: {agent_response.strip() or 'n/a'}",
+        ]
+        source_action = str(context_payload.get("source_action") or "").strip()
+        if source_action:
+            lines.append(f"Source action: {source_action}")
+        if approved_by_user:
+            lines.append(f"Approved by user at: {approved_at or 'confirmed'}")
+        if knowledge_sources:
+            lines.append(f"Knowledge sources referenced: {len(knowledge_sources)}")
+        return "\n".join(lines)
+
     def _build_interaction_title(
         self,
         category: str,
@@ -1934,6 +2257,9 @@ class KnowledgeBaseService:
     ) -> str:
         if category == "time_entry":
             return self._build_time_entry_title(context_payload)
+
+        if category in {"habit_snapshot", "habit_progress"}:
+            return self._build_habit_snapshot_title(context_payload)
 
         if category == "insight":
             payload = context_payload or {}
@@ -2122,6 +2448,126 @@ class KnowledgeBaseService:
         except Exception as e:
             logger.error(f"Failed to get preference categories: {e}")
             return []
+
+    def _is_legacy_system_preference_entry(self, entry: KnowledgeEntry) -> bool:
+        if entry.entry_type != KnowledgeEntryType.PREFERENCE:
+            return False
+
+        return (
+            str(entry.category or "").strip().lower() == "system"
+            and str(entry.title or "").strip().lower() == "user preferences"
+        )
+
+    def _normalize_preference_snapshot_value(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            normalized: Dict[str, Any] = {}
+            for key, nested_value in value.items():
+                key_text = str(key or "").strip()
+                if not key_text or key_text.startswith("__"):
+                    continue
+                normalized[key_text] = self._normalize_preference_snapshot_value(nested_value)
+            return normalized
+
+        if isinstance(value, list):
+            normalized_items = [self._normalize_preference_snapshot_value(item) for item in value[:8]]
+            return [item for item in normalized_items if item not in (None, "", [], {})]
+
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+
+        return str(value)
+
+    def _render_preference_section_content(self, section: str, values: Dict[str, Any]) -> str:
+        header = f"{section.replace('_', ' ').title()} preference snapshot"
+        lines = [header]
+
+        for key in sorted(values.keys()):
+            rendered = self._stringify_embedding_value(values.get(key), max_chars=180)
+            if not rendered:
+                continue
+            lines.append(f"{key.replace('_', ' ').title()}: {rendered}")
+
+        return "\n".join(lines[:14])
+
+    async def _sync_preference_snapshot_entries(self, preferences: UserPreferences) -> bool:
+        prefs_payload = preferences.model_dump() if isinstance(preferences, UserPreferences) else {}
+        if not isinstance(prefs_payload, dict):
+            return False
+
+        existing_entries = await self.get_all_entries(entry_type=KnowledgeEntryType.PREFERENCE)
+        section_entries: Dict[str, KnowledgeEntry] = {}
+        legacy_entries: List[KnowledgeEntry] = []
+
+        for entry in existing_entries:
+            metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+            section = str(metadata.get("preference_section") or "").strip().lower()
+            if section:
+                section_entries[section] = entry
+
+            if self._is_legacy_system_preference_entry(entry):
+                legacy_entries.append(entry)
+
+        operation_succeeded = True
+        timestamp_iso = datetime.utcnow().isoformat()
+
+        for section, raw_values in prefs_payload.items():
+            if section == "user_id" or not isinstance(raw_values, dict):
+                continue
+
+            normalized_values = self._normalize_preference_snapshot_value(raw_values)
+            if not isinstance(normalized_values, dict):
+                normalized_values = {}
+
+            title = f"Preference Snapshot - {section.replace('_', ' ').title()}"
+            content = self._render_preference_section_content(section, normalized_values)
+            metadata_payload = {
+                "preference_section": section,
+                "preference_values": normalized_values,
+                "source": "preferences_snapshot",
+                "last_updated": timestamp_iso,
+            }
+            tags = ["preferences", "settings", section]
+
+            existing_entry = section_entries.get(section)
+            if existing_entry:
+                existing_metadata = existing_entry.metadata if isinstance(existing_entry.metadata, dict) else {}
+                existing_values = existing_metadata.get("preference_values") if isinstance(existing_metadata.get("preference_values"), dict) else {}
+
+                if (
+                    existing_entry.title == title
+                    and str(existing_entry.content or "").strip() == str(content or "").strip()
+                    and existing_values == normalized_values
+                ):
+                    continue
+
+                updated = await self.update_entry(
+                    entry_id=existing_entry.entry_id,
+                    title=title,
+                    content=content,
+                    metadata=metadata_payload,
+                    tags=tags,
+                )
+                operation_succeeded = operation_succeeded and updated is not None
+                continue
+
+            try:
+                await self.create_entry(
+                    entry_type=KnowledgeEntryType.PREFERENCE,
+                    entry_sub_type=KnowledgeEntrySubType.OTHER_PREFERENCE,
+                    category=section,
+                    title=title,
+                    content=content,
+                    metadata=metadata_payload,
+                    tags=tags,
+                )
+            except Exception:
+                operation_succeeded = False
+
+        for entry in legacy_entries:
+            deleted = await self.delete_entry(entry.entry_id)
+            operation_succeeded = operation_succeeded and deleted
+
+        return operation_succeeded
     
     async def _save_user_preferences(self) -> bool:
         """Save user preferences to dedicated preference storage."""
@@ -2129,41 +2575,48 @@ class KnowledgeBaseService:
             if not self._user_preferences:
                 return False
 
+            persisted_to_db = False
+
             if self.preference_db_store and self.preference_db_store.is_available:
-                persisted = self._persist_preferences_to_db_store(self._user_preferences)
-                if persisted:
-                    return True
-                logger.warning("Falling back to legacy knowledge-entry preference persistence")
-            
-            # Legacy fallback path for deployments without DB preference storage.
-            # Check if preferences entry already exists
+                persisted_to_db = self._persist_preferences_to_db_store(self._user_preferences)
+                if not persisted_to_db:
+                    logger.warning("Falling back to legacy knowledge-entry preference persistence")
+
+            sectioned_persistence_ok = await self._sync_preference_snapshot_entries(self._user_preferences)
+            if persisted_to_db and sectioned_persistence_ok:
+                return True
+
+            if persisted_to_db:
+                return True
+
+            if sectioned_persistence_ok:
+                return True
+
+            # Last-resort legacy fallback when both dedicated DB and sectioned snapshots fail.
             existing_entries = await self.get_all_entries(
                 category="system",
-                entry_type=KnowledgeEntryType.PREFERENCE
+                entry_type=KnowledgeEntryType.PREFERENCE,
             )
-            
+
             prefs_json = self._user_preferences.model_dump_json(indent=2)
-            
             if existing_entries:
-                # Update existing entry
                 entry = existing_entries[0]
                 await self.update_entry(
                     entry_id=entry.entry_id,
                     content=prefs_json,
-                    metadata={"last_updated": datetime.utcnow().isoformat()}
+                    metadata={"last_updated": datetime.utcnow().isoformat()},
                 )
-            else:
-                # Create new entry
-                await self.create_entry(
-                    entry_type=KnowledgeEntryType.PREFERENCE,
-                    category="system",
-                    entry_sub_type=KnowledgeEntrySubType.OTHER_PREFERENCE,
-                    title="User Preferences",
-                    content=prefs_json,
-                    metadata={"created": datetime.utcnow().isoformat()},
-                    tags=["preferences", "settings", "configuration"]
-                )
-            
+                return True
+
+            await self.create_entry(
+                entry_type=KnowledgeEntryType.PREFERENCE,
+                category="system",
+                entry_sub_type=KnowledgeEntrySubType.OTHER_PREFERENCE,
+                title="User Preferences",
+                content=prefs_json,
+                metadata={"created": datetime.utcnow().isoformat()},
+                tags=["preferences", "settings", "configuration"],
+            )
             return True
         except Exception as e:
             logger.error(f"Failed to save user preferences: {e}")
@@ -2187,11 +2640,12 @@ class KnowledgeBaseService:
             The created interaction entry
         """
         try:
-            context_payload = context or {}
+            context_payload = dict(context or {})
             category, entry_sub_type, tags = self._infer_interaction_category_and_sub_type(
                 agent_type=agent_type,
                 context=context_payload,
             )
+            context_payload = self._compact_interaction_context_for_storage(category, context_payload)
 
             entry_type = KnowledgeEntryType.INSIGHT if category == "insight" else KnowledgeEntryType.INTERACTION
 
@@ -2203,20 +2657,16 @@ class KnowledgeBaseService:
                 knowledge_sources = []
 
             interaction_title = self._build_interaction_title(category, context_payload)
-            if category == "time_entry":
-                interaction_content = f"User: {user_input}\nAgent ({agent_type}): {agent_response}"
-            else:
-                interaction_content = json.dumps(
-                    {
-                        "user_input": user_input,
-                        "agent_response": agent_response,
-                        "agent_type": agent_type,
-                        "approved_by_user": approved_by_user,
-                        "approved_at": approved_at,
-                        "knowledge_sources": knowledge_sources[:8],
-                    },
-                    ensure_ascii=False,
-                )
+            interaction_content = self._build_interaction_content(
+                category=category,
+                agent_type=agent_type,
+                user_input=user_input,
+                agent_response=agent_response,
+                context_payload=context_payload,
+                approved_by_user=approved_by_user,
+                approved_at=approved_at,
+                knowledge_sources=knowledge_sources,
+            )
 
             metadata_payload = {
                 "agent_type": agent_type,
@@ -2227,6 +2677,8 @@ class KnowledgeBaseService:
                 "approved_by_user": approved_by_user,
                 "approved_at": approved_at,
                 "knowledge_source_count": len(knowledge_sources),
+                "user_input": user_input[:400],
+                "agent_response": agent_response[:800],
             }
 
             sync_event_key = str(context_payload.get("sync_event_key", "")).strip()

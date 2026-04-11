@@ -162,8 +162,10 @@ async def get_all_entries(
     """Get all knowledge entries with optional filters."""
     try:
         kb_service = get_knowledge_base_service()
+        await _sync_missing_db_checkup_insights(kb_service)
         entries = await kb_service.get_all_entries(category=category, entry_type=entry_type)
         entries = _merge_db_checkup_entries(entries, category=category, entry_type=entry_type)
+        entries = _prune_legacy_system_preference_entries(entries)
         return entries
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get entries: {str(e)}")
@@ -277,6 +279,7 @@ async def get_knowledge_stats():
     """Get knowledge base statistics."""
     try:
         kb_service = get_knowledge_base_service()
+        await _sync_missing_db_checkup_insights(kb_service)
         stats = await kb_service.get_stats()
         return stats
     except Exception as e:
@@ -289,6 +292,7 @@ async def force_refresh_knowledge_state():
     try:
         request_user = get_current_user()
         kb_service = reset_knowledge_base_service()
+        await _sync_missing_db_checkup_insights(kb_service)
         stats = await kb_service.get_stats()
 
         return {
@@ -1247,6 +1251,18 @@ def _merge_db_checkup_entries(
     return merged_entries
 
 
+def _is_legacy_system_preference_entry(entry: KnowledgeEntry) -> bool:
+    return (
+        entry.entry_type == KnowledgeEntryType.PREFERENCE
+        and str(entry.category or "").strip().lower() == "system"
+        and str(entry.title or "").strip().lower() == "user preferences"
+    )
+
+
+def _prune_legacy_system_preference_entries(entries: List[KnowledgeEntry]) -> List[KnowledgeEntry]:
+    return [entry for entry in entries if not _is_legacy_system_preference_entry(entry)]
+
+
 def _persist_checkup_payload_to_db(checkup_type: str, checkup_date: date, payload: Dict[str, Any]) -> None:
     checkup_store = get_daily_checkup_store()
     if not checkup_store:
@@ -1435,7 +1451,10 @@ async def get_knowledge_analytics(
     """Return live analytics data computed from persisted knowledge entries."""
     try:
         kb_service = get_knowledge_base_service()
+        await _sync_missing_db_checkup_insights(kb_service)
         all_entries = await kb_service.get_all_entries()
+        all_entries = _merge_db_checkup_entries(all_entries, category=None, entry_type=None)
+        all_entries = _prune_legacy_system_preference_entries(all_entries)
 
         days = _resolve_date_range(time_range)
         now = datetime.now(timezone.utc)
