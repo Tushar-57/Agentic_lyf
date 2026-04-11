@@ -592,10 +592,10 @@ class KnowledgeBaseService:
             len(query_text),
             prepared_text,
         )
-    
+
     async def _generate_embedding(self, text: str) -> List[float]:
         """Generate embedding for text using the configured LLM provider."""
-        if monotonic() < self._embedding_provider_cooldown_until:
+        if time.monotonic() < self._embedding_provider_cooldown_until:
             raise RuntimeError("Embedding provider is temporarily unavailable due to recent failures")
 
         try:
@@ -620,7 +620,7 @@ class KnowledgeBaseService:
                 or "timeout" in error_text
                 or "api connection" in error_text
             ):
-                self._embedding_provider_cooldown_until = monotonic() + EMBEDDING_PROVIDER_COOLDOWN_SECONDS
+                self._embedding_provider_cooldown_until = time.monotonic() + EMBEDDING_PROVIDER_COOLDOWN_SECONDS
             raise RuntimeError(f"Embedding generation failed: {e}") from e
 
         embedding = list(response.embedding or [])
