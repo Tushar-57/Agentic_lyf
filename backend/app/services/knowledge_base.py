@@ -10,7 +10,7 @@ import re
 import math
 from time import monotonic
 from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Any, Optional, Set
+from typing import List, Dict, Any, Optional, Set, Tuple
 
 from ..models.knowledge import (
     KnowledgeEntry,
@@ -25,6 +25,8 @@ from ..llm.service import get_llm_service
 from ..llm.base import EmbeddingRequest
 from ..utils.logging import get_embedding_category_logger
 from .vector_store import get_vector_store
+from .knowledge_db_store import get_knowledge_db_store
+from .preferences_db_store import get_preference_db_store
 
 logger = logging.getLogger(__name__)
 embedding_logger = get_embedding_category_logger("app.embedding.knowledge")
@@ -88,6 +90,17 @@ EMBEDDING_LOG_MAX_TEXT_CHARS = _parse_positive_int_env(
     minimum=200,
 )
 
+EMBEDDING_MICRO_ENTRY_MAX_CHARS = _parse_positive_int_env(
+    "EMBEDDING_MICRO_ENTRY_MAX_CHARS",
+    default=260,
+    minimum=80,
+)
+EMBEDDING_SEMANTIC_SECTION_MAX_CHARS = _parse_positive_int_env(
+    "EMBEDDING_SEMANTIC_SECTION_MAX_CHARS",
+    default=420,
+    minimum=180,
+)
+
 RAG_PRIMARY_SIMILARITY_THRESHOLD = _parse_float_env(
     "RAG_PRIMARY_SIMILARITY_THRESHOLD",
     default=0.58,
@@ -119,6 +132,159 @@ LEXICAL_FALLBACK_STOPWORDS: Set[str] = {
     "today", "now", "next", "need", "want", "help", "please", "show", "tell", "give", "make",
 }
 
+EMBEDDING_METADATA_ALLOWLIST: Dict[str, Set[str]] = {
+    "default": {
+        "agent_type",
+        "role",
+        "preferences",
+        "priority",
+        "milestones",
+        "summary",
+        "source",
+    },
+    "time_entry": {
+        "agent_type",
+        "source_action",
+        "project_name",
+        "description",
+        "duration_minutes",
+        "billable",
+        "linked_goal",
+        "focus_score",
+        "energy_score",
+    },
+    "time_anchor": {
+        "availability",
+        "notifications",
+        "integrations",
+        "role",
+    },
+    "user_profile": {
+        "role",
+        "preferences",
+        "mentor",
+        "preferredTone",
+        "onboarding_completed",
+    },
+    "planner": {
+        "availability",
+        "notifications",
+        "integrations",
+        "preference_profile",
+    },
+    "goals": {
+        "priority",
+        "category",
+        "milestones",
+        "smart_criteria",
+        "endDate",
+        "whyItMatters",
+    },
+    "insight": {
+        "agent_type",
+        "source",
+        "checkup_type",
+        "checkup_date",
+        "summary",
+    },
+    "system": {
+        "last_updated",
+    },
+}
+
+EMBEDDING_CONTEXT_ALLOWLIST: Dict[str, Set[str]] = {
+    "default": {
+        "source",
+        "source_action",
+        "summary",
+        "description",
+    },
+    "time_entry": {
+        "source",
+        "source_action",
+        "project_name",
+        "description",
+        "task_name",
+        "duration_minutes",
+        "duration_seconds",
+        "billable",
+        "linked_goal",
+        "focus_score",
+        "energy_score",
+        "blockers",
+        "context_notes",
+        "ai_detail",
+        "start_time",
+        "end_time",
+    },
+    "time_anchor": {
+        "check_in_time",
+        "frequency",
+        "timezone",
+    },
+    "planner": {
+        "summary",
+        "habits",
+        "daily_completion_counts",
+    },
+    "insight": {
+        "summary",
+        "source",
+        "source_action",
+    },
+}
+
+EMBEDDING_CHUNK_PROFILE: Dict[str, Dict[str, Any]] = {
+    "default": {
+        "max_chars": EMBEDDING_MAX_CHARS_PER_CHUNK,
+        "overlap": EMBEDDING_CHUNK_OVERLAP_CHARS,
+        "max_chunks": EMBEDDING_MAX_CHUNKS_PER_ENTRY,
+        "semantic": True,
+    },
+    "time_anchor": {
+        "max_chars": EMBEDDING_MICRO_ENTRY_MAX_CHARS,
+        "overlap": 0,
+        "max_chunks": 1,
+        "semantic": True,
+    },
+    "time_entry": {
+        "max_chars": 360,
+        "overlap": 40,
+        "max_chunks": 3,
+        "semantic": True,
+    },
+    "user_profile": {
+        "max_chars": 440,
+        "overlap": 60,
+        "max_chunks": 3,
+        "semantic": True,
+    },
+    "planner": {
+        "max_chars": 420,
+        "overlap": 50,
+        "max_chunks": 3,
+        "semantic": True,
+    },
+    "goals": {
+        "max_chars": 420,
+        "overlap": 50,
+        "max_chunks": 3,
+        "semantic": True,
+    },
+    "insight": {
+        "max_chars": 380,
+        "overlap": 40,
+        "max_chunks": 2,
+        "semantic": True,
+    },
+    "system": {
+        "max_chars": 460,
+        "overlap": 40,
+        "max_chunks": 2,
+        "semantic": True,
+    },
+}
+
 
 class KnowledgeBaseService:
     """Service for managing knowledge base operations and RAG functionality."""
@@ -126,12 +292,130 @@ class KnowledgeBaseService:
     def __init__(self, user_id: str = "single_user"):
         self.user_id = user_id
         self.vector_store = get_vector_store(user_id)
+        self.knowledge_db_store = get_knowledge_db_store()
+        self.preference_db_store = get_preference_db_store()
         self._user_preferences: Optional[UserPreferences] = None
         self._sync_event_index: Dict[str, str] = {}
         self._sync_event_index_loaded = False
         self._embedding_cache: Dict[str, List[float]] = {}
         self._embedding_cache_loaded = False
         self._embedding_provider_cooldown_until = 0.0
+
+        self._bootstrap_knowledge_db_store()
+
+    def _attach_embedding_to_entry(self, entry: Optional[KnowledgeEntry]) -> Optional[KnowledgeEntry]:
+        if not entry:
+            return None
+
+        embedding = self.vector_store.get_embedding(entry.entry_id)
+        if self._embedding_has_signal(embedding):
+            entry.embedding = embedding
+
+        return entry
+
+    def _persist_entry_to_db(self, entry: KnowledgeEntry) -> None:
+        if not self.knowledge_db_store or not self.knowledge_db_store.is_available:
+            return
+
+        persisted = self.knowledge_db_store.upsert_entry(entry)
+        if not persisted:
+            logger.warning("Failed to persist knowledge entry to DB: %s", entry.entry_id)
+
+    def _remove_entry_from_db(self, entry_id: str) -> None:
+        if not self.knowledge_db_store or not self.knowledge_db_store.is_available:
+            return
+
+        self.knowledge_db_store.delete_entry(self.user_id, entry_id)
+
+    def _remove_entries_from_db(self, entry_ids: List[str]) -> None:
+        if not self.knowledge_db_store or not self.knowledge_db_store.is_available:
+            return
+
+        self.knowledge_db_store.delete_entries(self.user_id, entry_ids)
+
+    def _clear_entries_from_db(self) -> None:
+        if not self.knowledge_db_store or not self.knowledge_db_store.is_available:
+            return
+
+        self.knowledge_db_store.clear_user_entries(self.user_id)
+
+    def _bootstrap_knowledge_db_store(self) -> None:
+        """Backfill SQL store from persisted vector metadata when DB is newly enabled."""
+        if not self.knowledge_db_store or not self.knowledge_db_store.is_available:
+            return
+
+        existing_count = self.knowledge_db_store.count_user_entries(self.user_id)
+        if existing_count > 0:
+            return
+
+        vector_entries = [
+            entry
+            for entry in self.vector_store.get_all_entries()
+            if getattr(entry, "user_id", self.user_id) == self.user_id
+        ]
+
+        if not vector_entries:
+            return
+
+        persisted_count = 0
+        for entry in vector_entries:
+            if self.knowledge_db_store.upsert_entry(entry):
+                persisted_count += 1
+
+        logger.info(
+            "Knowledge DB bootstrap persisted %d/%d entries for user %s",
+            persisted_count,
+            len(vector_entries),
+            self.user_id,
+        )
+
+    def _merge_preference_payload(
+        self,
+        base_payload: Dict[str, Any],
+        override_payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        merged = dict(base_payload)
+
+        for section, value in (override_payload or {}).items():
+            if section == "user_id":
+                continue
+
+            if (
+                section in merged
+                and isinstance(merged[section], dict)
+                and isinstance(value, dict)
+            ):
+                merged[section].update(value)
+            else:
+                merged[section] = value
+
+        merged["user_id"] = self.user_id
+        return merged
+
+    def _load_preferences_from_db_store(self) -> Optional[UserPreferences]:
+        if not self.preference_db_store or not self.preference_db_store.is_available:
+            return None
+
+        stored_payload = self.preference_db_store.load_preferences(self.user_id)
+        if not stored_payload:
+            return None
+
+        defaults = UserPreferences(user_id=self.user_id).model_dump()
+        merged = self._merge_preference_payload(defaults, stored_payload)
+
+        try:
+            return UserPreferences(**merged)
+        except (TypeError, ValueError) as exc:
+            logger.warning("Failed to hydrate user preferences from preference DB store: %s", exc)
+            return None
+
+    def _persist_preferences_to_db_store(self, preferences: UserPreferences) -> bool:
+        if not self.preference_db_store or not self.preference_db_store.is_available:
+            return False
+
+        payload = preferences.model_dump()
+        payload["user_id"] = self.user_id
+        return self.preference_db_store.upsert_preferences(self.user_id, payload)
 
     def _truncate_for_log(self, value: Any, limit: int = 140) -> str:
         text = " ".join(str(value or "").split())
@@ -282,6 +566,227 @@ class KnowledgeBaseService:
 
         return self._stringify_embedding_value(str(value), max_items=max_items, max_chars=max_chars)
 
+    def _looks_like_time_anchor(
+        self,
+        *,
+        normalized_title: str,
+        normalized_content: str,
+        normalized_tags: List[str],
+        metadata_payload: Dict[str, Any],
+    ) -> bool:
+        hint_text = " ".join([normalized_title, normalized_content, " ".join(normalized_tags)]).strip().lower()
+        has_anchor_keyword = bool(re.search(r"\b(wake\s*up|wakeup|wake|sleep|bedtime|check[- ]?in)\b", hint_text))
+        has_time_token = bool(re.search(r"\b([01]?\d|2[0-3])[:.]([0-5]\d)\b", hint_text)) or bool(
+            re.search(r"\b(1[0-2]|0?[1-9])\s?(am|pm)\b", hint_text)
+        )
+
+        availability_payload = metadata_payload.get("availability") if isinstance(metadata_payload.get("availability"), dict) else {}
+        check_in_payload = availability_payload.get("checkIn") if isinstance(availability_payload.get("checkIn"), dict) else {}
+        has_schedule_signal = bool(check_in_payload.get("preferredTime") or availability_payload.get("workHours"))
+
+        return (has_anchor_keyword and (has_time_token or has_schedule_signal)) or has_schedule_signal
+
+    def _resolve_embedding_strategy_category(
+        self,
+        category: Optional[str],
+        *,
+        title: str = "",
+        content: str = "",
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        entry_type: Optional[Any] = None,
+        entry_sub_type: Optional[Any] = None,
+    ) -> str:
+        metadata_payload = metadata if isinstance(metadata, dict) else {}
+        normalized_category = self._normalize_embedding_label(category or "uncategorized")
+        normalized_entry_type = self._normalize_embedding_label(entry_type or "unknown")
+        normalized_entry_sub_type = self._normalize_embedding_label(entry_sub_type or "unknown")
+        normalized_title = " ".join(str(title or "").split()).strip().lower()
+        normalized_content = str(content or "").strip().lower()
+        normalized_tags = [" ".join(str(tag).split()).strip().lower() for tag in (tags or []) if str(tag).strip()]
+
+        context_payload = metadata_payload.get("context") if isinstance(metadata_payload.get("context"), dict) else {}
+        source = str(context_payload.get("source", "")).strip().lower()
+        source_action = str(context_payload.get("source_action", "")).strip().lower()
+
+        if (
+            normalized_category == "time_entry"
+            or source == "alterego_timetracker"
+            or "time_entry" in source_action
+            or context_payload.get("time_entry_id") is not None
+        ):
+            return "time_entry"
+
+        if normalized_entry_sub_type == "user profile" or normalized_category in {"user_profile", "profile"}:
+            return "user_profile"
+
+        if normalized_entry_sub_type == "schedule" or normalized_category in {"planner", "schedule"}:
+            if self._looks_like_time_anchor(
+                normalized_title=normalized_title,
+                normalized_content=normalized_content,
+                normalized_tags=normalized_tags,
+                metadata_payload=metadata_payload,
+            ):
+                return "time_anchor"
+            return "planner"
+
+        if normalized_entry_sub_type == "goal" or normalized_category in {"goal", "goals"}:
+            return "goals"
+
+        if normalized_entry_type == "insight" or normalized_entry_sub_type.endswith("insight"):
+            return "insight"
+
+        if normalized_category in {"system", "config", "configuration"}:
+            return "system"
+
+        return normalized_category or "default"
+
+    def _select_embedding_chunk_profile(
+        self,
+        strategy_category: str,
+    ) -> Dict[str, Any]:
+        return EMBEDDING_CHUNK_PROFILE.get(strategy_category, EMBEDDING_CHUNK_PROFILE["default"])
+
+    def _extract_system_snapshot_facts(
+        self,
+        content: str,
+    ) -> List[str]:
+        if not content:
+            return []
+
+        try:
+            parsed = json.loads(content)
+        except Exception:
+            return []
+
+        if not isinstance(parsed, dict):
+            return []
+
+        facts: List[str] = []
+
+        productivity = parsed.get("productivity") if isinstance(parsed.get("productivity"), dict) else {}
+        if productivity.get("work_hours"):
+            facts.append(f"Work hours: {self._stringify_embedding_value(productivity.get('work_hours'))}")
+
+        health = parsed.get("health") if isinstance(parsed.get("health"), dict) else {}
+        if health.get("dietary_preferences"):
+            facts.append(f"Dietary preferences: {self._stringify_embedding_value(health.get('dietary_preferences'))}")
+
+        finance = parsed.get("finance") if isinstance(parsed.get("finance"), dict) else {}
+        if finance.get("expense_tracking"):
+            facts.append(f"Expense tracking cadence: {self._stringify_embedding_value(finance.get('expense_tracking'))}")
+
+        general = parsed.get("general") if isinstance(parsed.get("general"), dict) else {}
+        if general.get("timezone"):
+            facts.append(f"Timezone: {self._stringify_embedding_value(general.get('timezone'))}")
+
+        return facts
+
+    def _build_embedding_facts(
+        self,
+        *,
+        strategy_category: str,
+        normalized_title: str,
+        normalized_content: str,
+        normalized_tags: List[str],
+        metadata_payload: Dict[str, Any],
+    ) -> List[str]:
+        context_payload = metadata_payload.get("context") if isinstance(metadata_payload.get("context"), dict) else {}
+
+        def add_fact(bucket: List[str], label: str, value: Any) -> None:
+            normalized_value = self._stringify_embedding_value(value)
+            if not normalized_value:
+                return
+            bucket.append(f"{label}: {normalized_value}")
+
+        facts: List[str] = []
+
+        if strategy_category == "time_anchor":
+            time_matches = re.findall(r"\b([01]?\d|2[0-3])[:.]([0-5]\d)\b", f"{normalized_title} {normalized_content}")
+            if time_matches:
+                hour, minute = time_matches[0]
+                add_fact(facts, "Anchor time", f"{hour}:{minute}")
+
+            availability_payload = metadata_payload.get("availability") if isinstance(metadata_payload.get("availability"), dict) else {}
+            check_in_payload = availability_payload.get("checkIn") if isinstance(availability_payload.get("checkIn"), dict) else {}
+            add_fact(facts, "Preferred check-in", check_in_payload.get("preferredTime"))
+            add_fact(facts, "Check-in frequency", check_in_payload.get("frequency"))
+            add_fact(facts, "Timezone", availability_payload.get("timezone"))
+            add_fact(facts, "Routine", normalized_title or normalized_content)
+            return facts
+
+        if strategy_category == "time_entry":
+            add_fact(facts, "Task", context_payload.get("description") or context_payload.get("task_name") or normalized_title)
+            add_fact(facts, "Project", context_payload.get("project_name"))
+
+            duration_minutes = context_payload.get("duration_minutes")
+            if duration_minutes is None and context_payload.get("duration_seconds") is not None:
+                try:
+                    duration_minutes = round(float(context_payload.get("duration_seconds")) / 60.0, 1)
+                except (TypeError, ValueError):
+                    duration_minutes = None
+            add_fact(facts, "Duration minutes", duration_minutes)
+
+            add_fact(facts, "Time window", f"{context_payload.get('start_time')} -> {context_payload.get('end_time')}")
+            add_fact(facts, "Billable", context_payload.get("billable"))
+            add_fact(facts, "Linked goal", context_payload.get("linked_goal"))
+            add_fact(facts, "Focus score", context_payload.get("focus_score"))
+            add_fact(facts, "Energy score", context_payload.get("energy_score"))
+            add_fact(facts, "Blockers", context_payload.get("blockers"))
+            return facts
+
+        if strategy_category == "user_profile":
+            add_fact(facts, "Role", metadata_payload.get("role"))
+            add_fact(facts, "Preferences", metadata_payload.get("preferences"))
+
+            mentor_payload = metadata_payload.get("mentor") if isinstance(metadata_payload.get("mentor"), dict) else {}
+            add_fact(facts, "Mentor", mentor_payload.get("name") or mentor_payload)
+            add_fact(facts, "Mentor style", mentor_payload.get("style"))
+            add_fact(facts, "Preferred tone", metadata_payload.get("preferredTone"))
+            return facts
+
+        if strategy_category == "planner":
+            availability_payload = metadata_payload.get("availability") if isinstance(metadata_payload.get("availability"), dict) else {}
+            work_hours_payload = availability_payload.get("workHours") if isinstance(availability_payload.get("workHours"), dict) else {}
+            check_in_payload = availability_payload.get("checkIn") if isinstance(availability_payload.get("checkIn"), dict) else {}
+            add_fact(
+                facts,
+                "Work hours",
+                f"{work_hours_payload.get('start')} - {work_hours_payload.get('end')}" if work_hours_payload else None,
+            )
+            add_fact(facts, "Timezone", availability_payload.get("timezone"))
+            add_fact(facts, "Check-in time", check_in_payload.get("preferredTime"))
+            add_fact(facts, "Check-in frequency", check_in_payload.get("frequency"))
+            add_fact(facts, "Integrations", metadata_payload.get("integrations"))
+            return facts
+
+        if strategy_category == "goals":
+            add_fact(facts, "Goal", normalized_title)
+            add_fact(facts, "Category", metadata_payload.get("category"))
+            add_fact(facts, "Priority", metadata_payload.get("priority"))
+            add_fact(facts, "Milestones", metadata_payload.get("milestones"))
+            add_fact(facts, "Target date", metadata_payload.get("endDate"))
+            add_fact(facts, "Why it matters", metadata_payload.get("whyItMatters"))
+            return facts
+
+        if strategy_category == "insight":
+            add_fact(facts, "Insight", normalized_title)
+            add_fact(facts, "Observation", normalized_content)
+            add_fact(facts, "Source", metadata_payload.get("source"))
+            return facts
+
+        if strategy_category == "system":
+            distilled_facts = self._extract_system_snapshot_facts(normalized_content)
+            if distilled_facts:
+                return distilled_facts
+            add_fact(facts, "System preference snapshot", normalized_title or normalized_content)
+            return facts
+
+        add_fact(facts, "Summary", normalized_title)
+        add_fact(facts, "Details", normalized_content)
+        add_fact(facts, "Tags", normalized_tags)
+        return facts
+
     def _extract_embedding_metadata_signals(
         self,
         category: str,
@@ -290,6 +795,9 @@ class KnowledgeBaseService:
         metadata_payload = metadata if isinstance(metadata, dict) else {}
         normalized_category = self._normalize_embedding_label(category)
         context_payload = metadata_payload.get("context") if isinstance(metadata_payload.get("context"), dict) else {}
+
+        metadata_keys = EMBEDDING_METADATA_ALLOWLIST.get(normalized_category, EMBEDDING_METADATA_ALLOWLIST["default"])
+        context_keys = EMBEDDING_CONTEXT_ALLOWLIST.get(normalized_category, EMBEDDING_CONTEXT_ALLOWLIST["default"])
 
         signals: Dict[str, str] = {}
 
@@ -303,80 +811,91 @@ class KnowledgeBaseService:
 
             signals[label] = text
 
-        # Always include high-value semantic fields when available.
-        add_signal("role", metadata_payload.get("role"))
-        add_signal("preferences", metadata_payload.get("preferences"))
-        add_signal("priority", metadata_payload.get("priority"))
-        add_signal("milestones", metadata_payload.get("milestones"))
-        add_signal("mentor", metadata_payload.get("mentor"))
-        add_signal("coach_preferences", metadata_payload.get("coach_preferences"))
-        add_signal("domain_preferences", metadata_payload.get("domain_preferences"))
-        add_signal("preference_profile", metadata_payload.get("preference_profile"))
-        add_signal("availability", metadata_payload.get("availability"))
-        add_signal("notifications", metadata_payload.get("notifications"))
-        add_signal("integrations", metadata_payload.get("integrations"))
-        add_signal("agent_type", metadata_payload.get("agent_type"))
+        for key in sorted(metadata_keys):
+            add_signal(key, metadata_payload.get(key))
 
-        add_signal("source", context_payload.get("source"))
-        add_signal("source_action", context_payload.get("source_action"))
-        add_signal("description", context_payload.get("description"))
-        add_signal("task_name", context_payload.get("task_name"))
-        add_signal("project_name", context_payload.get("project_name"))
-        add_signal("duration_minutes", context_payload.get("duration_minutes"))
-        add_signal("billable", context_payload.get("billable"))
-        add_signal("linked_goal", context_payload.get("linked_goal"))
-        add_signal("focus_score", context_payload.get("focus_score"))
-        add_signal("energy_score", context_payload.get("energy_score"))
-        add_signal("blockers", context_payload.get("blockers"))
-        add_signal("context_notes", context_payload.get("context_notes"))
-        add_signal("ai_detail", context_payload.get("ai_detail"))
-        add_signal("habits", context_payload.get("habits"))
-        add_signal("summary", context_payload.get("summary"))
-        add_signal("daily_completion_counts", context_payload.get("daily_completion_counts"))
-
-        ignored_metadata_keys = {
-            EMBEDDING_CACHE_KEY_FIELD,
-            "timestamp",
-            "created",
-            "created_at",
-            "updated_at",
-            "last_updated",
-            "approved_at",
-            "sync_event_key",
-            "user_id",
-            "user_email",
-            "context",
-        }
-
-        ignored_context_keys = {
-            "sync_event_key",
-            "time_entry_id",
-            "project_id",
-            "tag_ids",
-            "user_id",
-            "user_email",
-            "start_time",
-            "end_time",
-            "position_top",
-            "position_left",
-            "weekday",
-            "hour_of_day",
-        }
-
-        for key in sorted(metadata_payload.keys()):
-            if key in ignored_metadata_keys:
-                continue
-            add_signal(f"meta_{key}", metadata_payload.get(key))
-
-        for key in sorted(context_payload.keys()):
-            if key in ignored_context_keys:
-                continue
-            add_signal(f"context_{key}", context_payload.get(key))
+        for key in sorted(context_keys):
+            add_signal(key, context_payload.get(key))
 
         if normalized_category == "time_entry" and "duration_minutes" not in signals:
             add_signal("duration_minutes", context_payload.get("duration_seconds"))
 
         return [f"{label}: {value}" for label, value in sorted(signals.items())]
+
+    def _build_embedding_document(
+        self,
+        *,
+        title: str,
+        content: str,
+        tags: Optional[List[str]] = None,
+        category: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        entry_type: Optional[Any] = None,
+        entry_sub_type: Optional[Any] = None,
+    ) -> Tuple[str, List[str], str]:
+        metadata_payload = metadata if isinstance(metadata, dict) else {}
+        normalized_title = " ".join(str(title or "").split()).strip()
+        normalized_content = str(content or "").strip()
+        normalized_tags = [" ".join(str(tag).split()).strip() for tag in (tags or []) if str(tag).strip()]
+        normalized_entry_type = self._normalize_embedding_label(entry_type or "unknown")
+        normalized_entry_sub_type = self._normalize_embedding_label(entry_sub_type or "unknown")
+
+        strategy_category = self._resolve_embedding_strategy_category(
+            category,
+            title=normalized_title,
+            content=normalized_content,
+            tags=normalized_tags,
+            metadata=metadata_payload,
+            entry_type=entry_type,
+            entry_sub_type=entry_sub_type,
+        )
+
+        profile = self._select_embedding_chunk_profile(strategy_category)
+        semantic_sections: List[str] = []
+
+        summary_tokens = [token for token in [normalized_title, strategy_category.replace("_", " ")] if token]
+        semantic_sections.append("Summary: " + " - ".join(summary_tokens) if summary_tokens else "Summary: knowledge entry")
+
+        facts = self._build_embedding_facts(
+            strategy_category=strategy_category,
+            normalized_title=normalized_title,
+            normalized_content=normalized_content,
+            normalized_tags=normalized_tags,
+            metadata_payload=metadata_payload,
+        )
+        semantic_sections.extend(facts)
+
+        metadata_signals = self._extract_embedding_metadata_signals(strategy_category, metadata_payload)
+        semantic_sections.extend(metadata_signals)
+
+        if normalized_content and strategy_category not in {"system", "time_anchor"}:
+            content_cap = int(profile.get("max_chars", EMBEDDING_SEMANTIC_SECTION_MAX_CHARS))
+            content_excerpt = self._stringify_embedding_value(normalized_content, max_chars=max(content_cap, 220))
+            if content_excerpt:
+                semantic_sections.append(f"Content excerpt: {content_excerpt}")
+
+        deduped_sections: List[str] = []
+        seen_sections: Set[str] = set()
+        for section in semantic_sections:
+            normalized_section = " ".join(str(section or "").split()).strip()
+            if not normalized_section or normalized_section in seen_sections:
+                continue
+            seen_sections.add(normalized_section)
+            deduped_sections.append(normalized_section)
+
+        document_parts = [
+            f"entry_type: {normalized_entry_type}",
+            f"entry_sub_type: {normalized_entry_sub_type}",
+            f"category: {strategy_category}",
+            f"title: {normalized_title}",
+        ]
+        if normalized_tags:
+            document_parts.append(f"tags: {', '.join(normalized_tags)}")
+        if deduped_sections:
+            document_parts.append("semantic_facts:\n" + "\n".join(f"- {section}" for section in deduped_sections))
+
+        embedding_text = "\n\n".join(part for part in document_parts if part).strip()
+        return embedding_text, deduped_sections, strategy_category
 
     def _build_embedding_text(
         self,
@@ -388,31 +907,16 @@ class KnowledgeBaseService:
         entry_type: Optional[Any] = None,
         entry_sub_type: Optional[Any] = None,
     ) -> str:
-        normalized_title = " ".join(str(title or "").split()).strip()
-        normalized_content = str(content or "").strip()
-        normalized_tags = [" ".join(str(tag).split()).strip() for tag in (tags or []) if str(tag).strip()]
-        normalized_category = self._normalize_embedding_label(category or "uncategorized")
-        normalized_entry_type = self._normalize_embedding_label(entry_type or "unknown")
-        normalized_entry_sub_type = self._normalize_embedding_label(entry_sub_type or "unknown")
-
-        parts = [
-            f"entry_type: {normalized_entry_type}",
-            f"entry_sub_type: {normalized_entry_sub_type}",
-            f"category: {normalized_category}",
-            f"title: {normalized_title}",
-        ]
-
-        if normalized_tags:
-            parts.append(f"tags: {', '.join(normalized_tags)}")
-
-        if normalized_content:
-            parts.append(f"content:\n{normalized_content}")
-
-        metadata_signals = self._extract_embedding_metadata_signals(normalized_category, metadata)
-        if metadata_signals:
-            parts.append("metadata_signals:\n" + "\n".join(f"- {signal}" for signal in metadata_signals))
-
-        return "\n\n".join(part for part in parts if part).strip()
+        embedding_text, _, _ = self._build_embedding_document(
+            title=title,
+            content=content,
+            tags=tags,
+            category=category,
+            metadata=metadata,
+            entry_type=entry_type,
+            entry_sub_type=entry_sub_type,
+        )
+        return embedding_text
 
     def _build_embedding_cache_key(self, embedding_text: str) -> str:
         normalized_text = " ".join(str(embedding_text or "").split()).strip().lower() or "empty"
@@ -422,25 +926,120 @@ class KnowledgeBaseService:
         chunk_hash = self._build_embedding_cache_key(chunk_text)
         return f"chunk::{chunk_hash}"
 
-    def _chunk_embedding_text(self, embedding_text: str) -> List[str]:
+    def _chunk_embedding_text(
+        self,
+        embedding_text: str,
+        *,
+        category: Optional[str] = None,
+        entry_type: Optional[Any] = None,
+        semantic_sections: Optional[List[str]] = None,
+    ) -> List[str]:
         normalized_text = " ".join(str(embedding_text or "").split()).strip()
         if not normalized_text:
             return ["empty"]
 
-        if len(normalized_text) <= EMBEDDING_MAX_CHARS_PER_CHUNK:
+        strategy_category = self._resolve_embedding_strategy_category(
+            category,
+            entry_type=entry_type,
+        )
+        profile = self._select_embedding_chunk_profile(strategy_category)
+        max_chars = int(profile.get("max_chars", EMBEDDING_MAX_CHARS_PER_CHUNK))
+        overlap_chars = int(profile.get("overlap", EMBEDDING_CHUNK_OVERLAP_CHARS))
+        max_chunks = int(profile.get("max_chunks", EMBEDDING_MAX_CHUNKS_PER_ENTRY))
+        use_semantic = bool(profile.get("semantic", True))
+
+        if len(normalized_text) <= max_chars:
             return [normalized_text]
+
+        if use_semantic and semantic_sections:
+            semantic_units: List[str] = []
+            for section in semantic_sections:
+                normalized_section = " ".join(str(section or "").split()).strip()
+                if not normalized_section:
+                    continue
+
+                if len(normalized_section) <= EMBEDDING_SEMANTIC_SECTION_MAX_CHARS:
+                    semantic_units.append(normalized_section)
+                    continue
+
+                sentence_parts = re.split(r"(?<=[.!?])\s+", normalized_section)
+                buffered = ""
+                for part in sentence_parts:
+                    part = " ".join(part.split()).strip()
+                    if not part:
+                        continue
+                    candidate = f"{buffered} {part}".strip() if buffered else part
+                    if len(candidate) <= EMBEDDING_SEMANTIC_SECTION_MAX_CHARS:
+                        buffered = candidate
+                        continue
+
+                    if buffered:
+                        semantic_units.append(buffered)
+                        buffered = ""
+
+                    if len(part) <= EMBEDDING_SEMANTIC_SECTION_MAX_CHARS:
+                        buffered = part
+                        continue
+
+                    words = part.split()
+                    word_buffer = ""
+                    for word in words:
+                        word_candidate = f"{word_buffer} {word}".strip() if word_buffer else word
+                        if len(word_candidate) <= EMBEDDING_SEMANTIC_SECTION_MAX_CHARS:
+                            word_buffer = word_candidate
+                        else:
+                            if word_buffer:
+                                semantic_units.append(word_buffer)
+                            word_buffer = word
+                    if word_buffer:
+                        buffered = word_buffer
+
+                if buffered:
+                    semantic_units.append(buffered)
+
+            chunks: List[str] = []
+            current_chunk = ""
+            section_index = 0
+
+            while section_index < len(semantic_units) and len(chunks) < max_chunks:
+                unit = semantic_units[section_index]
+                candidate = f"{current_chunk} {unit}".strip() if current_chunk else unit
+                if len(candidate) <= max_chars:
+                    current_chunk = candidate
+                    section_index += 1
+                    continue
+
+                if current_chunk:
+                    chunks.append(current_chunk)
+                    current_chunk = ""
+                    continue
+
+                chunks.append(unit[:max_chars].strip())
+                section_index += 1
+
+            if current_chunk and len(chunks) < max_chunks:
+                chunks.append(current_chunk)
+
+            if section_index < len(semantic_units) and chunks:
+                tail = " ".join(semantic_units[section_index:]).strip()
+                if tail:
+                    merged_tail = f"{chunks[-1]} {tail}".strip()
+                    chunks[-1] = merged_tail[:max_chars].strip()
+
+            if chunks:
+                return chunks[:max_chunks]
 
         chunks: List[str] = []
         cursor = 0
 
-        while cursor < len(normalized_text) and len(chunks) < EMBEDDING_MAX_CHUNKS_PER_ENTRY:
-            max_end = min(len(normalized_text), cursor + EMBEDDING_MAX_CHARS_PER_CHUNK)
+        while cursor < len(normalized_text) and len(chunks) < max_chunks:
+            max_end = min(len(normalized_text), cursor + max_chars)
             split_end = max_end
 
             if max_end < len(normalized_text):
-                preferred_break = normalized_text.rfind(". ", cursor + EMBEDDING_MAX_CHARS_PER_CHUNK // 2, max_end)
+                preferred_break = normalized_text.rfind(". ", cursor + max_chars // 2, max_end)
                 if preferred_break == -1:
-                    preferred_break = normalized_text.rfind(" ", cursor + EMBEDDING_MAX_CHARS_PER_CHUNK // 2, max_end)
+                    preferred_break = normalized_text.rfind(" ", cursor + max_chars // 2, max_end)
                 if preferred_break > cursor:
                     split_end = preferred_break + 1
 
@@ -451,12 +1050,12 @@ class KnowledgeBaseService:
             if split_end >= len(normalized_text):
                 break
 
-            next_cursor = max(cursor + 1, split_end - EMBEDDING_CHUNK_OVERLAP_CHARS)
+            next_cursor = max(cursor + 1, split_end - overlap_chars)
             if next_cursor <= cursor:
                 next_cursor = split_end
             cursor = next_cursor
 
-        if cursor < len(normalized_text) and len(chunks) >= EMBEDDING_MAX_CHUNKS_PER_ENTRY:
+        if cursor < len(normalized_text) and len(chunks) >= max_chunks:
             tail = normalized_text[cursor:].strip()
             if tail:
                 chunks[-1] = f"{chunks[-1]} {tail}".strip()
@@ -498,8 +1097,20 @@ class KnowledgeBaseService:
             )
         return generated_embedding
 
-    async def _generate_embedding_for_text(self, embedding_text: str) -> List[float]:
-        chunks = self._chunk_embedding_text(embedding_text)
+    async def _generate_embedding_for_text(
+        self,
+        embedding_text: str,
+        *,
+        category: Optional[str] = None,
+        entry_type: Optional[Any] = None,
+        semantic_sections: Optional[List[str]] = None,
+    ) -> List[float]:
+        chunks = self._chunk_embedding_text(
+            embedding_text,
+            category=category,
+            entry_type=entry_type,
+            semantic_sections=semantic_sections,
+        )
         if len(chunks) == 1:
             return await self._generate_embedding(chunks[0])
 
@@ -516,7 +1127,7 @@ class KnowledgeBaseService:
                 self._cache_embedding_value(chunk_key, resolved_chunk_embedding)
 
             normalized_chunk_embedding = self._fit_embedding_dimension(resolved_chunk_embedding)
-            chunk_weight = float(max(1, len(chunk)))
+            chunk_weight = float(max(1, len(chunk.split())))
             total_weight += chunk_weight
 
             for idx, value in enumerate(normalized_chunk_embedding):
@@ -586,6 +1197,9 @@ class KnowledgeBaseService:
         embedding_text: str,
         embedding_key: str,
         existing_entry: Optional[KnowledgeEntry] = None,
+        category: Optional[str] = None,
+        entry_type: Optional[Any] = None,
+        semantic_sections: Optional[List[str]] = None,
     ) -> List[float]:
         await self._ensure_embedding_cache_loaded()
 
@@ -600,7 +1214,12 @@ class KnowledgeBaseService:
         if self._embedding_has_signal(cached_embedding):
             return list(cached_embedding)
 
-        generated_embedding = await self._generate_embedding_for_text(embedding_text)
+        generated_embedding = await self._generate_embedding_for_text(
+            embedding_text,
+            category=category,
+            entry_type=entry_type,
+            semantic_sections=semantic_sections,
+        )
         if not self._embedding_has_signal(generated_embedding):
             raise RuntimeError("Generated embedding has no semantic signal")
         self._cache_embedding_value(embedding_key, generated_embedding)
@@ -657,7 +1276,7 @@ class KnowledgeBaseService:
         try:
             metadata_payload = dict(metadata or {})
 
-            embedding_text = self._build_embedding_text(
+            embedding_text, semantic_sections, strategy_category = self._build_embedding_document(
                 title=title,
                 content=content,
                 tags=tags,
@@ -669,16 +1288,27 @@ class KnowledgeBaseService:
             embedding_key = self._build_embedding_cache_key(embedding_text)
             metadata_payload[EMBEDDING_CACHE_KEY_FIELD] = embedding_key
 
-            entry_chunks = self._chunk_embedding_text(embedding_text)
+            entry_chunks = self._chunk_embedding_text(
+                embedding_text,
+                category=strategy_category,
+                entry_type=entry_type,
+                semantic_sections=semantic_sections,
+            )
             self._log_embedding_payload(
                 action="create",
                 embedding_key=embedding_key,
                 embedding_text=embedding_text,
                 chunks=entry_chunks,
-                category=category,
+                category=strategy_category,
             )
 
-            embedding = await self._resolve_embedding(embedding_text, embedding_key)
+            embedding = await self._resolve_embedding(
+                embedding_text,
+                embedding_key,
+                category=strategy_category,
+                entry_type=entry_type,
+                semantic_sections=semantic_sections,
+            )
 
             # Generate unique ID
             entry_id = str(uuid.uuid4())
@@ -700,6 +1330,7 @@ class KnowledgeBaseService:
             self.vector_store.add_entry(entry, embedding)
             self._index_sync_event_key(entry)
             self._cache_entry_embedding(entry)
+            self._persist_entry_to_db(entry)
             
             logger.info(f"Created knowledge entry: {entry_id}")
             return entry
@@ -718,6 +1349,11 @@ class KnowledgeBaseService:
             The knowledge entry if found, None otherwise
         """
         try:
+            if self.knowledge_db_store and self.knowledge_db_store.is_available:
+                db_entry = self.knowledge_db_store.get_entry(self.user_id, entry_id)
+                if db_entry:
+                    return self._attach_embedding_to_entry(db_entry)
+
             return self.vector_store.get_entry(entry_id)
         except Exception as e:
             logger.error(f"Failed to get knowledge entry {entry_id}: {e}")
@@ -763,7 +1399,7 @@ class KnowledgeBaseService:
             if tags is not None:
                 updated_entry.tags = tags
 
-            embedding_text = self._build_embedding_text(
+            embedding_text, semantic_sections, strategy_category = self._build_embedding_document(
                 title=updated_entry.title,
                 content=updated_entry.content,
                 tags=updated_entry.tags,
@@ -775,14 +1411,19 @@ class KnowledgeBaseService:
             embedding_key = self._build_embedding_cache_key(embedding_text)
             updated_entry.metadata[EMBEDDING_CACHE_KEY_FIELD] = embedding_key
 
-            entry_chunks = self._chunk_embedding_text(embedding_text)
+            entry_chunks = self._chunk_embedding_text(
+                embedding_text,
+                category=strategy_category,
+                entry_type=updated_entry.entry_type,
+                semantic_sections=semantic_sections,
+            )
             self._log_embedding_payload(
                 action="update",
                 embedding_key=embedding_key,
                 embedding_text=embedding_text,
                 chunks=entry_chunks,
                 entry_id=updated_entry.entry_id,
-                category=updated_entry.category,
+                category=strategy_category,
             )
             
             updated_entry.updated_at = datetime.utcnow()
@@ -791,12 +1432,16 @@ class KnowledgeBaseService:
                 embedding_text,
                 embedding_key,
                 existing_entry=existing_entry,
+                category=strategy_category,
+                entry_type=updated_entry.entry_type,
+                semantic_sections=semantic_sections,
             )
             
             # Update in vector store
             self.vector_store.update_entry(updated_entry, embedding)
             self._index_sync_event_key(updated_entry)
             self._cache_entry_embedding(updated_entry)
+            self._persist_entry_to_db(updated_entry)
             
             logger.info(f"Updated knowledge entry: {entry_id}")
             return updated_entry
@@ -822,6 +1467,8 @@ class KnowledgeBaseService:
                 logger.info(f"Deleted knowledge entry: {entry_id}")
             else:
                 logger.warning(f"Entry {entry_id} not found for deletion")
+
+            self._remove_entry_from_db(entry_id)
             return success
         except Exception as e:
             logger.error(f"Failed to delete knowledge entry {entry_id}: {e}")
@@ -840,6 +1487,7 @@ class KnowledgeBaseService:
                 self._remove_indexed_sync_event_for_entry(entry_id)
 
             removed = self.vector_store.remove_entries(normalized_ids)
+            self._remove_entries_from_db(normalized_ids)
             if removed > 0:
                 logger.info("Deleted %d knowledge entries in bulk", removed)
             return removed
@@ -910,6 +1558,21 @@ class KnowledgeBaseService:
             List of knowledge entries
         """
         try:
+            if self.knowledge_db_store and self.knowledge_db_store.is_available:
+                db_entries = self.knowledge_db_store.list_entries(
+                    self.user_id,
+                    category=category,
+                    entry_type=entry_type,
+                )
+
+                hydrated_entries: List[KnowledgeEntry] = []
+                for entry in db_entries:
+                    hydrated = self._attach_embedding_to_entry(entry)
+                    if hydrated:
+                        hydrated_entries.append(hydrated)
+
+                return hydrated_entries
+
             all_entries = self.vector_store.get_all_entries()
             
             # Apply filters
@@ -937,6 +1600,11 @@ class KnowledgeBaseService:
         """
         try:
             if self._user_preferences is not None:
+                return self._user_preferences
+
+            db_preferences = self._load_preferences_from_db_store()
+            if db_preferences is not None:
+                self._user_preferences = db_preferences
                 return self._user_preferences
 
             # Try to hydrate preferences from persisted knowledge entries first.
@@ -1025,13 +1693,13 @@ class KnowledgeBaseService:
                     logger.info(f"Loaded user preferences from knowledge base: {prefs_dict}")
                     prefs_dict["user_id"] = self.user_id
                     self._user_preferences = UserPreferences(**prefs_dict)
+                    self._persist_preferences_to_db_store(self._user_preferences)
                     return self._user_preferences
 
             except Exception as e:
                 logger.warning(f"Failed to load preferences from knowledge base: {e}, trying JSON file")
 
             # Fallback to JSON file
-            import os
             prefs_path = os.path.join(os.path.dirname(__file__), "user_preferences.json")
             try:
                 if os.path.exists(prefs_path):
@@ -1042,11 +1710,13 @@ class KnowledgeBaseService:
                         prefs_dict = json.loads(data)
                         prefs_dict["user_id"] = self.user_id
                         self._user_preferences = UserPreferences(**prefs_dict)
+                        self._persist_preferences_to_db_store(self._user_preferences)
                         return self._user_preferences
             except Exception as e:
                 logger.warning(f"Failed to parse stored preferences: {e}. Using defaults.")
 
             self._user_preferences = UserPreferences(user_id=self.user_id)
+            self._persist_preferences_to_db_store(self._user_preferences)
             return self._user_preferences
         except Exception as e:
             logger.error(f"Failed to get user preferences: {e}")
@@ -1127,7 +1797,7 @@ class KnowledgeBaseService:
         except Exception:
             resolved_entry_sub_type = KnowledgeEntrySubType.MISC_INTERACTION
 
-        embedding_text = self._build_embedding_text(
+        embedding_text, semantic_sections, strategy_category = self._build_embedding_document(
             title=entry.title,
             content=entry.content,
             tags=entry.tags,
@@ -1139,19 +1809,29 @@ class KnowledgeBaseService:
         embedding_key = self._build_embedding_cache_key(embedding_text)
         metadata_payload[EMBEDDING_CACHE_KEY_FIELD] = embedding_key
 
+        entry_chunks = self._chunk_embedding_text(
+            embedding_text,
+            category=strategy_category,
+            entry_type=resolved_entry_type,
+            semantic_sections=semantic_sections,
+        )
+
         self._log_embedding_payload(
             action="backfill",
             embedding_key=embedding_key,
             embedding_text=embedding_text,
-            chunks=self._chunk_embedding_text(embedding_text),
+            chunks=entry_chunks,
             entry_id=entry.entry_id,
-            category=entry.category,
+            category=strategy_category,
         )
 
         generated_embedding = await self._resolve_embedding(
             embedding_text,
             embedding_key,
             existing_entry=entry,
+            category=strategy_category,
+            entry_type=resolved_entry_type,
+            semantic_sections=semantic_sections,
         )
         if not generated_embedding:
             return None
@@ -1160,6 +1840,7 @@ class KnowledgeBaseService:
         updated_entry.metadata = metadata_payload
         updated_entry.updated_at = datetime.utcnow()
         self.vector_store.update_entry(updated_entry, generated_embedding)
+        self._persist_entry_to_db(updated_entry)
         self._index_sync_event_key(updated_entry)
         self._cache_entry_embedding(updated_entry)
 
@@ -1430,19 +2111,31 @@ class KnowledgeBaseService:
             List of preference category names
         """
         try:
+            if self.preference_db_store and self.preference_db_store.is_available:
+                categories = self.preference_db_store.list_categories(self.user_id)
+                if categories:
+                    return categories
+
             current_prefs = await self.get_user_preferences()
             prefs_dict = current_prefs.model_dump()
-            return list(prefs_dict.keys())
+            return [key for key, value in prefs_dict.items() if key != "user_id" and isinstance(value, dict)]
         except Exception as e:
             logger.error(f"Failed to get preference categories: {e}")
             return []
     
     async def _save_user_preferences(self) -> bool:
-        """Save user preferences to knowledge base."""
+        """Save user preferences to dedicated preference storage."""
         try:
             if not self._user_preferences:
                 return False
+
+            if self.preference_db_store and self.preference_db_store.is_available:
+                persisted = self._persist_preferences_to_db_store(self._user_preferences)
+                if persisted:
+                    return True
+                logger.warning("Falling back to legacy knowledge-entry preference persistence")
             
+            # Legacy fallback path for deployments without DB preference storage.
             # Check if preferences entry already exists
             existing_entries = await self.get_all_entries(
                 category="system",
@@ -2150,6 +2843,40 @@ class KnowledgeBaseService:
         summary["total_time_entry_records_available"] = len(time_records)
         return summary
 
+    def _build_preference_context_from_model(
+        self,
+        preferences: UserPreferences,
+        limit: int = 5,
+    ) -> List[Dict[str, Any]]:
+        pref_payload = preferences.model_dump()
+        snippets: List[Dict[str, Any]] = []
+
+        for category, values in pref_payload.items():
+            if category == "user_id" or not isinstance(values, dict):
+                continue
+
+            for key, value in values.items():
+                if str(key).startswith("__"):
+                    continue
+
+                normalized_value = self._stringify_embedding_value(value, max_chars=160)
+                if not normalized_value:
+                    continue
+
+                snippets.append(
+                    {
+                        "content": f"{key}: {normalized_value}",
+                        "category": category,
+                        "metadata": {"source": "preference_store", "key": key},
+                        "similarity": 0.5,
+                    }
+                )
+
+                if len(snippets) >= limit:
+                    return snippets
+
+        return snippets
+
     async def get_contextual_knowledge_for_agent(self, 
                                                 user_input: str,
                                                 agent_type: str,
@@ -2359,6 +3086,19 @@ class KnowledgeBaseService:
 
             if fallback_modes:
                 context_summary = f"{context_summary} Retrieval fallback: {', '.join(fallback_modes)}."
+
+            preference_context = [
+                {
+                    "content": result.entry.content,
+                    "category": result.entry.category,
+                    "metadata": result.entry.metadata,
+                    "similarity": result.similarity_score,
+                }
+                for result in preference_results
+            ][:5]
+
+            if not preference_context:
+                preference_context = self._build_preference_context_from_model(preferences, limit=5)
             
             # Organize results by type
             context = {
@@ -2374,15 +3114,7 @@ class KnowledgeBaseService:
                     }
                     for result in interaction_results
                 ][:6],
-                "user_preferences": [
-                    {
-                        "content": result.entry.content,
-                        "category": result.entry.category,
-                        "metadata": result.entry.metadata,
-                        "similarity": result.similarity_score
-                    }
-                    for result in preference_results
-                ][:5],
+                "user_preferences": preference_context,
                 "patterns_and_insights": [
                     {
                         "content": result.entry.content,
@@ -2598,6 +3330,7 @@ class KnowledgeBaseService:
             self._embedding_cache = {}
             self._embedding_cache_loaded = False
             self._embedding_provider_cooldown_until = 0.0
+            self._clear_entries_from_db()
             logger.info("Cleared all knowledge base entries")
             return True
         except Exception as e:
