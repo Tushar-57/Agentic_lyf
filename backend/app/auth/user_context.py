@@ -119,8 +119,14 @@ def _user_from_claims(claims: Dict[str, Any], source: str) -> Optional[RequestUs
     )
 
 
-def resolve_request_user(request: Request) -> RequestUser:
-    """Resolve the current user from bridge headers or bearer auth."""
+def resolve_request_user(request: Request, require_auth: bool = False) -> RequestUser:
+    """Resolve the current user from bridge headers or bearer auth.
+    
+    Args:
+        request: The incoming request
+        require_auth: If True, returns ANONYMOUS_USER instead of hint-based fallback
+                       Use this for write operations to prevent single_user pollution
+    """
     bridge_token = request.headers.get("X-Agentic-Bridge-Token") or request.query_params.get("bridge_token")
     if bridge_token:
         claims = _decode_token(bridge_token)
@@ -128,6 +134,10 @@ def resolve_request_user(request: Request) -> RequestUser:
             user = _user_from_claims(claims, source="bridge_token")
             if user:
                 return user
+        # Invalid bridge token - reject if auth required
+        if require_auth:
+            logger.warning("Invalid bridge token rejected for protected endpoint")
+            return ANONYMOUS_USER
 
     bearer_token = _extract_bearer_token(request.headers.get("Authorization"))
     if bearer_token:
@@ -136,9 +146,17 @@ def resolve_request_user(request: Request) -> RequestUser:
             user = _user_from_claims(claims, source="authorization")
             if user:
                 return user
+        # Invalid bearer token - reject if auth required
+        if require_auth:
+            logger.warning("Invalid bearer token rejected for protected endpoint")
+            return ANONYMOUS_USER
 
     hinted_user_id = request.headers.get("X-Agentic-User-Id") or request.query_params.get("user_id")
     if hinted_user_id:
+        # For protected endpoints, don't allow hint-based access
+        if require_auth:
+            logger.warning("Hint-based access rejected for protected endpoint")
+            return ANONYMOUS_USER
         normalized = normalize_user_storage_key(hinted_user_id)
         return RequestUser(
             raw_user_id=str(hinted_user_id),
