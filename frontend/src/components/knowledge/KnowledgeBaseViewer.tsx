@@ -344,12 +344,13 @@ const resolveEntryType = (entry: KnowledgeEntry, resolvedCategory: string): stri
     return 'insight'
   }
 
-  if (entryType.includes('preference')) {
-    return entryType.includes('user') ? 'user_preference' : 'preference'
-  }
-
+  // Check for goals BEFORE preferences so they're counted separately
   if (subType.includes('goal')) {
     return 'goal'
+  }
+
+  if (entryType.includes('preference')) {
+    return entryType.includes('user') ? 'user_preference' : 'preference'
   }
 
   if (subType.includes('schedule')) {
