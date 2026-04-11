@@ -1038,6 +1038,13 @@ const formatCompactTime = (value: string): string => {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }
 
+const toLocalDateKey = (value: Date): string => {
+  const year = value.getFullYear()
+  const month = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 const resolveCheckupStatus = (
   entries: KnowledgeEntry[],
   checkupType: 'morning' | 'evening',
@@ -1061,12 +1068,10 @@ const resolveCheckupStatus = (
 
   const latest = matchingEntries[0]
   const metadata = isRecord(latest.metadata) ? latest.metadata : {}
-  const checkupDateRaw = typeof metadata.checkup_date === 'string' && metadata.checkup_date.trim()
-    ? metadata.checkup_date.trim()
-    : latest.created_at
-
-  const checkupDay = checkupDateRaw.slice(0, 10)
-  const todayDay = new Date().toISOString().slice(0, 10)
+  const checkupDay = typeof metadata.checkup_date === 'string' && metadata.checkup_date.trim()
+    ? metadata.checkup_date.trim().slice(0, 10)
+    : toLocalDateKey(new Date(latest.created_at))
+  const todayDay = toLocalDateKey(new Date())
 
   if (checkupDay === todayDay) {
     return `Completed today at ${formatCompactTime(latest.created_at)}`

@@ -8,6 +8,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from html import escape
 from typing import List, Optional, Dict, Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from app.models.knowledge import (
@@ -422,6 +423,7 @@ class OnboardingData(BaseModel):
 class DailyCheckupRequest(BaseModel):
     """Request model for morning/evening checkup APIs."""
     date: Optional[str] = None
+    timezone: Optional[str] = None
     note: Optional[str] = None
     perspective: Optional[Dict[str, Any]] = None
     context_snapshot: Optional[Dict[str, Any]] = None
@@ -475,6 +477,63 @@ def _ensure_timezone(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _sanitize_timezone_name(raw_value: Optional[str]) -> Optional[str]:
+    if raw_value is None:
+        return None
+    normalized = str(raw_value).strip()
+    return normalized or None
+
+
+def _resolve_timezone(raw_value: Optional[str]):
+    timezone_name = _sanitize_timezone_name(raw_value)
+    if not timezone_name:
+        return timezone.utc
+
+    try:
+        return ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        logger.warning("Unknown timezone '%s'; falling back to UTC", timezone_name)
+        return timezone.utc
+
+
+def _to_timezone(value: datetime, tzinfo) -> datetime:
+    return _ensure_timezone(value).astimezone(tzinfo)
+
+
+def _extract_preferences_timezone(preferences: Optional[UserPreferences]) -> Optional[str]:
+    if not preferences:
+        return None
+
+    if isinstance(preferences.general, dict):
+        resolved = _sanitize_timezone_name(preferences.general.get("timezone"))
+        if resolved:
+            return resolved
+
+    if isinstance(preferences.productivity, dict):
+        resolved = _sanitize_timezone_name(preferences.productivity.get("timezone"))
+        if resolved:
+            return resolved
+
+    return None
+
+
+def _resolve_checkup_timezone(
+    request_timezone: Optional[str],
+    context_snapshot: Optional[Dict[str, Any]],
+    preferences: Optional[UserPreferences],
+) -> Optional[str]:
+    request_tz = _sanitize_timezone_name(request_timezone)
+    if request_tz:
+        return request_tz
+
+    if isinstance(context_snapshot, dict):
+        context_tz = _sanitize_timezone_name(context_snapshot.get("timezone"))
+        if context_tz:
+            return context_tz
+
+    return _extract_preferences_timezone(preferences)
 
 
 def _entry_context(entry: KnowledgeEntry) -> Dict[str, Any]:
@@ -540,10 +599,10 @@ def _safe_int(raw_value: Any, default: int = 0) -> int:
         return default
 
 
-def _parse_requested_date(date_token: Optional[str]) -> date:
+def _parse_requested_date(date_token: Optional[str], timezone_name: Optional[str] = None) -> date:
     """Parse YYYY-MM-DD dates from API payloads."""
     if not date_token:
-        return datetime.now(timezone.utc).date()
+        return datetime.now(_resolve_timezone(timezone_name)).date()
 
     try:
         return date.fromisoformat(date_token)
@@ -1456,14 +1515,18 @@ async def get_knowledge_analytics(
         all_entries = _merge_db_checkup_entries(all_entries, category=None, entry_type=None)
         all_entries = _prune_legacy_system_preference_entries(all_entries)
 
+        preferences = await kb_service.get_user_preferences()
+        analytics_timezone_name = _extract_preferences_timezone(preferences)
+        analytics_timezone = _resolve_timezone(analytics_timezone_name)
+
         days = _resolve_date_range(time_range)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(analytics_timezone)
         start = now - timedelta(days=days - 1)
 
         # Normalize datetimes and sort once for deterministic analytics output.
         entries_with_ts = []
         for entry in all_entries:
-            entry_ts = _resolve_entry_event_timestamp(entry)
+            entry_ts = _to_timezone(_resolve_entry_event_timestamp(entry), analytics_timezone)
             entries_with_ts.append((entry, entry_ts))
 
         entries_with_ts.sort(key=lambda item: item[1])
@@ -1711,12 +1774,16 @@ async def run_morning_checkup(request: DailyCheckupRequest):
     """Generate a morning planning checkup using persisted knowledge and time-entry context."""
     try:
         kb_service = get_knowledge_base_service()
-        checkup_date = _parse_requested_date(request.date)
         note = (request.note or "").strip()
         perspective = request.perspective if isinstance(request.perspective, dict) else {}
         context_snapshot = request.context_snapshot if isinstance(request.context_snapshot, dict) else {}
         if not context_snapshot and isinstance(request.contextSnapshot, dict):
             context_snapshot = request.contextSnapshot
+
+        preferences = await kb_service.get_user_preferences()
+        checkup_timezone_name = _resolve_checkup_timezone(request.timezone, context_snapshot, preferences)
+        checkup_timezone = _resolve_timezone(checkup_timezone_name)
+        checkup_date = _parse_requested_date(request.date, checkup_timezone_name)
 
         all_entries = await kb_service.get_all_entries()
         time_entries: List[Dict[str, Any]] = []
@@ -1726,7 +1793,7 @@ async def run_morning_checkup(request: DailyCheckupRequest):
                 continue
 
             event_ts = _resolve_entry_event_timestamp(entry)
-            event_date = event_ts.date()
+            event_date = _to_timezone(event_ts, checkup_timezone).date()
             if event_date > checkup_date:
                 continue
 
@@ -1763,7 +1830,6 @@ async def run_morning_checkup(request: DailyCheckupRequest):
         valid_focus_scores = [item["focus_score"] for item in week_entries if item["focus_score"] > 0]
         avg_focus_score = round(sum(valid_focus_scores) / len(valid_focus_scores), 2) if valid_focus_scores else None
 
-        preferences = await kb_service.get_user_preferences()
         priorities = preferences.general.get("priorities", []) if isinstance(preferences.general, dict) else []
         priorities = priorities if isinstance(priorities, list) else []
         communication_profile = _extract_communication_profile(all_entries)
@@ -2017,12 +2083,16 @@ async def run_evening_checkup(request: DailyCheckupRequest):
     """Generate an evening reflection checkup based on a single day of logged context."""
     try:
         kb_service = get_knowledge_base_service()
-        checkup_date = _parse_requested_date(request.date)
         note = (request.note or "").strip()
         perspective = request.perspective if isinstance(request.perspective, dict) else {}
         context_snapshot = request.context_snapshot if isinstance(request.context_snapshot, dict) else {}
         if not context_snapshot and isinstance(request.contextSnapshot, dict):
             context_snapshot = request.contextSnapshot
+
+        preferences = await kb_service.get_user_preferences()
+        checkup_timezone_name = _resolve_checkup_timezone(request.timezone, context_snapshot, preferences)
+        checkup_timezone = _resolve_timezone(checkup_timezone_name)
+        checkup_date = _parse_requested_date(request.date, checkup_timezone_name)
 
         all_entries = await kb_service.get_all_entries()
         today_entries: List[Dict[str, Any]] = []
@@ -2032,7 +2102,7 @@ async def run_evening_checkup(request: DailyCheckupRequest):
                 continue
 
             event_ts = _resolve_entry_event_timestamp(entry)
-            if event_ts.date() != checkup_date:
+            if _to_timezone(event_ts, checkup_timezone).date() != checkup_date:
                 continue
 
             context = _entry_context(entry)

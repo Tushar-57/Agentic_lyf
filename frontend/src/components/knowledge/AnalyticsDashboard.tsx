@@ -1294,7 +1294,11 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       form.additionalNote.trim(),
     ].filter(Boolean)
 
+    const clientTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+
     return {
+      date: todayDateKey,
+      timezone: clientTimezone,
       note: noteSections.join('\n'),
       perspective,
       context_snapshot: contextSnapshot,
