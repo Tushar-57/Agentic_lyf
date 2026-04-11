@@ -2074,6 +2074,9 @@ async def _sync_missing_db_checkup_insights(kb_service) -> Dict[str, int]:
             continue
 
         title_prefix = "Morning Checkup" if checkup_type == "morning" else "Evening Checkup"
+        # Add sync_event_key for deterministic ID (prevents duplicates on re-sync)
+        checkup_sync_key = f"checkup:{checkup_type}:{checkup_date.isoformat()}"
+        payload["sync_event_key"] = checkup_sync_key
         try:
             await kb_service.create_entry(
                 entry_type=KnowledgeEntryType.INSIGHT,
@@ -2132,6 +2135,8 @@ async def _upsert_checkup_insight(
     merged_metadata = dict(metadata or {})
     merged_metadata["checkup_type"] = checkup_type
     merged_metadata["checkup_date"] = checkup_date_iso
+    # Add sync_event_key for deterministic ID (prevents duplicates on re-sync)
+    merged_metadata["context"] = {"sync_event_key": f"checkup:{checkup_type}:{checkup_date_iso}"}
 
     normalized_tags = sorted(set([*tags, "daily_checkup", checkup_type, "insight"]))
 
@@ -3230,6 +3235,9 @@ async def save_onboarding_data(data: OnboardingData):
             except Exception as e:
                 logger.warning("Failed to bulk delete onboarding entries: %s", e)
         
+        # Generate deterministic sync key for profile (prevents duplicates on re-sync)
+        profile_sync_key = f"onboarding:profile:{data.role}"
+        
         # Now save new user profile
         profile_entry = await kb_service.create_entry(
             entry_type=KnowledgeEntryType.USER_PREFERENCE,
@@ -3245,14 +3253,17 @@ async def save_onboarding_data(data: OnboardingData):
                 "coach_preferences": coach_preferences,
                 "domain_preferences": domain_preferences,
                 "preference_profile": preference_profile,
-                "onboarding_completed": True
+                "onboarding_completed": True,
+                "context": {"sync_event_key": profile_sync_key}
             },
             tags=["profile", "onboarding", data.role.lower()]
         )
         
-        # Save each goal
+        # Save each goal with deterministic sync key
         goal_entries = []
         for goal in data.goals:
+            goal_id = goal.get('id') or goal.get('title', 'untitled').lower().replace(' ', '_')
+            goal_sync_key = f"onboarding:goal:{goal_id}"
             goal_entry = await kb_service.create_entry(
                 entry_type=KnowledgeEntryType.USER_PREFERENCE,
                 entry_sub_type=KnowledgeEntrySubType.GOAL,
@@ -3263,13 +3274,15 @@ async def save_onboarding_data(data: OnboardingData):
                     "priority": goal.get('priority', 'Medium'),
                     "category": goal.get('category', data.role),
                     "milestones": goal.get('milestones', []),
-                    "smart_criteria": goal.get('smartCriteria', {})
+                    "smart_criteria": goal.get('smartCriteria', {}),
+                    "context": {"sync_event_key": goal_sync_key}
                 },
                 tags=["goal", data.role.lower(), goal.get('priority', 'medium').lower()]
             )
             goal_entries.append(goal_entry)
         
-        # Save planner configuration
+        # Save planner configuration with deterministic sync key
+        planner_sync_key = f"onboarding:planner:{data.role}"
         planner_entry = await kb_service.create_entry(
             entry_type=KnowledgeEntryType.USER_PREFERENCE,
             entry_sub_type=KnowledgeEntrySubType.SCHEDULE,
@@ -3279,7 +3292,8 @@ async def save_onboarding_data(data: OnboardingData):
             metadata={
                 "availability": data.planner.get('availability', {}),
                 "notifications": data.planner.get('notifications', {}),
-                "integrations": data.planner.get('integrations', {})
+                "integrations": data.planner.get('integrations', {}),
+                "context": {"sync_event_key": planner_sync_key}
             },
             tags=["planner", "schedule", "configuration"]
         )

@@ -2608,6 +2608,7 @@ class KnowledgeBaseService:
                 "preference_values": normalized_values,
                 "source": "preferences_snapshot",
                 "last_updated": timestamp_iso,
+                "context": {"sync_event_key": f"preference:snapshot:{section}:{timestamp_iso[:10]}"}
             }
             tags = ["preferences", "settings", section]
 
@@ -2691,13 +2692,17 @@ class KnowledgeBaseService:
                 )
                 return True
 
+            prefs_sync_key = f"preference:system:{self.user_id}:{datetime.utcnow().strftime('%Y%m%d')}"
             await self.create_entry(
                 entry_type=KnowledgeEntryType.PREFERENCE,
                 category="system",
                 entry_sub_type=KnowledgeEntrySubType.OTHER_PREFERENCE,
                 title="User Preferences",
                 content=prefs_json,
-                metadata={"created": datetime.utcnow().isoformat()},
+                metadata={
+                    "created": datetime.utcnow().isoformat(),
+                    "context": {"sync_event_key": prefs_sync_key}
+                },
                 tags=["preferences", "settings", "configuration"],
             )
             return True
@@ -2896,6 +2901,7 @@ class KnowledgeBaseService:
                         )
                         if success:
                             # Create a knowledge entry for tracking
+                            extracted_sync_key = f"preference:extracted:{pref['category']}:{pref['key']}:{datetime.utcnow().strftime('%Y%m%d')}"
                             entry = await self.create_entry(
                                 entry_type=KnowledgeEntryType.PREFERENCE,
                                 entry_sub_type=KnowledgeEntrySubType.PERSONAL_PREFERENCE,
@@ -2905,7 +2911,8 @@ class KnowledgeBaseService:
                                 metadata={
                                     "extracted_from_interaction": True,
                                     "agent_type": agent_type,
-                                    "timestamp": datetime.utcnow().isoformat()
+                                    "timestamp": datetime.utcnow().isoformat(),
+                                    "context": {"sync_event_key": extracted_sync_key}
                                 },
                                 tags=[pref['category'], "preference", "extracted", agent_type]
                             )
