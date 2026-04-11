@@ -363,6 +363,61 @@ class KnowledgeBaseService:
 
         self.knowledge_db_store.delete_entries(self.user_id, entry_ids)
 
+    def _dedupe_tags(self, tags: Optional[List[str]]) -> List[str]:
+        deduped: List[str] = []
+        seen: Set[str] = set()
+        for raw_tag in tags or []:
+            normalized = " ".join(str(raw_tag or "").split()).strip()
+            if not normalized:
+                continue
+            lookup = normalized.lower()
+            if lookup in seen:
+                continue
+            seen.add(lookup)
+            deduped.append(normalized)
+        return deduped
+
+    def _strip_transient_metadata_fields(self, metadata: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        if not isinstance(metadata, dict):
+            return {}
+
+        transient_keys = {"timestamp", "last_updated", "updated_at"}
+        stable: Dict[str, Any] = {}
+        for key, value in metadata.items():
+            normalized_key = str(key or "").strip()
+            if not normalized_key or normalized_key in transient_keys:
+                continue
+            stable[normalized_key] = value
+        return stable
+
+    def _is_interaction_update_noop(
+        self,
+        existing_entry: KnowledgeEntry,
+        *,
+        title: str,
+        content: str,
+        tags: Optional[List[str]],
+        metadata: Optional[Dict[str, Any]],
+    ) -> bool:
+        if str(existing_entry.title or "").strip() != str(title or "").strip():
+            return False
+        if str(existing_entry.content or "").strip() != str(content or "").strip():
+            return False
+
+        existing_tags = self._dedupe_tags(existing_entry.tags or [])
+        candidate_tags = self._dedupe_tags(tags)
+        if existing_tags != candidate_tags:
+            return False
+
+        existing_metadata = existing_entry.metadata if isinstance(existing_entry.metadata, dict) else {}
+        merged_metadata = dict(existing_metadata)
+        if isinstance(metadata, dict):
+            merged_metadata.update(metadata)
+
+        existing_stable = self._strip_transient_metadata_fields(existing_metadata)
+        merged_stable = self._strip_transient_metadata_fields(merged_metadata)
+        return existing_stable == merged_stable
+
     def _clear_entries_from_db(self) -> None:
         if not self.knowledge_db_store or not self.knowledge_db_store.is_available:
             return
@@ -1333,11 +1388,12 @@ class KnowledgeBaseService:
         """
         try:
             metadata_payload = dict(metadata or {})
+            normalized_tags = self._dedupe_tags(tags)
 
             embedding_text, semantic_sections, strategy_category = self._build_embedding_document(
                 title=title,
                 content=content,
-                tags=tags,
+                tags=normalized_tags,
                 category=category,
                 metadata=metadata_payload,
                 entry_type=entry_type,
@@ -1381,7 +1437,7 @@ class KnowledgeBaseService:
                 title=title,
                 content=content,
                 metadata=metadata_payload,
-                tags=tags or []
+                tags=normalized_tags
             )
             
             # Add to vector store
@@ -1455,7 +1511,7 @@ class KnowledgeBaseService:
             if metadata is not None:
                 updated_entry.metadata.update(metadata)
             if tags is not None:
-                updated_entry.tags = tags
+                updated_entry.tags = self._dedupe_tags(tags)
 
             embedding_text, semantic_sections, strategy_category = self._build_embedding_document(
                 title=updated_entry.title,
@@ -2645,6 +2701,7 @@ class KnowledgeBaseService:
                 agent_type=agent_type,
                 context=context_payload,
             )
+            tags = self._dedupe_tags(tags)
             context_payload = self._compact_interaction_context_for_storage(category, context_payload)
 
             entry_type = KnowledgeEntryType.INSIGHT if category == "insight" else KnowledgeEntryType.INTERACTION
@@ -2685,6 +2742,15 @@ class KnowledgeBaseService:
             if sync_event_key:
                 existing_entry = await self._find_interaction_by_sync_event_key(sync_event_key)
                 if existing_entry:
+                    if self._is_interaction_update_noop(
+                        existing_entry,
+                        title=interaction_title,
+                        content=interaction_content,
+                        tags=tags,
+                        metadata=metadata_payload,
+                    ):
+                        return existing_entry
+
                     updated_entry = await self.update_entry(
                         entry_id=existing_entry.entry_id,
                         title=interaction_title,

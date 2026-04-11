@@ -166,6 +166,7 @@ async def get_all_entries(
         await _sync_missing_db_checkup_insights(kb_service)
         entries = await kb_service.get_all_entries(category=category, entry_type=entry_type)
         entries = _merge_db_checkup_entries(entries, category=category, entry_type=entry_type)
+        entries = _dedupe_external_sync_entries(entries)
         entries = _prune_legacy_system_preference_entries(entries)
         return entries
     except Exception as e:
@@ -1322,6 +1323,40 @@ def _prune_legacy_system_preference_entries(entries: List[KnowledgeEntry]) -> Li
     return [entry for entry in entries if not _is_legacy_system_preference_entry(entry)]
 
 
+def _extract_sync_event_key_from_entry(entry: KnowledgeEntry) -> str:
+    metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+    context = metadata.get("context") if isinstance(metadata.get("context"), dict) else {}
+    return str(context.get("sync_event_key") or "").strip()
+
+
+def _dedupe_external_sync_entries(entries: List[KnowledgeEntry]) -> List[KnowledgeEntry]:
+    latest_by_key: Dict[str, KnowledgeEntry] = {}
+
+    for entry in entries:
+        sync_event_key = _extract_sync_event_key_from_entry(entry)
+        if not sync_event_key:
+            continue
+
+        previous = latest_by_key.get(sync_event_key)
+        if previous is None or _coerce_datetime(entry.updated_at) >= _coerce_datetime(previous.updated_at):
+            latest_by_key[sync_event_key] = entry
+
+    if not latest_by_key:
+        return entries
+
+    deduped_entries: List[KnowledgeEntry] = []
+    for entry in entries:
+        sync_event_key = _extract_sync_event_key_from_entry(entry)
+        if not sync_event_key:
+            deduped_entries.append(entry)
+            continue
+
+        if latest_by_key.get(sync_event_key) is entry:
+            deduped_entries.append(entry)
+
+    return deduped_entries
+
+
 def _persist_checkup_payload_to_db(checkup_type: str, checkup_date: date, payload: Dict[str, Any]) -> None:
     checkup_store = get_daily_checkup_store()
     if not checkup_store:
@@ -1513,6 +1548,7 @@ async def get_knowledge_analytics(
         await _sync_missing_db_checkup_insights(kb_service)
         all_entries = await kb_service.get_all_entries()
         all_entries = _merge_db_checkup_entries(all_entries, category=None, entry_type=None)
+        all_entries = _dedupe_external_sync_entries(all_entries)
         all_entries = _prune_legacy_system_preference_entries(all_entries)
 
         preferences = await kb_service.get_user_preferences()
@@ -1786,6 +1822,7 @@ async def run_morning_checkup(request: DailyCheckupRequest):
         checkup_date = _parse_requested_date(request.date, checkup_timezone_name)
 
         all_entries = await kb_service.get_all_entries()
+        all_entries = _dedupe_external_sync_entries(all_entries)
         time_entries: List[Dict[str, Any]] = []
 
         for entry in all_entries:
@@ -2095,6 +2132,7 @@ async def run_evening_checkup(request: DailyCheckupRequest):
         checkup_date = _parse_requested_date(request.date, checkup_timezone_name)
 
         all_entries = await kb_service.get_all_entries()
+        all_entries = _dedupe_external_sync_entries(all_entries)
         today_entries: List[Dict[str, Any]] = []
 
         for entry in all_entries:
