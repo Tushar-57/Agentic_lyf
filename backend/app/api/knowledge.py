@@ -7,7 +7,7 @@ import re
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from html import escape
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Set
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -23,6 +23,7 @@ from app.models.knowledge import (
 from app.services.knowledge_base import get_knowledge_base_service
 from app.services.knowledge_base import reset_knowledge_base_service
 from app.services.checkup_store import DailyCheckupRecord, get_daily_checkup_store
+from app.services.ai_notifications_store import AINotificationRecord, get_ai_notification_store
 from app.auth.user_context import get_current_user
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
@@ -64,6 +65,31 @@ class InteractionHistoryRequest(BaseModel):
     user_input: str
     agent_response: str
     context: Optional[Dict[str, Any]] = None
+
+
+class NotificationAcknowledgeRequest(BaseModel):
+    """Request payload for acknowledging/unacknowledging notifications."""
+    acknowledged: bool = True
+
+
+class AINotificationResponse(BaseModel):
+    """Response model for AI notification entries."""
+    id: int
+    notification_key: str
+    kind: str
+    severity: str
+    status: str
+    title: str
+    summary: str
+    details: Optional[str] = None
+    score: Optional[float] = None
+    recommended_actions: List[str] = Field(default_factory=list)
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    first_seen_at: str
+    last_seen_at: str
+    acknowledged_at: Optional[str] = None
+    resolved_at: Optional[str] = None
+    updated_at: str
 
 
 @router.post("/entries", response_model=KnowledgeEntry)
@@ -1401,6 +1427,587 @@ def _load_latest_checkups_from_db() -> Dict[str, Dict[str, Any]]:
     return resolved
 
 
+def _safe_ratio(numerator: float, denominator: float, fallback: float = 0.0) -> float:
+    if denominator <= 0:
+        return fallback
+    return max(0.0, numerator / denominator)
+
+
+def _normalize_notification_status(value: str) -> str:
+    normalized = str(value or "active").strip().lower()
+    if normalized in {"active", "acknowledged", "resolved"}:
+        return normalized
+    return "active"
+
+
+def _normalize_notification_severity(value: str) -> str:
+    normalized = str(value or "medium").strip().lower()
+    if normalized in {"low", "medium", "high", "critical"}:
+        return normalized
+    return "medium"
+
+
+def _coerce_datetime_iso(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    try:
+        return _coerce_datetime(value).astimezone(timezone.utc).isoformat()
+    except Exception:
+        return None
+
+
+def _notification_response_from_record(record: AINotificationRecord) -> AINotificationResponse:
+    payload = record.payload if isinstance(record.payload, dict) else {}
+    recommended_actions = _normalized_string_list(payload.get("recommended_actions"))
+
+    return AINotificationResponse(
+        id=record.id,
+        notification_key=record.notification_key,
+        kind=record.kind,
+        severity=_normalize_notification_severity(record.severity),
+        status=_normalize_notification_status(record.status),
+        title=record.title,
+        summary=record.summary,
+        details=record.details,
+        score=record.score,
+        recommended_actions=recommended_actions,
+        payload=payload,
+        first_seen_at=_coerce_datetime_iso(record.first_seen_at) or datetime.now(timezone.utc).isoformat(),
+        last_seen_at=_coerce_datetime_iso(record.last_seen_at) or datetime.now(timezone.utc).isoformat(),
+        acknowledged_at=_coerce_datetime_iso(record.acknowledged_at),
+        resolved_at=_coerce_datetime_iso(record.resolved_at),
+        updated_at=_coerce_datetime_iso(record.updated_at) or datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def _notification_response_from_candidate(candidate: Dict[str, Any], index: int) -> AINotificationResponse:
+    now_iso = datetime.now(timezone.utc).isoformat()
+    payload = candidate.get("payload") if isinstance(candidate.get("payload"), dict) else {}
+    payload.setdefault(
+        "recommended_actions",
+        _normalized_string_list(candidate.get("recommended_actions")),
+    )
+
+    return AINotificationResponse(
+        id=-(index + 1),
+        notification_key=str(candidate.get("notification_key") or f"ephemeral-{index}").strip(),
+        kind=str(candidate.get("kind") or "signal").strip() or "signal",
+        severity=_normalize_notification_severity(str(candidate.get("severity") or "medium")),
+        status="active",
+        title=str(candidate.get("title") or "AI Notification").strip() or "AI Notification",
+        summary=str(candidate.get("summary") or "Generated AI signal").strip() or "Generated AI signal",
+        details=str(candidate.get("details")).strip() if candidate.get("details") is not None else None,
+        score=_safe_float(candidate.get("score"), default=0.0) if candidate.get("score") is not None else None,
+        recommended_actions=_normalized_string_list(candidate.get("recommended_actions")),
+        payload=payload,
+        first_seen_at=now_iso,
+        last_seen_at=now_iso,
+        updated_at=now_iso,
+    )
+
+
+def _extract_goal_titles(all_entries: List[KnowledgeEntry]) -> List[str]:
+    goals: List[str] = []
+    for entry in all_entries:
+        if entry.entry_type != KnowledgeEntryType.USER_PREFERENCE:
+            continue
+        if entry.entry_sub_type != KnowledgeEntrySubType.GOAL:
+            continue
+
+        title = str(entry.title or "").strip()
+        if title:
+            goals.append(title)
+
+    deduped: List[str] = []
+    seen: Set[str] = set()
+    for goal in goals:
+        normalized = goal.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(goal)
+    return deduped
+
+
+def _extract_latest_checkup_metric(
+    latest_checkups: Dict[str, Dict[str, Any]],
+    keys: List[str],
+    *,
+    default: float = 0.0,
+) -> float:
+    for checkup_type in ("evening", "morning"):
+        payload = latest_checkups.get(checkup_type)
+        if not isinstance(payload, dict):
+            continue
+
+        search_roots = [
+            payload.get("decision_metrics") if isinstance(payload.get("decision_metrics"), dict) else {},
+            payload.get("performance") if isinstance(payload.get("performance"), dict) else {},
+            payload.get("stats") if isinstance(payload.get("stats"), dict) else {},
+            payload,
+        ]
+
+        for root in search_roots:
+            candidate = root
+            found = True
+            for key in keys:
+                if not isinstance(candidate, dict) or key not in candidate:
+                    found = False
+                    break
+                candidate = candidate.get(key)
+
+            if found:
+                return _safe_float(candidate, default=default)
+
+    return default
+
+
+def _recent_checkup_consistency_ratio(user_id: str, lookback_days: int = 7) -> float:
+    checkup_store = get_daily_checkup_store()
+    if not checkup_store:
+        return 0.5
+
+    records = checkup_store.list_checkups_for_user(user_id)
+    if not records:
+        return 0.0
+
+    today = datetime.now(timezone.utc).date()
+    window_start = today - timedelta(days=max(1, lookback_days - 1))
+    active_dates = {record.checkup_date for record in records if record.checkup_date >= window_start}
+
+    target_days = min(5, max(1, lookback_days))
+    return min(1.0, len(active_dates) / float(target_days))
+
+
+async def _resolve_latest_checkups_with_fallback(kb_service) -> Dict[str, Dict[str, Any]]:
+    latest_from_db = _load_latest_checkups_from_db()
+
+    if latest_from_db.get("morning") and latest_from_db.get("evening"):
+        return {
+            "morning": latest_from_db.get("morning"),
+            "evening": latest_from_db.get("evening"),
+        }
+
+    existing_entries = await kb_service.get_all_entries(
+        category="daily_checkup",
+        entry_type=KnowledgeEntryType.INSIGHT,
+    )
+
+    sorted_entries = sorted(
+        existing_entries,
+        key=lambda entry: _coerce_datetime(entry.updated_at or entry.created_at),
+        reverse=True,
+    )
+
+    latest_from_kb: Dict[str, Dict[str, Any]] = {}
+    for entry in sorted_entries:
+        entry_metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+        checkup_type = str(entry_metadata.get("checkup_type", "")).strip().lower()
+        checkup_date = str(entry_metadata.get("checkup_date") or entry_metadata.get("date") or "").strip()[:10]
+
+        if checkup_type not in {"morning", "evening"}:
+            continue
+        if checkup_type in latest_from_kb:
+            continue
+
+        payload = dict(entry_metadata)
+        payload.setdefault("checkup_type", checkup_type)
+        if checkup_date:
+            payload.setdefault("date", checkup_date)
+            payload.setdefault("checkup_date", checkup_date)
+
+        latest_from_kb[checkup_type] = payload
+        if "morning" in latest_from_kb and "evening" in latest_from_kb:
+            break
+
+    return {
+        "morning": latest_from_db.get("morning") or latest_from_kb.get("morning") or {},
+        "evening": latest_from_db.get("evening") or latest_from_kb.get("evening") or {},
+    }
+
+
+def _build_ai_notification_candidates(
+    *,
+    all_entries: List[KnowledgeEntry],
+    preferences: UserPreferences,
+    latest_checkups: Dict[str, Dict[str, Any]],
+    user_id: str,
+) -> List[Dict[str, Any]]:
+    goal_titles = _extract_goal_titles(all_entries)
+
+    now_utc = datetime.now(timezone.utc)
+    lookback_start = now_utc - timedelta(days=13)
+
+    recent_time_entries: List[Dict[str, Any]] = []
+    for entry in all_entries:
+        if _normalize_entry_category(entry) != "time_entry":
+            continue
+
+        event_ts = _resolve_entry_event_timestamp(entry)
+        if _ensure_timezone(event_ts) < lookback_start:
+            continue
+
+        context = _entry_context(entry)
+        duration_minutes = _safe_float(context.get("duration_minutes"), default=0.0)
+        if duration_minutes <= 0 and context.get("duration_seconds") is not None:
+            duration_minutes = _safe_float(context.get("duration_seconds"), default=0.0) / 60.0
+
+        raw_billable = context.get("billable", False)
+        is_billable = raw_billable if isinstance(raw_billable, bool) else str(raw_billable).strip().lower() in {"1", "true", "yes"}
+
+        recent_time_entries.append(
+            {
+                "duration_minutes": max(0.0, duration_minutes),
+                "billable": is_billable,
+            }
+        )
+
+    time_entry_count = len(recent_time_entries)
+    billable_count = len([entry for entry in recent_time_entries if entry["billable"]])
+    total_minutes = sum(entry["duration_minutes"] for entry in recent_time_entries)
+    avg_time_entry_minutes = _safe_ratio(total_minutes, float(max(1, time_entry_count)), fallback=0.0)
+    billable_ratio = _safe_ratio(float(billable_count), float(max(1, time_entry_count)), fallback=0.0)
+
+    overdue_tasks = int(max(
+        0,
+        round(_extract_latest_checkup_metric(latest_checkups, ["overdue_tasks"], default=0.0)),
+    ))
+    due_today_tasks = int(max(
+        0,
+        round(_extract_latest_checkup_metric(latest_checkups, ["due_today_tasks"], default=0.0)),
+    ))
+    planned_deep_work_minutes = _extract_latest_checkup_metric(
+        latest_checkups,
+        ["planned_deep_work_minutes"],
+        default=0.0,
+    )
+    deep_work_coverage_ratio = _extract_latest_checkup_metric(
+        latest_checkups,
+        ["deep_work_coverage_ratio"],
+        default=0.0,
+    )
+    performance_score = _extract_latest_checkup_metric(
+        latest_checkups,
+        ["score"],
+        default=0.0,
+    )
+
+    habits_total = int(max(0, round(_extract_latest_checkup_metric(latest_checkups, ["habits_total"], default=0.0))))
+    habits_completed = int(max(0, round(_extract_latest_checkup_metric(latest_checkups, ["habits_completed_today"], default=0.0))))
+    habits_completion_rate_7d = _extract_latest_checkup_metric(
+        latest_checkups,
+        ["habits_completion_rate_7d"],
+        default=0.0,
+    )
+
+    habit_completion_ratio = (
+        _safe_ratio(float(habits_completed), float(max(1, habits_total)), fallback=0.0)
+        if habits_total > 0
+        else max(0.0, min(1.0, habits_completion_rate_7d / 100.0))
+    )
+
+    if deep_work_coverage_ratio <= 0:
+        deep_work_coverage_ratio = 0.55
+    deep_work_coverage_ratio = max(0.0, min(1.0, deep_work_coverage_ratio))
+
+    if performance_score <= 0:
+        performance_score = 5.6
+    performance_score = max(0.0, min(10.0, performance_score))
+
+    if habit_completion_ratio <= 0:
+        habit_completion_ratio = 0.6
+
+    checkup_consistency = _recent_checkup_consistency_ratio(user_id)
+    deadline_health_ratio = max(0.0, 1.0 - min(((overdue_tasks * 1.5) + (due_today_tasks * 0.75)) / 10.0, 1.0))
+
+    goal_alignment_score = round(
+        ((performance_score / 10.0) * 35.0)
+        + (deep_work_coverage_ratio * 25.0)
+        + (habit_completion_ratio * 20.0)
+        + (deadline_health_ratio * 10.0)
+        + (checkup_consistency * 10.0)
+    )
+
+    if goal_alignment_score < 45:
+        goal_alignment_severity = "critical"
+    elif goal_alignment_score < 60:
+        goal_alignment_severity = "high"
+    elif goal_alignment_score < 75:
+        goal_alignment_severity = "medium"
+    else:
+        goal_alignment_severity = "low"
+
+    goal_alignment_actions = [
+        "Protect your first 90-minute deep-work block before any reactive tasks.",
+        "Close at least one overdue or due-today item before midday.",
+    ]
+    if habit_completion_ratio < 0.7:
+        goal_alignment_actions.append("Anchor one non-negotiable habit block to stabilize consistency.")
+
+    candidates: List[Dict[str, Any]] = [
+        {
+            "notification_key": "goal_alignment_score",
+            "kind": "goal_alignment",
+            "severity": goal_alignment_severity,
+            "title": f"Goal Alignment Score: {goal_alignment_score}/100",
+            "summary": (
+                "Execution quality, deep-work protection, deadlines, and consistency are now scored daily. "
+                f"Current signal is {goal_alignment_score}/100."
+            ),
+            "details": (
+                f"Goals tracked: {len(goal_titles)}. Overdue: {overdue_tasks}. Due today: {due_today_tasks}. "
+                f"Deep-work coverage: {round(deep_work_coverage_ratio * 100)}%."
+            ),
+            "score": float(goal_alignment_score),
+            "recommended_actions": goal_alignment_actions,
+            "payload": {
+                "goal_alignment_score": goal_alignment_score,
+                "metrics": {
+                    "performance_score": round(performance_score, 2),
+                    "deep_work_coverage_ratio": round(deep_work_coverage_ratio, 2),
+                    "habit_completion_ratio": round(habit_completion_ratio, 2),
+                    "checkup_consistency_ratio": round(checkup_consistency, 2),
+                    "deadline_health_ratio": round(deadline_health_ratio, 2),
+                    "overdue_tasks": overdue_tasks,
+                    "due_today_tasks": due_today_tasks,
+                    "time_entry_count_14d": time_entry_count,
+                    "billable_ratio_14d": round(billable_ratio, 2),
+                },
+                "top_goals": goal_titles[:3],
+                "recommended_actions": goal_alignment_actions,
+            },
+        }
+    ]
+
+    if overdue_tasks > 0 or due_today_tasks >= 3:
+        candidates.append(
+            {
+                "notification_key": "proactive.deadline_drift",
+                "kind": "proactive_alert",
+                "severity": "high" if overdue_tasks > 0 else "medium",
+                "title": "Proactive Alert: Deadline Drift Risk",
+                "summary": (
+                    f"{overdue_tasks} overdue and {due_today_tasks} due-today commitments signal drift against planned outcomes."
+                ),
+                "details": "Re-sequence your day around the highest consequence deadlines before reactive work expands.",
+                "recommended_actions": [
+                    "Create a first-thing deadline triage block for 30 minutes.",
+                    "Reduce WIP to one deadline-critical task until drift clears.",
+                ],
+                "payload": {
+                    "overdue_tasks": overdue_tasks,
+                    "due_today_tasks": due_today_tasks,
+                    "recommended_actions": [
+                        "Create a first-thing deadline triage block for 30 minutes.",
+                        "Reduce WIP to one deadline-critical task until drift clears.",
+                    ],
+                },
+            }
+        )
+
+    if planned_deep_work_minutes >= 60 and deep_work_coverage_ratio < 0.6:
+        candidates.append(
+            {
+                "notification_key": "proactive.deep_work_gap",
+                "kind": "proactive_alert",
+                "severity": "high" if deep_work_coverage_ratio < 0.45 else "medium",
+                "title": "Proactive Alert: Deep-Work Coverage Gap",
+                "summary": (
+                    f"Only {round(deep_work_coverage_ratio * 100)}% of planned deep work is landing. "
+                    "Execution quality will trend down if this persists."
+                ),
+                "details": "Protect one uninterrupted block and move lower-leverage meetings after it.",
+                "recommended_actions": [
+                    "Block a no-meeting focus window at your peak energy time.",
+                    "Set one success criterion for the block before you start.",
+                ],
+                "payload": {
+                    "planned_deep_work_minutes": round(planned_deep_work_minutes, 1),
+                    "deep_work_coverage_ratio": round(deep_work_coverage_ratio, 2),
+                    "recommended_actions": [
+                        "Block a no-meeting focus window at your peak energy time.",
+                        "Set one success criterion for the block before you start.",
+                    ],
+                },
+            }
+        )
+
+    if habits_total >= 3 and habit_completion_ratio < 0.6:
+        candidates.append(
+            {
+                "notification_key": "proactive.habit_consistency",
+                "kind": "proactive_alert",
+                "severity": "medium",
+                "title": "Proactive Alert: Habit Consistency Slipping",
+                "summary": (
+                    f"Habit completion is at {round(habit_completion_ratio * 100)}% today. "
+                    "Identity-level routines are getting crowded out."
+                ),
+                "details": "Habits should be defended as protected blocks, not leftovers after task overflow.",
+                "recommended_actions": [
+                    "Schedule one protected habit block in your next available window.",
+                    "Tie the habit to an existing anchor event (wake-up, lunch, shutdown).",
+                ],
+                "payload": {
+                    "habits_total": habits_total,
+                    "habits_completed_today": habits_completed,
+                    "habit_completion_ratio": round(habit_completion_ratio, 2),
+                    "recommended_actions": [
+                        "Schedule one protected habit block in your next available window.",
+                        "Tie the habit to an existing anchor event (wake-up, lunch, shutdown).",
+                    ],
+                },
+            }
+        )
+
+    monthly_income_target = 0.0
+    if isinstance(preferences.finance, dict):
+        monthly_income_target = _safe_float(preferences.finance.get("monthly_income_target"), default=0.0)
+
+    if monthly_income_target > 0 and time_entry_count >= 8 and billable_ratio < 0.45:
+        candidates.append(
+            {
+                "notification_key": "proactive.billable_trajectory",
+                "kind": "proactive_alert",
+                "severity": "high" if billable_ratio < 0.3 else "medium",
+                "title": "Proactive Alert: Billable Trajectory Behind",
+                "summary": (
+                    f"Billable ratio over recent logs is {round(billable_ratio * 100)}%, below the threshold needed "
+                    "to stay on your financial target trajectory."
+                ),
+                "details": "Shift calendar slots toward high-value billable blocks before the week closes.",
+                "recommended_actions": [
+                    "Reserve two billable-first blocks in the next 48 hours.",
+                    "Audit low-value tasks and defer or delegate one of them.",
+                ],
+                "payload": {
+                    "monthly_income_target": round(monthly_income_target, 2),
+                    "billable_ratio_14d": round(billable_ratio, 2),
+                    "avg_time_entry_minutes": round(avg_time_entry_minutes, 1),
+                    "recommended_actions": [
+                        "Reserve two billable-first blocks in the next 48 hours.",
+                        "Audit low-value tasks and defer or delegate one of them.",
+                    ],
+                },
+            }
+        )
+
+    timezone_name = _extract_preferences_timezone(preferences)
+    today_local = datetime.now(_resolve_timezone(timezone_name)).date().isoformat()
+    latest_morning_date = str(
+        (latest_checkups.get("morning") or {}).get("checkup_date")
+        or (latest_checkups.get("morning") or {}).get("date")
+        or ""
+    ).strip()[:10]
+
+    if latest_morning_date != today_local:
+        candidates.append(
+            {
+                "notification_key": "proactive.morning_checkup_missing",
+                "kind": "proactive_alert",
+                "severity": "medium",
+                "title": "Proactive Alert: Morning Check-In Missing",
+                "summary": "No morning strategy check-in detected for today. Priority drift risk is elevated.",
+                "details": "A quick morning alignment prevents reactive work from defining the day.",
+                "recommended_actions": [
+                    "Run a morning checkup before your next context switch.",
+                    "Set one non-negotiable focus outcome for today.",
+                ],
+                "payload": {
+                    "today": today_local,
+                    "latest_morning_checkup": latest_morning_date or None,
+                    "recommended_actions": [
+                        "Run a morning checkup before your next context switch.",
+                        "Set one non-negotiable focus outcome for today.",
+                    ],
+                },
+            }
+        )
+
+    return candidates
+
+
+async def _refresh_ai_notifications(kb_service, *, limit: int = 40) -> Dict[str, Any]:
+    request_user = get_current_user()
+    all_entries = await kb_service.get_all_entries()
+    all_entries = _merge_db_checkup_entries(all_entries, category=None, entry_type=None)
+    all_entries = _dedupe_external_sync_entries(all_entries)
+    all_entries = _prune_legacy_system_preference_entries(all_entries)
+
+    preferences = await kb_service.get_user_preferences()
+    latest_checkups = await _resolve_latest_checkups_with_fallback(kb_service)
+    candidates = _build_ai_notification_candidates(
+        all_entries=all_entries,
+        preferences=preferences,
+        latest_checkups=latest_checkups,
+        user_id=request_user.storage_key,
+    )
+
+    notification_store = get_ai_notification_store()
+    generated_at = datetime.now(timezone.utc).isoformat()
+
+    if not notification_store:
+        return {
+            "persistence_enabled": False,
+            "notifications": [
+                _notification_response_from_candidate(candidate, index).model_dump()
+                for index, candidate in enumerate(candidates[: max(1, min(limit, 200))])
+            ],
+            "generated": len(candidates),
+            "upserted": 0,
+            "resolved": 0,
+            "generated_at": generated_at,
+        }
+
+    active_keys: List[str] = []
+    upserted_count = 0
+    for candidate in candidates:
+        notification_key = str(candidate.get("notification_key") or "").strip()
+        if not notification_key:
+            continue
+
+        payload = candidate.get("payload") if isinstance(candidate.get("payload"), dict) else {}
+        payload.setdefault("recommended_actions", _normalized_string_list(candidate.get("recommended_actions")))
+
+        record = notification_store.upsert_notification(
+            user_id=request_user.storage_key,
+            notification_key=notification_key,
+            kind=str(candidate.get("kind") or "signal").strip() or "signal",
+            severity=str(candidate.get("severity") or "medium").strip() or "medium",
+            title=str(candidate.get("title") or "AI Notification").strip() or "AI Notification",
+            summary=str(candidate.get("summary") or "Generated AI signal").strip() or "Generated AI signal",
+            details=str(candidate.get("details")).strip() if candidate.get("details") is not None else None,
+            score=_safe_float(candidate.get("score"), default=0.0) if candidate.get("score") is not None else None,
+            payload=payload,
+            origin="ai_notifications_v1",
+        )
+
+        if record:
+            active_keys.append(notification_key)
+            upserted_count += 1
+
+    resolved_count = notification_store.mark_stale_notifications_resolved(
+        user_id=request_user.storage_key,
+        active_keys=active_keys,
+        origin="ai_notifications_v1",
+    )
+
+    records = notification_store.list_notifications(
+        user_id=request_user.storage_key,
+        limit=limit,
+        include_resolved=False,
+    )
+
+    return {
+        "persistence_enabled": True,
+        "notifications": [_notification_response_from_record(record).model_dump() for record in records],
+        "generated": len(candidates),
+        "upserted": upserted_count,
+        "resolved": resolved_count,
+        "generated_at": generated_at,
+    }
+
+
 async def _sync_missing_db_checkup_insights(kb_service) -> Dict[str, int]:
     """Materialize DB-backed checkups into KB entries for embedding-driven features."""
     checkup_store = get_daily_checkup_store()
@@ -1803,6 +2410,72 @@ async def get_knowledge_analytics(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get analytics data: {str(e)}")
+
+
+@router.post("/notifications/refresh")
+async def refresh_ai_notifications(
+    limit: int = Query(40, ge=1, le=200, description="Maximum notifications to return"),
+):
+    """Recompute and persist AI notifications from the latest behavioral signals."""
+    try:
+        kb_service = get_knowledge_base_service()
+        return await _refresh_ai_notifications(kb_service, limit=limit)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to refresh AI notifications: {str(e)}")
+
+
+@router.get("/notifications")
+async def list_ai_notifications(
+    limit: int = Query(40, ge=1, le=200, description="Maximum notifications to return"),
+    include_resolved: bool = Query(False, description="Include resolved notifications in response"),
+):
+    """List persisted AI notifications for the current user."""
+    try:
+        notification_store = get_ai_notification_store()
+        if not notification_store:
+            kb_service = get_knowledge_base_service()
+            return await _refresh_ai_notifications(kb_service, limit=limit)
+
+        request_user = get_current_user()
+        records = notification_store.list_notifications(
+            user_id=request_user.storage_key,
+            limit=limit,
+            include_resolved=include_resolved,
+        )
+        return {
+            "persistence_enabled": True,
+            "notifications": [_notification_response_from_record(record).model_dump() for record in records],
+            "generated": len(records),
+            "upserted": 0,
+            "resolved": 0,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list AI notifications: {str(e)}")
+
+
+@router.patch("/notifications/{notification_id}/ack", response_model=AINotificationResponse)
+async def acknowledge_ai_notification(notification_id: int, request: NotificationAcknowledgeRequest):
+    """Acknowledge or unacknowledge a notification without deleting its insight history."""
+    try:
+        notification_store = get_ai_notification_store()
+        if not notification_store:
+            raise HTTPException(status_code=503, detail="AI notification persistence is not configured")
+
+        request_user = get_current_user()
+        record = notification_store.set_acknowledged(
+            user_id=request_user.storage_key,
+            notification_id=notification_id,
+            acknowledged=bool(request.acknowledged),
+        )
+        if not record:
+            raise HTTPException(status_code=404, detail="Notification not found")
+
+        return _notification_response_from_record(record)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update notification acknowledgement: {str(e)}")
 
 
 @router.post("/checkups/morning")
@@ -2482,53 +3155,18 @@ async def run_evening_checkup(request: DailyCheckupRequest):
 async def get_latest_checkups():
     """Get latest morning/evening checkups with database-first retrieval."""
     try:
+        kb_service = get_knowledge_base_service()
+        latest_checkups = await _resolve_latest_checkups_with_fallback(kb_service)
         latest_from_db = _load_latest_checkups_from_db()
 
-        # If DB has both checkups, return directly.
-        if latest_from_db.get("morning") and latest_from_db.get("evening"):
-            return {
-                "morning": latest_from_db.get("morning"),
-                "evening": latest_from_db.get("evening"),
-                "source": "database",
-            }
-
-        kb_service = get_knowledge_base_service()
-        existing_entries = await kb_service.get_all_entries(
-            category="daily_checkup",
-            entry_type=KnowledgeEntryType.INSIGHT,
-        )
-
-        sorted_entries = sorted(
-            existing_entries,
-            key=lambda entry: _coerce_datetime(entry.updated_at or entry.created_at),
-            reverse=True,
-        )
-
-        latest_from_kb: Dict[str, Dict[str, Any]] = {}
-        for entry in sorted_entries:
-            entry_metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
-            checkup_type = str(entry_metadata.get("checkup_type", "")).strip().lower()
-            checkup_date = str(entry_metadata.get("checkup_date") or entry_metadata.get("date") or "").strip()[:10]
-
-            if checkup_type not in {"morning", "evening"}:
-                continue
-            if checkup_type in latest_from_kb:
-                continue
-
-            payload = dict(entry_metadata)
-            payload.setdefault("checkup_type", checkup_type)
-            if checkup_date:
-                payload.setdefault("date", checkup_date)
-                payload.setdefault("checkup_date", checkup_date)
-
-            latest_from_kb[checkup_type] = payload
-            if "morning" in latest_from_kb and "evening" in latest_from_kb:
-                break
+        source = "knowledge_base"
+        if latest_from_db.get("morning") or latest_from_db.get("evening"):
+            source = "database"
 
         return {
-            "morning": latest_from_db.get("morning") or latest_from_kb.get("morning"),
-            "evening": latest_from_db.get("evening") or latest_from_kb.get("evening"),
-            "source": "database" if latest_from_db else "knowledge_base",
+            "morning": latest_checkups.get("morning"),
+            "evening": latest_checkups.get("evening"),
+            "source": source,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load latest checkups: {str(e)}")

@@ -12,7 +12,7 @@ import {
   Sun,
   ChevronLeft,
   ChevronRight,
-  Activity,
+  BellRing,
   BarChart3,
   MessageSquare,
   User,
@@ -116,10 +116,10 @@ const navigationItems = [
     path: '/analytics'
   },
   {
-    id: 'activity',
-    name: 'Activity',
-    icon: Activity,
-    path: '/activity'
+    id: 'notifications',
+    name: 'AI Notifications',
+    icon: BellRing,
+    path: '/notifications'
   },
   {
     id: 'profile',

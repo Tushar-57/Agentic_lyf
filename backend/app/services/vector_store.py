@@ -7,8 +7,12 @@ import pickle
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 import numpy as np
-import faiss
 from datetime import datetime
+
+try:
+    import faiss
+except Exception:  # pragma: no cover - environment-specific optional dependency
+    faiss = None
 
 from ..models.knowledge import KnowledgeEntry, KnowledgeSearchResult
 from .storage_paths import resolve_data_path
@@ -29,6 +33,11 @@ class VectorStore:
         """
         if not index_path:
             index_path = resolve_data_path("vector_index")
+
+        if faiss is None:
+            raise RuntimeError(
+                "faiss is not installed. Install faiss-cpu or use Pinecone provider/in-memory fallback."
+            )
 
         self.dimension = dimension
         self.index_path = index_path
@@ -370,8 +379,197 @@ class VectorStore:
             raise
 
 
+class InMemoryVectorStore:
+    """Numpy-based local vector store fallback used when FAISS is unavailable."""
+
+    def __init__(self, dimension: int = 1536, index_path: Optional[str] = None):
+        if not index_path:
+            index_path = resolve_data_path("vector_index")
+
+        self.dimension = dimension
+        self.index_path = index_path
+        self.metadata_path = f"{index_path}_metadata.pkl"
+        self.entry_metadata: Dict[str, KnowledgeEntry] = {}
+        self.embeddings_by_entry_id: Dict[str, List[float]] = {}
+
+        os.makedirs(os.path.dirname(index_path), exist_ok=True)
+        self._load_index()
+
+    def _load_index(self) -> None:
+        try:
+            if not os.path.exists(self.metadata_path):
+                return
+
+            with open(self.metadata_path, "rb") as metadata_file:
+                payload = pickle.load(metadata_file)
+
+            raw_entries = payload.get("entry_metadata", {}) if isinstance(payload, dict) else {}
+            raw_embeddings = payload.get("embeddings_by_entry_id", {}) if isinstance(payload, dict) else {}
+
+            normalized_entries: Dict[str, KnowledgeEntry] = {}
+            if isinstance(raw_entries, dict):
+                for _, raw_entry in raw_entries.items():
+                    if not isinstance(raw_entry, KnowledgeEntry):
+                        continue
+                    normalized_entries[raw_entry.entry_id] = raw_entry
+
+            normalized_embeddings: Dict[str, List[float]] = {}
+            if isinstance(raw_embeddings, dict):
+                for entry_id, embedding in raw_embeddings.items():
+                    if not isinstance(embedding, list):
+                        continue
+                    normalized_embeddings[str(entry_id)] = embedding
+
+            # Hydrate vector map from entry payloads when loading legacy FAISS metadata.
+            for entry_id, entry in normalized_entries.items():
+                if entry_id in normalized_embeddings:
+                    continue
+                if not entry.embedding:
+                    continue
+                normalized_embeddings[entry_id] = self._fit_and_normalize_embedding(entry.embedding)
+
+            self.entry_metadata = normalized_entries
+            self.embeddings_by_entry_id = normalized_embeddings
+        except Exception as error:
+            logger.warning("Failed to load in-memory vector store metadata: %s", error)
+            self.entry_metadata = {}
+            self.embeddings_by_entry_id = {}
+
+    def _save_index(self) -> None:
+        payload = {
+            "entry_metadata": self.entry_metadata,
+            "embeddings_by_entry_id": self.embeddings_by_entry_id,
+        }
+        with open(self.metadata_path, "wb") as metadata_file:
+            pickle.dump(payload, metadata_file)
+
+    def _fit_and_normalize_embedding(self, embedding: List[float]) -> List[float]:
+        if len(embedding) > self.dimension:
+            fitted = list(embedding[: self.dimension])
+        elif len(embedding) < self.dimension:
+            fitted = list(embedding) + [0.0] * (self.dimension - len(embedding))
+        else:
+            fitted = list(embedding)
+
+        embedding_array = np.array(fitted, dtype=np.float32)
+        norm = np.linalg.norm(embedding_array)
+        if norm > 0:
+            embedding_array = embedding_array / norm
+
+        return embedding_array.tolist()
+
+    def add_entry(self, entry: KnowledgeEntry, embedding: List[float], persist: bool = True) -> None:
+        normalized_embedding = self._fit_and_normalize_embedding(embedding)
+        entry.embedding = list(embedding)
+        self.entry_metadata[entry.entry_id] = entry
+        self.embeddings_by_entry_id[entry.entry_id] = normalized_embedding
+
+        if persist:
+            self._save_index()
+
+    def update_entry(self, entry: KnowledgeEntry, embedding: List[float], persist: bool = True) -> None:
+        self.add_entry(entry, embedding, persist=persist)
+
+    def remove_entry(self, entry_id: str, persist: bool = True) -> bool:
+        removed = False
+        if entry_id in self.entry_metadata:
+            self.entry_metadata.pop(entry_id, None)
+            removed = True
+        if entry_id in self.embeddings_by_entry_id:
+            self.embeddings_by_entry_id.pop(entry_id, None)
+            removed = True
+
+        if removed and persist:
+            self._save_index()
+
+        return removed
+
+    def remove_entries(self, entry_ids: List[str], persist: bool = True) -> int:
+        removed = 0
+        for entry_id in entry_ids:
+            if self.remove_entry(entry_id, persist=False):
+                removed += 1
+
+        if removed and persist:
+            self._save_index()
+
+        return removed
+
+    def search(
+        self,
+        query_embedding: List[float],
+        k: int = 10,
+        similarity_threshold: float = 0.7,
+    ) -> List[KnowledgeSearchResult]:
+        if not self.embeddings_by_entry_id:
+            return []
+
+        normalized_query = np.array(
+            self._fit_and_normalize_embedding(query_embedding),
+            dtype=np.float32,
+        )
+
+        scored: List[Tuple[float, KnowledgeEntry]] = []
+        for entry_id, normalized_embedding in self.embeddings_by_entry_id.items():
+            entry = self.entry_metadata.get(entry_id)
+            if not entry:
+                continue
+
+            score = float(np.dot(normalized_query, np.array(normalized_embedding, dtype=np.float32)))
+            if score >= similarity_threshold:
+                scored.append((score, entry))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [
+            KnowledgeSearchResult(entry=entry, similarity_score=score)
+            for score, entry in scored[: max(1, int(k))]
+        ]
+
+    def get_entry(self, entry_id: str) -> Optional[KnowledgeEntry]:
+        return self.entry_metadata.get(entry_id)
+
+    def get_embedding(self, entry_id: str) -> Optional[List[float]]:
+        entry = self.entry_metadata.get(entry_id)
+        if entry and entry.embedding:
+            return list(entry.embedding)
+
+        normalized = self.embeddings_by_entry_id.get(entry_id)
+        if not normalized:
+            return None
+
+        return list(normalized)
+
+    def get_all_embeddings(self) -> Dict[str, List[float]]:
+        payload: Dict[str, List[float]] = {}
+        for entry_id in self.entry_metadata:
+            embedding = self.get_embedding(entry_id)
+            if embedding:
+                payload[entry_id] = embedding
+
+        return payload
+
+    def get_all_entries(self) -> List[KnowledgeEntry]:
+        return list(self.entry_metadata.values())
+
+    def get_stats(self) -> Dict[str, Any]:
+        return {
+            "total_entries": len(self.entry_metadata),
+            "dimension": self.dimension,
+            "index_size_mb": os.path.getsize(self.metadata_path) / (1024 * 1024)
+            if os.path.exists(self.metadata_path)
+            else 0,
+            "last_updated": datetime.utcnow().isoformat(),
+            "provider": "in-memory",
+        }
+
+    def clear(self) -> None:
+        self.entry_metadata = {}
+        self.embeddings_by_entry_id = {}
+        self._save_index()
+
+
 # Per-user vector store instances
-_vector_stores_by_user: Dict[str, VectorStore] = {}
+_vector_stores_by_user: Dict[str, Any] = {}
 
 
 def _resolve_index_path_for_user(user_id: str) -> str:
@@ -381,27 +579,100 @@ def _resolve_index_path_for_user(user_id: str) -> str:
     return resolve_data_path("users", user_id, "vector_index")
 
 
-def get_vector_store(user_id: Optional[str] = None) -> VectorStore:
+def _parse_bool_env(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+
+    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _resolve_store_provider() -> str:
+    configured = (os.getenv("VECTOR_STORE_PROVIDER") or "faiss").strip().lower()
+    if configured in {"pinecone", "pinecone-serverless", "pinecone_serverless"}:
+        return "pinecone"
+
+    return "faiss"
+
+
+def _build_local_vector_store(index_path: str) -> Any:
+    try:
+        return VectorStore(index_path=index_path)
+    except Exception as local_error:
+        logger.warning(
+            "FAISS vector store unavailable at %s, using in-memory fallback: %s",
+            index_path,
+            local_error,
+        )
+        return InMemoryVectorStore(index_path=index_path)
+
+
+def _build_vector_store_for_user(resolved_user_id: str) -> Any:
+    index_path = _resolve_index_path_for_user(resolved_user_id)
+    provider = _resolve_store_provider()
+
+    if provider == "pinecone":
+        try:
+            from .pinecone_vector_store import PineconeVectorStore
+
+            pinecone_store = PineconeVectorStore(
+                user_id=resolved_user_id,
+                dimension=int(os.getenv("EMBEDDING_DIMENSION", "1536")),
+                local_metadata_path=f"{index_path}_pinecone_metadata.pkl",
+            )
+            logger.info("Using Pinecone vector store for user %s", resolved_user_id)
+
+            if _parse_bool_env("PINECONE_BACKFILL_FROM_FAISS_ON_BOOT", False):
+                try:
+                    faiss_store = _build_local_vector_store(index_path)
+                    seeded = 0
+                    for entry in faiss_store.get_all_entries():
+                        if not entry.embedding:
+                            continue
+                        pinecone_store.add_entry(entry, entry.embedding, persist=False)
+                        seeded += 1
+
+                    if seeded > 0:
+                        logger.info(
+                            "Backfilled %d vectors from FAISS into Pinecone for user %s",
+                            seeded,
+                            resolved_user_id,
+                        )
+                except Exception as backfill_error:
+                    logger.warning(
+                        "Pinecone backfill from FAISS failed for user %s: %s",
+                        resolved_user_id,
+                        backfill_error,
+                    )
+
+            return pinecone_store
+        except Exception as pinecone_error:
+            logger.warning(
+                "Pinecone vector store unavailable for user %s, falling back to FAISS: %s",
+                resolved_user_id,
+                pinecone_error,
+            )
+
+    return _build_local_vector_store(index_path)
+
+
+def get_vector_store(user_id: Optional[str] = None) -> Any:
     """Get a user-scoped vector store instance."""
     from app.auth.user_context import get_current_user_id, normalize_user_storage_key
 
     resolved_user_id = normalize_user_storage_key(user_id or get_current_user_id())
     if resolved_user_id not in _vector_stores_by_user:
-        _vector_stores_by_user[resolved_user_id] = VectorStore(
-            index_path=_resolve_index_path_for_user(resolved_user_id)
-        )
+        _vector_stores_by_user[resolved_user_id] = _build_vector_store_for_user(resolved_user_id)
 
     return _vector_stores_by_user[resolved_user_id]
 
 
-def reset_vector_store(user_id: Optional[str] = None) -> VectorStore:
+def reset_vector_store(user_id: Optional[str] = None) -> Any:
     """Force reload a user-scoped vector store from persisted index files."""
     from app.auth.user_context import get_current_user_id, normalize_user_storage_key
 
     resolved_user_id = normalize_user_storage_key(user_id or get_current_user_id())
     _vector_stores_by_user.pop(resolved_user_id, None)
-    _vector_stores_by_user[resolved_user_id] = VectorStore(
-        index_path=_resolve_index_path_for_user(resolved_user_id)
-    )
+    _vector_stores_by_user[resolved_user_id] = _build_vector_store_for_user(resolved_user_id)
 
     return _vector_stores_by_user[resolved_user_id]

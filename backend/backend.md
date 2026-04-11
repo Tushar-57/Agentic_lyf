@@ -79,6 +79,29 @@ The backend is organized to support an AI-powered time tracking and knowledge ma
 - **Files:**
   - `knowledge_base.py`: Manages the knowledge base (add, update, search).
   - `vector_store.py`: Handles vector storage for embeddings and similarity search.
+  - `pinecone_vector_store.py`: Optional Pinecone provider used when enabled via env vars.
+
+#### f. Vector Provider Configuration
+
+- Default mode remains FAISS (local file-backed).
+- Set `VECTOR_STORE_PROVIDER=pinecone` to enable Pinecone-backed vector search.
+- Required for Pinecone:
+  - `PINECONE_API_KEY`
+  - `PINECONE_INDEX_NAME`
+- Optional Pinecone settings:
+  - `PINECONE_CLOUD` (default `aws`)
+  - `PINECONE_REGION` (default `us-east-1`)
+  - `PINECONE_NAMESPACE_PREFIX` (default `agentic`)
+  - `PINECONE_METRIC` (default `cosine`)
+  - `PINECONE_CREATE_INDEX` (default `true`)
+  - `PINECONE_BACKFILL_FROM_FAISS_ON_BOOT` (default `false`)
+
+#### g. Migration Utility
+
+- Script: `scripts/backfill_pinecone_from_faiss.py`
+- Purpose: Copy existing local FAISS embeddings to Pinecone after Pinecone credentials are configured.
+- Example:
+  - `python scripts/backfill_pinecone_from_faiss.py --user-id single_user`
 
 ---
 

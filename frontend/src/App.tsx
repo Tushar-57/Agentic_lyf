@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import { prefetchEmbeddingsVisualization } from '@/lib/embeddingsCache'
 import { cn } from '@/lib/utils'
 import { AnalyticsDashboard } from '@/components/knowledge/AnalyticsDashboard'
+import { AINotificationsCenter } from '@/components/knowledge/AINotificationsCenter'
 import { getOrCreateConversationId } from '@/lib/agenticBridgeSession'
 import './globals.css'
 
@@ -23,7 +24,7 @@ const BUILTIN_ALTEREGO_RETURN_ORIGINS = [
   'http://localhost:5173',
   'http://localhost:3000',
 ]
-const SUPPORTED_VIEWS = ['chat', 'onboarding', 'knowledge', 'analytics', 'activity', 'profile'] as const
+const SUPPORTED_VIEWS = ['chat', 'onboarding', 'knowledge', 'analytics', 'notifications', 'activity', 'profile'] as const
 
 interface Message {
   id: string
@@ -221,7 +222,9 @@ function App() {
     : ''
 
   const handleViewChange = (nextView: string) => {
-    if (nextView === currentView) {
+    const normalizedView = nextView === 'activity' ? 'notifications' : nextView
+
+    if (normalizedView === currentView) {
       return
     }
 
@@ -230,7 +233,7 @@ function App() {
       viewScrollPositionsRef.current[currentView] = activeRegion.scrollTop
     }
 
-    setCurrentView(nextView)
+    setCurrentView(normalizedView)
   }
 
   useEffect(() => {
@@ -240,7 +243,7 @@ function App() {
     }
 
     if ((SUPPORTED_VIEWS as readonly string[]).includes(requestedView)) {
-      setCurrentView(requestedView)
+      setCurrentView(requestedView === 'activity' ? 'notifications' : requestedView)
     }
   }, [])
 
@@ -894,12 +897,10 @@ function App() {
           </div>
         )}
         
-        {currentView === 'activity' && (
+        {(currentView === 'notifications' || currentView === 'activity') && (
           <div data-app-scroll-region="true" className={cn("flex min-h-0 flex-1 items-center justify-center overflow-y-auto px-3 pb-4 pt-3 sm:px-4 sm:pb-5 sm:pt-5", mobileContentInsetClass)}>
-            <div className="panel-surface w-full max-w-2xl px-8 py-10 text-center">
-              <div className="section-kicker mx-auto mb-3">Live Feed</div>
-              <h2 className="mb-2 text-2xl font-bold">Activity</h2>
-              <p className="text-muted-foreground">Your recent activity feed will appear here soon.</p>
+            <div className="mx-auto w-full max-w-[1600px]">
+              <AINotificationsCenter />
             </div>
           </div>
         )}

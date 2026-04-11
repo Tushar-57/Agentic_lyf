@@ -39,6 +39,7 @@ import {
   Sparkles,
   ArrowRight,
   CheckCircle2,
+  BellRing,
   Lock,
   CalendarClock,
   ClipboardCheck,
@@ -99,6 +100,34 @@ interface DailyCheckupInsightEntry {
   created_at?: string
   updated_at?: string
   metadata?: Record<string, unknown>
+}
+
+interface AINotification {
+  id: number
+  notification_key: string
+  kind: string
+  severity: 'low' | 'medium' | 'high' | 'critical' | string
+  status: 'active' | 'acknowledged' | 'resolved' | string
+  title: string
+  summary: string
+  details?: string | null
+  score?: number | null
+  recommended_actions?: string[]
+  payload?: Record<string, unknown>
+  first_seen_at?: string
+  last_seen_at?: string
+  acknowledged_at?: string | null
+  resolved_at?: string | null
+  updated_at?: string
+}
+
+interface AINotificationEnvelope {
+  persistence_enabled?: boolean
+  notifications?: AINotification[]
+  generated?: number
+  upserted?: number
+  resolved?: number
+  generated_at?: string
 }
 
 interface AnalyticsDashboardProps {
@@ -619,6 +648,69 @@ const buildCheckupCardSummary = (
   return combined.length > 220 ? `${combined.slice(0, 217)}...` : combined
 }
 
+const normalizeNotificationSeverity = (value: unknown): 'low' | 'medium' | 'high' | 'critical' => {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'low' || normalized === 'medium' || normalized === 'high' || normalized === 'critical') {
+    return normalized
+  }
+  return 'medium'
+}
+
+const normalizeNotificationStatus = (value: unknown): 'active' | 'acknowledged' | 'resolved' => {
+  const normalized = String(value || '').trim().toLowerCase()
+  if (normalized === 'active' || normalized === 'acknowledged' || normalized === 'resolved') {
+    return normalized
+  }
+  return 'active'
+}
+
+const getNotificationTone = (severity: string) => {
+  const normalized = normalizeNotificationSeverity(severity)
+  if (normalized === 'critical') {
+    return {
+      wrapper: 'border-rose-300/80 bg-rose-50/70 dark:border-rose-900/70 dark:bg-rose-950/30',
+      badge: 'bg-rose-100 text-rose-700 dark:bg-rose-900/60 dark:text-rose-200',
+    }
+  }
+
+  if (normalized === 'high') {
+    return {
+      wrapper: 'border-amber-300/80 bg-amber-50/70 dark:border-amber-900/70 dark:bg-amber-950/30',
+      badge: 'bg-amber-100 text-amber-700 dark:bg-amber-900/60 dark:text-amber-200',
+    }
+  }
+
+  if (normalized === 'low') {
+    return {
+      wrapper: 'border-emerald-300/80 bg-emerald-50/70 dark:border-emerald-900/70 dark:bg-emerald-950/30',
+      badge: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-200',
+    }
+  }
+
+  return {
+    wrapper: 'border-cyan-300/80 bg-cyan-50/70 dark:border-cyan-900/70 dark:bg-cyan-950/30',
+    badge: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/60 dark:text-cyan-200',
+  }
+}
+
+const formatNotificationTimestamp = (value: string | undefined) => {
+  if (!value) {
+    return 'n/a'
+  }
+
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) {
+    return 'n/a'
+  }
+
+  return parsed.toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   className
 }) => {
@@ -641,6 +733,11 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   const [profileData, setProfileData] = useState<OnboardingProfileData | null>(null)
   const [morningForm, setMorningForm] = useState<CheckupFormState>(() => createInitialCheckupForm())
   const [eveningForm, setEveningForm] = useState<CheckupFormState>(() => createInitialCheckupForm())
+  const [aiNotifications, setAiNotifications] = useState<AINotification[]>([])
+  const [notificationsError, setNotificationsError] = useState<string | null>(null)
+  const [notificationsPersistenceEnabled, setNotificationsPersistenceEnabled] = useState(false)
+  const [isNotificationsLoading, setIsNotificationsLoading] = useState(false)
+  const [isNotificationRefreshRunning, setIsNotificationRefreshRunning] = useState(false)
 
   useEffect(() => {
     loadAnalyticsData()
@@ -726,6 +823,125 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       blockers: toStringArray(metadata.blockers),
       tomorrow_focus: toStringArray(metadata.tomorrow_focus),
       stats,
+    }
+  }
+
+  const normalizeNotification = (raw: unknown): AINotification | null => {
+    if (!raw || typeof raw !== 'object') {
+      return null
+    }
+
+    const source = raw as Record<string, unknown>
+    const id = Number(source.id)
+    const notificationKey = String(source.notification_key || '').trim()
+    const title = String(source.title || '').trim()
+    const summary = String(source.summary || '').trim()
+
+    if (!Number.isFinite(id) || !notificationKey || !title || !summary) {
+      return null
+    }
+
+    const recommendedActions = Array.isArray(source.recommended_actions)
+      ? source.recommended_actions.map((item) => String(item || '').trim()).filter(Boolean)
+      : []
+
+    const payload = source.payload && typeof source.payload === 'object'
+      ? (source.payload as Record<string, unknown>)
+      : {}
+
+    return {
+      id,
+      notification_key: notificationKey,
+      kind: String(source.kind || 'signal').trim() || 'signal',
+      severity: normalizeNotificationSeverity(source.severity),
+      status: normalizeNotificationStatus(source.status),
+      title,
+      summary,
+      details: source.details ? String(source.details).trim() : null,
+      score: source.score === null || source.score === undefined ? null : toFiniteNumber(source.score, 0),
+      recommended_actions: recommendedActions,
+      payload,
+      first_seen_at: source.first_seen_at ? String(source.first_seen_at) : undefined,
+      last_seen_at: source.last_seen_at ? String(source.last_seen_at) : undefined,
+      acknowledged_at: source.acknowledged_at ? String(source.acknowledged_at) : null,
+      resolved_at: source.resolved_at ? String(source.resolved_at) : null,
+      updated_at: source.updated_at ? String(source.updated_at) : undefined,
+    }
+  }
+
+  const applyNotificationEnvelope = (payload: unknown) => {
+    const envelope = payload && typeof payload === 'object'
+      ? (payload as AINotificationEnvelope)
+      : {}
+
+    const notifications = Array.isArray(envelope.notifications)
+      ? envelope.notifications.map((entry) => normalizeNotification(entry)).filter((entry): entry is AINotification => Boolean(entry))
+      : []
+
+    setAiNotifications(notifications)
+    setNotificationsPersistenceEnabled(Boolean(envelope.persistence_enabled))
+  }
+
+  const loadAiNotifications = async (options?: { refresh?: boolean }) => {
+    const shouldRefresh = Boolean(options?.refresh)
+
+    setIsNotificationsLoading(true)
+    setNotificationsError(null)
+    if (shouldRefresh) {
+      setIsNotificationRefreshRunning(true)
+    }
+
+    try {
+      const refreshUrl = `/api/knowledge/notifications/refresh?limit=30&range=${selectedTimeRange}`
+      const listUrl = '/api/knowledge/notifications?limit=30'
+      const response = await fetch(shouldRefresh ? refreshUrl : listUrl, {
+        method: shouldRefresh ? 'POST' : 'GET',
+      })
+
+      if (!response.ok) {
+        throw new Error(`Notifications request failed with status ${response.status}`)
+      }
+
+      const payload = await response.json()
+      applyNotificationEnvelope(payload)
+    } catch (error) {
+      console.error('Failed to load AI notifications:', error)
+      const fallbackMessage = 'Unable to load AI notifications right now.'
+      setNotificationsError(error instanceof Error && error.message ? error.message : fallbackMessage)
+    } finally {
+      setIsNotificationsLoading(false)
+      if (shouldRefresh) {
+        setIsNotificationRefreshRunning(false)
+      }
+    }
+  }
+
+  const setNotificationAcknowledgement = async (notificationId: number, acknowledged: boolean) => {
+    try {
+      const response = await fetch(`/api/knowledge/notifications/${notificationId}/ack`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ acknowledged }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Notification update failed with status ${response.status}`)
+      }
+
+      const payload = await response.json()
+      const normalized = normalizeNotification(payload)
+      if (!normalized) {
+        return
+      }
+
+      setAiNotifications((previous) =>
+        previous.map((entry) => (entry.id === normalized.id ? normalized : entry)),
+      )
+    } catch (error) {
+      console.error('Failed to update notification status:', error)
+      setNotificationsError('Unable to update notification status right now.')
     }
   }
 
@@ -1028,6 +1244,42 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   const morningCompletedToday = normalizeDateKey(morningCheckup?.date) === todayDateKey
   const eveningCompletedToday = normalizeDateKey(eveningCheckup?.date) === todayDateKey
   const canRunEveningCheckup = morningCompletedToday || eveningCompletedToday
+
+  const sortedNotifications = useMemo(() => {
+    const severityRank: Record<string, number> = {
+      critical: 0,
+      high: 1,
+      medium: 2,
+      low: 3,
+    }
+    const statusRank: Record<string, number> = {
+      active: 0,
+      acknowledged: 1,
+      resolved: 2,
+    }
+
+    return [...aiNotifications].sort((left, right) => {
+      const statusDiff = (statusRank[left.status] ?? 3) - (statusRank[right.status] ?? 3)
+      if (statusDiff !== 0) {
+        return statusDiff
+      }
+
+      const severityDiff = (severityRank[left.severity] ?? 9) - (severityRank[right.severity] ?? 9)
+      if (severityDiff !== 0) {
+        return severityDiff
+      }
+
+      const leftTime = new Date(left.last_seen_at || left.updated_at || 0).getTime()
+      const rightTime = new Date(right.last_seen_at || right.updated_at || 0).getTime()
+      return rightTime - leftTime
+    })
+  }, [aiNotifications])
+
+  const activeNotificationCount = sortedNotifications.filter((entry) => entry.status === 'active').length
+  const highSeverityNotificationCount = sortedNotifications.filter(
+    (entry) => entry.status === 'active' && (entry.severity === 'high' || entry.severity === 'critical'),
+  ).length
+  const acknowledgedNotificationCount = sortedNotifications.filter((entry) => entry.status === 'acknowledged').length
 
   const profileGoals = useMemo(() => {
     if (!Array.isArray(profileData?.goals)) {
