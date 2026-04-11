@@ -3816,11 +3816,17 @@ class KnowledgeBaseService:
                 # Don't fail stats if LLM service is not available
                 pass
             
+            resolved_last_updated = max((e.updated_at for e in all_entries), default=datetime.now(timezone.utc))
+            if resolved_last_updated.tzinfo is None:
+                resolved_last_updated = resolved_last_updated.replace(tzinfo=timezone.utc)
+            else:
+                resolved_last_updated = resolved_last_updated.astimezone(timezone.utc)
+
             return KnowledgeStats(
                 total_entries=len(all_entries),
                 entries_by_type=entries_by_type,
                 entries_by_category=entries_by_category,
-                last_updated=max((e.updated_at for e in all_entries), default=datetime.utcnow()),
+                last_updated=resolved_last_updated,
                 embedding_model=embedding_model
             )
         except Exception as e:
@@ -3829,7 +3835,7 @@ class KnowledgeBaseService:
                 total_entries=0,
                 entries_by_type={},
                 entries_by_category={},
-                last_updated=datetime.utcnow(),
+                last_updated=datetime.now(timezone.utc),
                 embedding_model="unknown"
             )
     

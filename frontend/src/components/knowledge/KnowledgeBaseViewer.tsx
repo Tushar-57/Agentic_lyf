@@ -17,6 +17,7 @@ import {
   TrendingUp,
   BarChart3,
   Target,
+  Activity,
   ChevronDown,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -217,6 +218,44 @@ const formatDurationMinutes = (value: unknown): string | null => {
   return `${minutes} minute${minutes === 1 ? '' : 's'}`
 }
 
+const parseTimestamp = (value: string | null | undefined): Date | null => {
+  if (!value) {
+    return null
+  }
+
+  const trimmed = String(value).trim()
+  if (!trimmed) {
+    return null
+  }
+
+  const hasTimezoneSuffix = /([zZ]|[+-]\d{2}:\d{2})$/.test(trimmed)
+  const normalized = hasTimezoneSuffix ? trimmed : `${trimmed}Z`
+  const resolved = new Date(normalized)
+  if (Number.isNaN(resolved.getTime())) {
+    const fallback = new Date(trimmed)
+    return Number.isNaN(fallback.getTime()) ? null : fallback
+  }
+
+  return resolved
+}
+
+const formatTimestampLabel = (value: string | null | undefined, preferredTimezone?: string | null): string => {
+  const parsed = parseTimestamp(value)
+  if (!parsed) {
+    return 'Not synced yet'
+  }
+
+  const formatter = new Intl.DateTimeFormat([], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: preferredTimezone || undefined,
+  })
+
+  return formatter.format(parsed)
+}
+
 const normalizeDurationTokensInText = (value: string): string => {
   return value.replace(/\b(\d+(?:\.\d+)?)\s*(?:m|min|mins|minute|minutes)\b/gi, (match, rawMinutes) => {
     const formatted = formatDurationMinutes(rawMinutes)
@@ -245,6 +284,21 @@ const resolveEntryCategory = (entry: KnowledgeEntry): string => {
   const source = String(context.source || '').toLowerCase()
   const sourceAction = String(context.source_action || '').toLowerCase()
   const category = String(entry.category || '').toLowerCase()
+  const hasHabitSignal = Boolean(
+    category.includes('habit')
+    || context.total_habits !== undefined
+    || context.habits !== undefined
+    || metadata.total_habits !== undefined
+    || metadata.habit_highlights !== undefined,
+  )
+  const hasTimeSignal = Boolean(
+    context.time_entry_id
+    || sourceAction.includes('time')
+    || sourceAction.includes('timer')
+    || sourceAction.includes('timesheet')
+    || context.duration_minutes !== undefined
+    || context.duration_seconds !== undefined,
+  )
 
   if (Boolean(context.approved_as_insight) || Boolean(approval.approved_as_insight)) {
     return 'insight'
@@ -254,9 +308,13 @@ const resolveEntryCategory = (entry: KnowledgeEntry): string => {
     category === 'time_entry' ||
     source === 'alterego_timetracker' ||
     sourceAction.includes('time_entry') ||
-    context.time_entry_id
+    hasTimeSignal
   ) {
     return 'time_entry'
+  }
+
+  if (hasHabitSignal) {
+    return 'habit_snapshot'
   }
 
   return category || 'uncategorized'
@@ -264,17 +322,30 @@ const resolveEntryCategory = (entry: KnowledgeEntry): string => {
 
 const resolveEntryType = (entry: KnowledgeEntry, resolvedCategory: string): string => {
   const subType = String(entry.entry_sub_type || '').toLowerCase()
+  const entryType = String(entry.entry_type || '').toLowerCase()
 
   if (resolvedCategory === 'time_entry') {
     return 'time_entry'
+  }
+
+  if (resolvedCategory === 'daily_checkup') {
+    return 'insight'
   }
 
   if (resolvedCategory === 'habit_snapshot' || resolvedCategory === 'habit_progress') {
     return 'habit_snapshot'
   }
 
-  if (resolvedCategory === 'insight' && String(entry.entry_type || '').toLowerCase() === 'interaction') {
+  if (resolvedCategory === 'insight' && entryType === 'interaction') {
     return 'insight'
+  }
+
+  if (entryType.includes('insight')) {
+    return 'insight'
+  }
+
+  if (entryType.includes('preference')) {
+    return entryType.includes('user') ? 'user_preference' : 'preference'
   }
 
   if (subType.includes('goal')) {
@@ -289,7 +360,7 @@ const resolveEntryType = (entry: KnowledgeEntry, resolvedCategory: string): stri
     return 'profile'
   }
 
-  return String(entry.entry_type || 'memory').toLowerCase()
+  return entryType || 'memory'
 }
 
 const shouldUseDerivedTimeEntryTitle = (title: string): boolean => {
@@ -1322,24 +1393,17 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
 
     return searchableText.includes('priority') || searchableText.includes('urgent')
   }).length
+  const habitsCount = displayEntries.filter((entry) => entry.displayType === 'habit_snapshot').length
+
+  const preferredTimezone =
+    (preferences && typeof preferences.general?.timezone === 'string' ? preferences.general.timezone : null)
+    || null
 
   const morningCheckInStatus = resolveCheckupStatus(entries, 'morning')
   const eveningCheckInStatus = resolveCheckupStatus(entries, 'evening')
   const latestUpdateLabel = stats?.last_updated
-    ? new Date(stats.last_updated).toLocaleString([], {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      })
-    : lastSyncedAt
-      ? new Date(lastSyncedAt).toLocaleString([], {
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-        })
-      : 'Not synced yet'
+    ? formatTimestampLabel(stats.last_updated, preferredTimezone)
+    : formatTimestampLabel(lastSyncedAt, preferredTimezone)
 
   const getEntryIcon = (type: string) => {
     switch (type) {
@@ -1500,7 +1564,7 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
 
       {/* Stats Overview */}
       {stats && (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-7 gap-4">
           <Card className="border-border/70 bg-white/75 p-4 shadow-sm dark:bg-slate-900/60">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-500 flex items-center justify-center">
@@ -1557,6 +1621,18 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
               <div>
                 <p className="text-2xl font-bold">{insightsCount}</p>
                 <p className="text-sm text-muted-foreground">Insights</p>
+              </div>
+            </div>
+          </Card>
+
+          <Card className="border-border/70 bg-white/75 p-4 shadow-sm dark:bg-slate-900/60">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-lime-500 to-emerald-500 flex items-center justify-center">
+                <Activity className="w-5 h-5 text-white" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold">{habitsCount}</p>
+                <p className="text-sm text-muted-foreground">Habits</p>
               </div>
             </div>
           </Card>

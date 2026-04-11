@@ -775,6 +775,8 @@ def _build_morning_schedule_blocks(
     focus_task_titles: List[str],
     work_hours: str,
     check_in_time: str,
+    schedule_end_time: str,
+    run_anchor_time: Optional[str],
     planned_deep_work_minutes: float,
     overdue_tasks: int,
     due_today_tasks: int,
@@ -784,15 +786,25 @@ def _build_morning_schedule_blocks(
 ) -> List[Dict[str, Any]]:
     start_minutes, end_minutes = _parse_work_hours_range(work_hours)
     check_in_minutes = _parse_hhmm_to_minutes(check_in_time, start_minutes)
+    schedule_end_minutes = _parse_hhmm_to_minutes(schedule_end_time, end_minutes)
+    runtime_anchor_minutes = (
+        _parse_hhmm_to_minutes(run_anchor_time, check_in_minutes)
+        if isinstance(run_anchor_time, str) and run_anchor_time.strip()
+        else check_in_minutes
+    )
 
-    # Morning checkups should anchor near the start of the work window.
-    # If saved check-in time is too late in the day, reset the schedule anchor.
-    workday_span = max(120, end_minutes - start_minutes)
-    latest_morning_anchor = start_minutes + min(180, workday_span // 3)
-    if check_in_minutes > latest_morning_anchor:
-        check_in_minutes = start_minutes
+    if schedule_end_minutes <= start_minutes:
+        schedule_end_minutes = min(24 * 60, start_minutes + 12 * 60)
 
-    cursor = max(start_minutes, min(end_minutes - 15, check_in_minutes))
+    if schedule_end_minutes - start_minutes < 120:
+        schedule_end_minutes = min(24 * 60, start_minutes + 120)
+
+    # If a user runs morning checkup late, start from "now" instead of preferred check-in.
+    if runtime_anchor_minutes > check_in_minutes:
+        check_in_minutes = runtime_anchor_minutes
+
+    cursor = max(start_minutes, min(schedule_end_minutes - 15, check_in_minutes))
+    end_minutes = max(cursor + 15, schedule_end_minutes)
 
     schedule_blocks: List[Dict[str, Any]] = []
 
@@ -2493,6 +2505,7 @@ async def run_morning_checkup(request: DailyCheckupRequest):
         checkup_timezone_name = _resolve_checkup_timezone(request.timezone, context_snapshot, preferences)
         checkup_timezone = _resolve_timezone(checkup_timezone_name)
         checkup_date = _parse_requested_date(request.date, checkup_timezone_name)
+        checkup_now_local = datetime.now(checkup_timezone)
 
         all_entries = await kb_service.get_all_entries()
         all_entries = _dedupe_external_sync_entries(all_entries)
@@ -2555,6 +2568,18 @@ async def run_morning_checkup(request: DailyCheckupRequest):
             if isinstance(preferences.journal, dict)
             else "09:00"
         ) or "09:00"
+        evening_check_time = (
+            (preferences.journal.get("evening_check_time") if isinstance(preferences.journal, dict) else None)
+            or (preferences.journal.get("evening_check_in_time") if isinstance(preferences.journal, dict) else None)
+            or (preferences.journal.get("check_out_time") if isinstance(preferences.journal, dict) else None)
+            or "21:00"
+        )
+
+        run_anchor_time = (
+            _minutes_to_hhmm((checkup_now_local.hour * 60) + checkup_now_local.minute)
+            if checkup_now_local.date() == checkup_date
+            else None
+        )
 
         priority_focus = str(context_snapshot.get("priorityFocus") or "").strip()
         if not priority_focus:
@@ -2601,7 +2626,8 @@ async def run_morning_checkup(request: DailyCheckupRequest):
         fallback_lines = [
             f"Primary focus: {focus_target}",
             f"Anchor check-in time: {check_in_time}",
-            f"Suggested work window: {work_hours}",
+            f"Schedule horizon (to evening check): {evening_check_time}",
+            f"Suggested work window baseline: {work_hours}",
             f"Last 7-day average logged work: {_format_minutes(avg_daily_minutes)}",
         ]
         if focus_task_titles:
@@ -2632,6 +2658,8 @@ async def run_morning_checkup(request: DailyCheckupRequest):
             focus_task_titles=focus_task_titles,
             work_hours=work_hours,
             check_in_time=check_in_time,
+            schedule_end_time=str(evening_check_time),
+            run_anchor_time=run_anchor_time,
             planned_deep_work_minutes=planned_deep_work_minutes,
             overdue_tasks=overdue_tasks,
             due_today_tasks=due_today_tasks,
@@ -2662,6 +2690,8 @@ async def run_morning_checkup(request: DailyCheckupRequest):
             f"Focus target: {focus_target}\n"
             f"Work hours: {work_hours}\n"
             f"Check-in time: {check_in_time}\n"
+            f"Evening check boundary: {evening_check_time}\n"
+            f"Runtime anchor time: {run_anchor_time or 'n/a'}\n"
             f"Last 7 days logged minutes: {round(total_week_minutes, 1)}\n"
             f"Average daily logged minutes: {round(avg_daily_minutes, 1)}\n"
             f"Top projects: {', '.join(top_projects) if top_projects else 'none'}\n"
