@@ -107,7 +107,10 @@ class ColoredFormatter(logging.Formatter):
         
         # Message
         message = record.getMessage()
-        parts.append(message)
+        if level_color:
+            parts.append(f"{level_color}{message}{Style.RESET_ALL}")
+        else:
+            parts.append(message)
         
         # Additional context (if available)
         context_parts = []
@@ -127,6 +130,14 @@ class ColoredFormatter(logging.Formatter):
 
 class ColorlogCategoryFormatter(logging.Formatter):
     """Category-aware formatter backed by colorlog when available."""
+
+    LEVEL_ANSI = {
+        logging.DEBUG: "\033[36m",
+        logging.INFO: "\033[32m",
+        logging.WARNING: "\033[33m",
+        logging.ERROR: "\033[31m",
+        logging.CRITICAL: "\033[1;31;47m",
+    }
 
     CATEGORY_ANSI = {
         LogCategory.AGENT: "\033[34m",
@@ -154,7 +165,7 @@ class ColorlogCategoryFormatter(logging.Formatter):
         if include_category:
             fmt_parts.append("%(category_color)s[%(category_display)-12s]%(reset)s")
         fmt_parts.append("%(white)s%(name)s:%(reset)s")
-        fmt_parts.append("%(message)s")
+        fmt_parts.append("%(message_color)s%(message)s%(reset)s")
 
         if colorlog is None:
             super().__init__(fmt=" ".join(fmt_parts), datefmt="%H:%M:%S")
@@ -182,6 +193,11 @@ class ColorlogCategoryFormatter(logging.Formatter):
             normalized = str(category_value or "SYSTEM").strip().upper()
             category = LogCategory.__members__.get(normalized, LogCategory.SYSTEM)
 
+        level_color = self.LEVEL_ANSI.get(record.levelno, "\033[37m")
+        record.log_color = level_color
+        record.message_color = level_color
+        record.reset = "\033[0m"
+        record.white = "\033[37m"
         record.category_display = category.value
         record.category_color = self.CATEGORY_ANSI.get(category, "\033[97m")
 
