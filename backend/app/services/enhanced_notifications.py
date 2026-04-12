@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -23,8 +22,9 @@ from app.services.checkup_store import get_daily_checkup_store
 from app.llm.service import get_llm_service
 from app.llm.base import CompletionRequest, ChatMessage
 from app.auth.user_context import get_current_user
+from app.utils.structured_logging import get_logger, LogComponent
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, LogComponent.NOTIFICATION)
 
 
 @dataclass

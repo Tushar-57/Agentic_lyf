@@ -1,7 +1,6 @@
 """
 Main Orchestrator Agent - Primary coordinator for the AI agent ecosystem.
 """
-import logging
 import re
 import json
 from typing import Dict, Any, Optional, List
@@ -15,7 +14,9 @@ from ..llm.service import get_llm_service
 from ..llm.base import CompletionRequest, ChatMessage
 from ..services.knowledge_base import get_knowledge_base_service
 from ..services.interaction_recorder import get_interaction_recorder
-logger = logging.getLogger(__name__)
+from ..utils.structured_logging import get_logger, LogComponent
+
+logger = get_logger(__name__, LogComponent.AGENT)
 
 class OrchestratorAgent(BaseAgent):
     """Main orchestrator agent that coordinates all other agents."""

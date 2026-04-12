@@ -2,7 +2,6 @@
 API endpoints for knowledge base operations.
 """
 
-import logging
 import re
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
@@ -30,9 +29,10 @@ from app.services.enhanced_notifications import (
     get_enhanced_notification_engine,
 )
 from app.auth.user_context import get_current_user
+from app.utils.structured_logging import get_logger, LogComponent
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, LogComponent.KNOWLEDGE)
 
 
 class CreateEntryRequest(BaseModel):
@@ -397,10 +397,9 @@ async def get_embeddings_for_visualization():
         sync_report = await _sync_missing_db_checkup_insights(kb_service)
         if sync_report["created"] > 0:
             logger.info(
-                "Materialized %s missing checkup insights before visualization (records=%s failed=%s)",
-                sync_report["created"],
-                sync_report["records"],
-                sync_report["failed"],
+                "materialized_checkups",
+                f"Materialized {sync_report['created']} missing checkup insights before visualization",
+                {"created": sync_report["created"], "records": sync_report["records"], "failed": sync_report["failed"]}
             )
         visualization_data = await kb_service.get_embeddings_visualization_data()
         return visualization_data
@@ -537,7 +536,7 @@ def _resolve_timezone(raw_value: Optional[str]):
     try:
         return ZoneInfo(timezone_name)
     except ZoneInfoNotFoundError:
-        logger.warning("Unknown timezone '%s'; falling back to UTC", timezone_name)
+        logger.warning("unknown_timezone", f"Unknown timezone '{timezone_name}'; falling back to UTC", {"timezone": timezone_name})
         return timezone.utc
 
 
@@ -1261,7 +1260,7 @@ async def _generate_checkup_message(
         content = (response.content or "").strip()
         return content or None
     except Exception as llm_error:
-        logger.warning("Daily checkup LLM generation failed, using fallback text: %s", llm_error)
+        logger.warning("checkup_llm_fallback", "Daily checkup LLM generation failed, using fallback text", error=llm_error)
         return None
 
 
@@ -1413,8 +1412,10 @@ def _prune_legacy_system_preference_entries(entries: List[KnowledgeEntry]) -> Li
 
 def _extract_sync_event_key_from_entry(entry: KnowledgeEntry) -> str:
     metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
-    context = metadata.get("context") if isinstance(metadata.get("context"), dict) else {}
-    return str(context.get("sync_event_key") or "").strip()
+    context = metadata.get("context")
+    if isinstance(context, dict):
+        return str(context.get("sync_event_key") or "").strip()
+    return ""
 
 
 def _dedupe_external_sync_entries(entries: List[KnowledgeEntry]) -> List[KnowledgeEntry]:
@@ -1463,7 +1464,7 @@ def _persist_checkup_payload_to_db(checkup_type: str, checkup_date: date, payloa
         payload=payload_to_store,
     )
     if not saved:
-        logger.warning("Failed to persist %s checkup in database for user=%s", checkup_type, request_user.storage_key)
+        logger.warning("persist_checkup_failed", f"Failed to persist {checkup_type} checkup in database", {"checkup_type": checkup_type, "user": request_user.storage_key})
 
 
 def _load_latest_checkups_from_db() -> Dict[str, Dict[str, Any]]:
@@ -2116,10 +2117,9 @@ async def _sync_missing_db_checkup_insights(kb_service) -> Dict[str, int]:
             checkup_date = date.fromisoformat(checkup_date_text)
         except ValueError:
             logger.warning(
-                "Skipping DB checkup with invalid date user=%s type=%s date=%s",
-                request_user.storage_key,
-                checkup_type,
-                checkup_date_text,
+                "invalid_checkup_date",
+                f"Skipping DB checkup with invalid date",
+                {"user": request_user.storage_key, "type": checkup_type, "date": checkup_date_text}
             )
             continue
 
@@ -2144,11 +2144,10 @@ async def _sync_missing_db_checkup_insights(kb_service) -> Dict[str, int]:
         except Exception as sync_error:
             failed_count += 1
             logger.warning(
-                "Failed to materialize DB checkup into KB user=%s type=%s date=%s: %s",
-                request_user.storage_key,
-                checkup_type,
-                checkup_date.isoformat(),
-                sync_error,
+                "materialize_checkup_failed",
+                f"Failed to materialize DB checkup into KB",
+                {"user": request_user.storage_key, "type": checkup_type, "date": checkup_date_text},
+                error=sync_error
             )
 
     return {
@@ -2200,7 +2199,7 @@ async def _upsert_checkup_insight(
         normalized_tags = sorted(set([*tags, "daily_checkup", checkup_type, "insight"]))
 
         if target_entry:
-            logger.info(f"Updating existing checkup insight: {target_entry.entry_id} ({sync_event_key})")
+            logger.info("update_checkup_insight", f"Updating existing checkup insight: {target_entry.entry_id}", {"entry_id": target_entry.entry_id, "sync_key": sync_event_key})
             updated_entry = await kb_service.update_entry(
                 entry_id=target_entry.entry_id,
                 title=title,
@@ -2209,12 +2208,12 @@ async def _upsert_checkup_insight(
                 tags=normalized_tags,
             )
             if updated_entry:
-                logger.info(f"Successfully updated checkup insight: {updated_entry.entry_id}")
+                logger.info("checkup_insight_updated", f"Successfully updated checkup insight", {"entry_id": updated_entry.entry_id})
                 return updated_entry.entry_id
             else:
-                logger.warning(f"Update returned None for checkup insight: {sync_event_key}")
+                logger.warning("checkup_update_none", f"Update returned None for checkup insight", {"sync_key": sync_event_key})
 
-        logger.info(f"Creating new checkup insight: {sync_event_key}")
+        logger.info("create_checkup_insight", f"Creating new checkup insight", {"sync_key": sync_event_key})
         new_entry = await kb_service.create_entry(
             entry_type=KnowledgeEntryType.INSIGHT,
             entry_sub_type=KnowledgeEntrySubType.MISC_INSIGHT,
@@ -2224,10 +2223,10 @@ async def _upsert_checkup_insight(
             metadata=merged_metadata,
             tags=normalized_tags,
         )
-        logger.info(f"Successfully created checkup insight: {new_entry.entry_id} ({sync_event_key})")
+        logger.info("checkup_insight_created", f"Successfully created checkup insight", {"entry_id": new_entry.entry_id, "sync_key": sync_event_key})
         return new_entry.entry_id
     except Exception as e:
-        logger.error(f"Failed to upsert checkup insight {sync_event_key}: {e}", exc_info=True)
+        logger.error("upsert_checkup_failed", f"Failed to upsert checkup insight", {"sync_key": sync_event_key}, error=e)
         return None
 
 
@@ -2626,7 +2625,7 @@ async def generate_enhanced_notifications(
         return response
         
     except Exception as e:
-        logger.error(f"Enhanced notification generation failed: {e}", exc_info=True)
+        logger.error("notification_gen_failed", "Enhanced notification generation failed", error=e)
         raise HTTPException(status_code=500, detail=f"Failed to generate enhanced notifications: {str(e)}")
 
 
@@ -2691,7 +2690,7 @@ async def refresh_enhanced_notifications(
         return response
         
     except Exception as e:
-        logger.error(f"Enhanced notification refresh failed: {e}", exc_info=True)
+        logger.error("notification_refresh_failed", "Enhanced notification refresh failed", error=e)
         raise HTTPException(status_code=500, detail=f"Failed to refresh enhanced notifications: {str(e)}")
 
 
@@ -3073,9 +3072,9 @@ async def run_morning_checkup(request: DailyCheckupRequest):
             tags=["planning"],
         )
         if insight_id:
-            logger.info(f"Morning checkup insight persisted: {insight_id}")
+            logger.info("morning_checkup_persisted", f"Morning checkup insight persisted", {"insight_id": insight_id})
         else:
-            logger.error(f"Failed to persist morning checkup insight for {checkup_date.isoformat()}")
+            logger.error("morning_checkup_persist_failed", f"Failed to persist morning checkup insight", {"date": checkup_date.isoformat()})
         _persist_checkup_payload_to_db("morning", checkup_date, response_payload)
 
         return response_payload
@@ -3472,9 +3471,9 @@ async def run_evening_checkup(request: DailyCheckupRequest):
             tags=["reflection"],
         )
         if insight_id:
-            logger.info(f"Evening checkup insight persisted: {insight_id}")
+            logger.info("evening_checkup_persisted", f"Evening checkup insight persisted", {"insight_id": insight_id})
         else:
-            logger.error(f"Failed to persist evening checkup insight for {checkup_date.isoformat()}")
+            logger.error("evening_checkup_persist_failed", f"Failed to persist evening checkup insight", {"date": checkup_date.isoformat()})
         _persist_checkup_payload_to_db("evening", checkup_date, response_payload)
 
         return response_payload
@@ -3560,7 +3559,7 @@ async def save_onboarding_data(data: OnboardingData):
             # No change, keep existing
             profile_entry = existing_profile
             processed_entry_ids.add(existing_profile.entry_id)
-            logger.info(f"Skipping unchanged profile entry: {existing_profile.entry_id}")
+            logger.info("skip_unchanged_profile", f"Skipping unchanged profile entry", {"entry_id": existing_profile.entry_id})
         else:
             # Create or update profile entry
             profile_metadata = {
@@ -3584,7 +3583,7 @@ async def save_onboarding_data(data: OnboardingData):
                     tags=["profile", "onboarding", data.role.lower()]
                 )
                 processed_entry_ids.add(existing_profile.entry_id)
-                logger.info(f"Updated profile entry: {existing_profile.entry_id}")
+                logger.info("profile_updated", f"Updated profile entry", {"entry_id": existing_profile.entry_id})
             else:
                 profile_entry = await kb_service.create_entry(
                     entry_type=KnowledgeEntryType.USER_PREFERENCE,
@@ -3620,7 +3619,7 @@ async def save_onboarding_data(data: OnboardingData):
                 # No change, keep existing
                 goal_entries.append(existing_goal)
                 processed_entry_ids.add(existing_goal.entry_id)
-                logger.info(f"Skipping unchanged goal entry: {existing_goal.entry_id}")
+                logger.info("skip_unchanged_goal", f"Skipping unchanged goal entry", {"entry_id": existing_goal.entry_id})
             elif existing_goal:
                 # Update existing goal
                 updated_goal = await kb_service.update_entry(
@@ -3635,7 +3634,7 @@ async def save_onboarding_data(data: OnboardingData):
                 else:
                     goal_entries.append(existing_goal)
                 processed_entry_ids.add(existing_goal.entry_id)
-                logger.info(f"Updated goal entry: {existing_goal.entry_id}")
+                logger.info("goal_updated", f"Updated goal entry", {"entry_id": existing_goal.entry_id})
             else:
                 # Create new goal entry
                 goal_entry = await kb_service.create_entry(
@@ -3668,7 +3667,7 @@ async def save_onboarding_data(data: OnboardingData):
             # No change, keep existing
             planner_entry = existing_planner
             processed_entry_ids.add(existing_planner.entry_id)
-            logger.info(f"Skipping unchanged planner entry: {existing_planner.entry_id}")
+            logger.info("skip_unchanged_planner", f"Skipping unchanged planner entry", {"entry_id": existing_planner.entry_id})
         elif existing_planner:
             # Update existing planner
             planner_entry = await kb_service.update_entry(
@@ -3679,7 +3678,7 @@ async def save_onboarding_data(data: OnboardingData):
                 tags=["planner", "schedule", "configuration"]
             )
             processed_entry_ids.add(existing_planner.entry_id)
-            logger.info(f"Updated planner entry: {existing_planner.entry_id}")
+            logger.info("planner_updated", f"Updated planner entry", {"entry_id": existing_planner.entry_id})
         else:
             # Create new planner entry
             planner_entry = await kb_service.create_entry(
@@ -3704,9 +3703,9 @@ async def save_onboarding_data(data: OnboardingData):
         if orphaned_entries:
             try:
                 await kb_service.delete_entries([e.entry_id for e in orphaned_entries])
-                logger.info(f"Deleted {len(orphaned_entries)} orphaned onboarding entries")
+                logger.info("orphaned_deleted", f"Deleted {len(orphaned_entries)} orphaned onboarding entries", {"count": len(orphaned_entries)})
             except Exception as e:
-                logger.warning("Failed to delete orphaned entries: %s", e)
+                logger.warning("orphaned_delete_failed", "Failed to delete orphaned entries", error=e)
 
         preferences_synced = False
         try:
@@ -3777,7 +3776,7 @@ async def save_onboarding_data(data: OnboardingData):
             updated_preferences = UserPreferences(**preferences_payload)
             preferences_synced = await kb_service.update_user_preferences(updated_preferences)
         except Exception as pref_sync_error:
-            logger.warning("Failed to sync structured onboarding preferences: %s", pref_sync_error)
+            logger.warning("pref_sync_failed", "Failed to sync structured onboarding preferences", error=pref_sync_error)
         
         return {
             "success": True,
@@ -3790,7 +3789,7 @@ async def save_onboarding_data(data: OnboardingData):
     except Exception as e:
         import traceback
         error_detail = f"Failed to save onboarding data: {str(e)}\n{traceback.format_exc()}"
-        logger.error(error_detail)
+        logger.error("onboarding_save_failed", "Failed to save onboarding data", {"detail": str(e)}, error=e)
         raise HTTPException(status_code=500, detail=error_detail)
 
 
@@ -3901,5 +3900,5 @@ async def get_onboarding_profile():
     except Exception as e:
         import traceback
         error_detail = f"Error retrieving profile: {str(e)}\n{traceback.format_exc()}"
-        logger.error(error_detail)
+        logger.error("profile_retrieve_failed", "Error retrieving profile", {"detail": str(e)}, error=e)
         raise HTTPException(status_code=500, detail=error_detail)
