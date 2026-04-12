@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Send, Bot, User, Sparkles, Zap, Brain, Settings, Database, ChevronDown, ChevronUp, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -80,7 +80,7 @@ const agentIcons = {
   general: Bot,
 }
 
-const AgentThinkingDisplay = ({ thinking }: { thinking: AgentThinking }) => {
+const AgentThinkingDisplay = React.memo(({ thinking }: { thinking: AgentThinking }) => {
   const [isExpanded, setIsExpanded] = useState(false)
   const [showSources, setShowSources] = useState(false)
   const [isMobileLayout, setIsMobileLayout] = useState(
@@ -436,7 +436,9 @@ const AgentThinkingDisplay = ({ thinking }: { thinking: AgentThinking }) => {
       )}
     </motion.div>
   )
-}
+})
+
+AgentThinkingDisplay.displayName = 'AgentThinkingDisplay'
 
 const TypingIndicator = () => (
   <div className="flex items-center space-x-1 p-4">
@@ -742,7 +744,7 @@ const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLas
                 reasoningText = JSON.stringify(message.reasoning);
               }
               return reasoningText.includes('openai') ? (
-                <span className="px-1.5 py-0.5 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 rounded text-xs">
+                <span className="px-1.5 py-0.5 bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 rounded text-xs">
                   OpenAI
                 </span>
               ) : null;
@@ -755,7 +757,7 @@ const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLas
                 reasoningText = JSON.stringify(message.reasoning);
               }
               return reasoningText.includes('ollama') ? (
-                <span className="px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900 text-purple-700 dark:text-purple-300 rounded text-xs">
+                <span className="px-1.5 py-0.5 bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 rounded text-xs">
                   Ollama
                 </span>
               ) : null;
@@ -767,7 +769,7 @@ const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLas
         <Card className={cn(
           "max-w-full overflow-hidden p-3 shadow-md transition-all duration-200",
           isUser 
-            ? "ml-auto border-primary/30 bg-gradient-to-r from-teal-700 to-cyan-600 text-white" 
+            ? "ml-auto border-primary/30 bg-primary text-primary-foreground" 
             : "border-border/70 bg-card/85 hover:shadow-lg",
           message.isStreaming && "animate-pulse"
         )}>
@@ -778,8 +780,7 @@ const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLas
                 p: ({ children }) => <p className="mb-2 break-words last:mb-0">{children}</p>,
                 code: ({ children, className }) => (
                   <code className={cn(
-                    "break-all px-1.5 py-0.5 rounded text-xs font-mono",
-                    isUser ? "bg-primary-foreground/20" : "bg-muted",
+                    "break-all px-1.5 py-0.5 rounded text-xs font-mono bg-muted/80",
                     className
                   )}>
                     {children}
@@ -787,8 +788,7 @@ const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLas
                 ),
                 pre: ({ children }) => (
                   <pre className={cn(
-                    "max-w-full whitespace-pre-wrap break-words p-3 rounded-lg overflow-x-auto text-xs",
-                    isUser ? "bg-primary-foreground/20" : "bg-muted"
+                    "max-w-full whitespace-pre-wrap break-words p-3 rounded-lg overflow-x-auto text-xs bg-muted/80"
                   )}>
                     {children}
                   </pre>
@@ -844,7 +844,8 @@ const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLas
   )
 })
 
-MessageBubble.displayName = "MessageBubble"
+const MemoizedMessageBubble = React.memo(MessageBubble)
+MemoizedMessageBubble.displayName = "MessageBubble"
 
 export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   className,
@@ -865,52 +866,70 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [userAvatar, setUserAvatar] = useState<string>('')
   const [communicationStyle, setCommunicationStyle] = useState<string>('Direct')
 
-  const starterCapabilities = [
+  const starterCapabilities = useMemo(() => [
     {
-      title: 'Strategic Routing',
-      description: 'Routes each request to the best specialist agent automatically.',
+      title: 'Smart Routing',
+      description: 'I connect you to the right coach automatically.',
     },
     {
-      title: 'Live Memory Context',
-      description: 'Uses your onboarding and preference memory for grounded guidance.',
+      title: 'Remembers You',
+      description: 'I recall your goals and preferences.',
     },
     {
-      title: 'Action-Ready Plans',
-      description: 'Turns broad goals into next-step execution plans quickly.',
+      title: 'Action Plans',
+      description: 'I turn big goals into doable steps.',
     },
-  ]
+  ], [])
 
-  const starterTasks = [
+  const starterTasks = useMemo(() => [
     'Plan tomorrow\'s top 3 priorities',
-    'Block focused work from 9:00 AM to 11:00 AM',
+    'Block focused work time',
     'Prepare weekly meal plan and grocery list',
-  ]
+  ], [])
 
-  const starterHabits = [
-    'Wake up by 6:30 AM daily',
-    'Log every meal and water intake',
-    'Walk for 20 minutes after dinner',
-  ]
+  const starterHabits = useMemo(() => [
+    'Build a consistent morning routine',
+    'Track a daily health habit',
+    'Add movement to your day',
+  ], [])
+
+  // Load user profile callback
+  const loadProfile = useCallback(async () => {
+    try {
+      const response = await fetch('/api/knowledge/onboarding/profile', {
+        headers: {
+          'Accept': 'application/json'
+        }
+      });
+      if (response.ok) {
+        const data = await response.json() as Record<string, unknown> | null;
+        // Null check to prevent crashes from malformed data
+        if (!data || typeof data !== 'object') {
+          console.log('Invalid profile data received');
+          return;
+        }
+        setUserProfile(data);
+        // Set avatar from mentor selection with safe navigation
+        const coachAvatar = typeof data?.coachAvatar === 'string' ? data.coachAvatar : '';
+        const mentorAvatar = data?.mentor && typeof data.mentor === 'object' 
+          ? String((data.mentor as Record<string, unknown>)?.avatar || '') 
+          : '';
+        setUserAvatar(coachAvatar || mentorAvatar);
+        // Set communication style with safe navigation
+        const mentorStyle = data?.mentor && typeof data.mentor === 'object'
+          ? (data.mentor as Record<string, unknown>)?.style
+          : undefined;
+        setCommunicationStyle(typeof mentorStyle === 'string' ? mentorStyle : 'Direct');
+      }
+    } catch (error) {
+      console.log('No user profile found, using defaults');
+    }
+  }, []);
 
   // Load user profile on mount
   useEffect(() => {
-    const loadProfile = async () => {
-      try {
-        const response = await fetch('/api/knowledge/onboarding/profile');
-        if (response.ok) {
-          const data = await response.json();
-          setUserProfile(data);
-          // Set avatar from mentor selection
-          setUserAvatar(data.coachAvatar || data.mentor?.avatar || '');
-          // Set communication style
-          setCommunicationStyle(data.mentor?.style || 'Direct');
-        }
-      } catch (error) {
-        console.log('No user profile found, using defaults');
-      }
-    };
-    loadProfile();
-  }, []);
+    void loadProfile();
+  }, [loadProfile]);
 
   const scrollToBottom = () => {
     if (messagesContainerRef.current) {
@@ -956,9 +975,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             )}
           </div>
           <div>
-            <h2 className="text-sm font-semibold sm:text-base">Agentic Conversation Desk</h2>
+            <h2 className="text-sm font-semibold sm:text-base">Your Coaching Session</h2>
             <p className="text-xs capitalize text-muted-foreground sm:text-sm">
-              {currentAgent} agent active
+              {currentAgent === 'orchestrator' ? 'Coach' : currentAgent} is here to help
             </p>
           </div>
         </div>
@@ -974,8 +993,8 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
           {/* Provider Indicator */}
           <div className="flex items-center gap-2 rounded-full border border-border/70 bg-white/70 px-2 py-1 dark:bg-slate-900/60">
             <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-            <span className="text-xs text-muted-foreground font-medium capitalize">
-              {currentProvider}
+            <span className="text-xs text-muted-foreground font-medium">
+              Ready
             </span>
           </div>
           <div className="hidden sm:flex items-center gap-2">
@@ -1001,9 +1020,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               <div className="floating-animation mb-4 flex h-16 w-16 items-center justify-center rounded-3xl bg-gradient-to-br from-teal-700 via-cyan-600 to-amber-500 shadow-lg shadow-cyan-500/30">
                 <Sparkles className="w-8 h-8 text-white" />
               </div>
-              <h3 className="mb-2 text-xl font-semibold">Start A Meaningful Session</h3>
+              <h3 className="mb-2 text-xl font-semibold">Start a conversation</h3>
               <p className="max-w-md text-muted-foreground">
-                Ask anything, and Agentic will route context to the right specialist so responses stay actionable and personal.
+                Ask me anything—I'll connect you to the right expertise.
               </p>
               <div className="mt-6 grid w-full max-w-3xl gap-3 sm:grid-cols-3">
                 {starterCapabilities.map((item) => (
@@ -1057,7 +1076,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             </motion.div>
           ) : (
             messages.map((message, index) => (
-              <MessageBubble
+              <MemoizedMessageBubble
                 key={message.id}
                 message={message}
                 isLast={index === messages.length - 1}
@@ -1082,7 +1101,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               onKeyDown={handleKeyPress}
               onCompositionStart={() => setIsComposing(true)}
               onCompositionEnd={() => setIsComposing(false)}
-              placeholder="Type your message..."
+              placeholder="Ask me anything..."
               className="min-h-[46px] resize-none rounded-xl border-border/70 bg-white/80 pr-12 shadow-sm dark:bg-slate-900/70"
               disabled={isLoading}
             />
@@ -1105,45 +1124,45 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               switch (agent) {
                 case 'productivity':
                   return [
-                    "📋 Add a new task",
-                    "📊 Show my productivity stats",
-                    "🌅 Add task: Wake up by 6:30 AM",
-                    "🍽️ Add task: Plan this week's meals"
+                    "Add a new task",
+                    "View my progress",
+                    "Build a consistent morning routine",
+                    "Plan weekly meals"
                   ]
                 case 'health':
                   return [
-                    "❤️ Health check-in",
-                    "💪 Log a workout",
-                    "😴 Track sleep quality",
-                    "🥗 Track habit: Log every meal"
+                    "Health check-in",
+                    "Log exercise",
+                    "Track sleep quality",
+                    "Track a daily health habit"
                   ]
                 case 'finance':
                   return [
-                    "💰 Add an expense",
-                    "📈 Financial summary",
-                    "🎯 Budget review",
-                    "💡 Savings tips"
+                    "Add an expense",
+                    "Financial summary",
+                    "Budget review",
+                    "Savings tips"
                   ]
                 case 'scheduling':
                   return [
-                    "📅 Check my calendar",
-                    "⏰ Schedule a meeting",
-                    "🔄 Reschedule conflicts",
-                    "⚡ Time optimization"
+                    "Check my calendar",
+                    "Schedule a meeting",
+                    "Reschedule conflicts",
+                    "Time optimization"
                   ]
                 case 'journal':
                   return [
-                    "📝 Daily reflection",
-                    "😊 Mood check-in",
-                    "🎉 Celebrate achievement",
-                    "💭 Weekly review"
+                    "Daily reflection",
+                    "Mood check-in",
+                    "Celebrate achievement",
+                    "Weekly review"
                   ]
                 default:
                   return [
-                    "❓ What can you help me with?",
-                    "🤖 Show available agents",
-                    "📊 System status",
-                    "💡 Get suggestions"
+                    "What can you help me with?",
+                    "Show my coaches",
+                    "System status",
+                    "Get suggestions"
                   ]
               }
             }

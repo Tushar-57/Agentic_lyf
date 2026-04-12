@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
+import { useBodyScrollLock, useThrottledResizeHandler } from '@/hooks/useBodyScrollLock'
 import { motion } from 'framer-motion'
 import { ArrowLeft, BarChart3, Brain, Database, Menu, MessageSquare, Sparkles, User, X } from 'lucide-react'
 import { Toaster } from 'sonner'
@@ -10,8 +11,10 @@ import ChatOnboarding from '@/components/onboarding/ChatOnboarding'
 import ProfileWorkspace from '@/components/profile/ProfileWorkspace'
 import { DeepAgentStatus } from '@/components/chat/DeepAgentStatus'
 import { FloatingApprovalNotification } from '@/components/chat/FloatingApprovalNotification'
+import { OfflineIndicator, BackendStatusIndicator } from '@/components/ui/offline-indicator'
 import { Button } from '@/components/ui/button'
 import { prefetchEmbeddingsVisualization } from '@/lib/embeddingsCache'
+import { hapticButtonPress } from '@/lib/hapticFeedback'
 import { cn } from '@/lib/utils'
 import { AnalyticsDashboard } from '@/components/knowledge/AnalyticsDashboard'
 import { AINotificationsCenter } from '@/components/knowledge/AINotificationsCenter'
@@ -204,21 +207,31 @@ function App() {
     }
   }, [])
 
-  const mobileViews = [
-    { id: 'chat', label: 'Chat', icon: MessageSquare },
-    { id: 'onboarding', label: 'Onboarding', icon: Sparkles },
-    { id: 'knowledge', label: 'Knowledge', icon: Database },
-    { id: 'analytics', label: 'Analytics', icon: BarChart3 },
-    { id: 'profile', label: 'Profile', icon: User },
-  ]
+  const mobileViews = useMemo(
+    () => [
+      { id: 'chat', label: 'Talk', icon: MessageSquare },
+      { id: 'onboarding', label: 'Start', icon: Sparkles },
+      { id: 'knowledge', label: 'Memory', icon: Database },
+      { id: 'analytics', label: 'Insights', icon: BarChart3 },
+      { id: 'profile', label: 'Me', icon: User },
+    ],
+    []
+  )
 
   const activeMobileView = useMemo(
     () => mobileViews.find((view) => view.id === currentView),
-    [currentView]
+    [mobileViews, currentView]
   )
 
+  // Standardized mobile safe area classes
+  const mobileSafeAreaClasses = {
+    bottomNav: 'pb-[calc(5rem+env(safe-area-inset-bottom))]',
+    header: 'pt-[env(safe-area-inset-top)]',
+    content: 'pb-[env(safe-area-inset-bottom)]',
+  }
+  
   const mobileContentInsetClass = isMobile && !isEmbedMode
-    ? 'pb-[calc(5.2rem+env(safe-area-inset-bottom))]'
+    ? mobileSafeAreaClasses.bottomNav
     : ''
 
   const handleViewChange = (nextView: string) => {
@@ -259,30 +272,17 @@ function App() {
     }
   }, [isDarkMode])
 
-  useEffect(() => {
-    const handleResize = () => {
-      const mobile = window.innerWidth < 1024
-      setIsMobile(mobile)
-      if (!mobile) {
-        setMobileSidebarOpen(false)
-      }
+  // Use throttled resize handler for performance
+  useThrottledResizeHandler((width: number) => {
+    const mobile = width < 1024 // lg breakpoint
+    setIsMobile(mobile)
+    if (!mobile) {
+      setMobileSidebarOpen(false)
     }
+  }, 100)
 
-    handleResize()
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-  }, [])
-
-  useEffect(() => {
-    if (mobileSidebarOpen) {
-      document.body.style.overflow = 'hidden'
-      return () => {
-        document.body.style.overflow = ''
-      }
-    }
-
-    document.body.style.overflow = ''
-  }, [mobileSidebarOpen])
+  // Use safe scroll lock hook instead of direct DOM manipulation
+  useBodyScrollLock(mobileSidebarOpen)
 
   useEffect(() => {
     const restoreScrollPosition = () => {
@@ -412,10 +412,10 @@ function App() {
     // Add a system message about the provider switch
     const systemMessage: Message = {
       id: `system-${Date.now()}`,
-      content: `🔄 Switched to **${provider.toUpperCase()}** provider. ${
+      content: `🔄 Now using **${provider === 'openai' ? 'OpenAI' : 'Local AI'}**. ${
         provider === 'openai' 
-          ? 'Now using OpenAI\'s cloud-based models for enhanced capabilities.' 
-          : 'Now using local Ollama models for privacy-focused AI interactions.'
+          ? 'Connected to OpenAI for enhanced capabilities.' 
+          : 'Running locally for privacy-focused conversations.'
       }`,
       role: 'system',
       timestamp: new Date(),
@@ -501,14 +501,10 @@ function App() {
       const demoResponse: Message = {
         id: `demo-${Date.now()}`,
         content: `${providerUnavailable
-          ? "I cannot reach a healthy AI provider right now. Please connect OpenAI in Settings or make sure Ollama is running, then retry your message."
-          : "I could not reach the backend right now, so I switched to fallback mode."
-        }
-
-        Here is what I can help with once the connection is restored:
-        ${currentAgent === 'orchestrator' ? `
-        - 🧠 **Coordinate** between different AI agents
-        - 🎯 **Route** your requests to the right specialist
+          ? "I can't connect to the AI right now. Check your settings and try again."
+          : "I'm having trouble connecting. Running in offline mode."
+        }\n\nIn the meantime, here's what I can help you with:\n\n${currentAgent === 'orchestrator' ? `
+        - 🧠 **Coordinate** across all your life domains
         - 📊 **Provide** unified insights across all domains
         - 🔄 **Manage** complex multi-step workflows
         ` : currentAgent === 'productivity' ? `
@@ -531,9 +527,7 @@ function App() {
         - 💡 **Provide** helpful suggestions
         - 🔍 **Search** for information
         - 📝 **Help** with various tasks
-        `}
-
-      Try switching between different agents using the sidebar to explore each specialization.`,
+        `}\n\nTry switching between different agents using the sidebar to explore each specialization.`,
         role: 'assistant',
         timestamp: new Date(),
         agent: currentAgent,
@@ -729,11 +723,15 @@ function App() {
         transition={{ duration: 0.3, ease: "easeInOut" }}
         className={cn(
           "relative z-10 flex min-h-0 min-w-0 max-w-full flex-1 flex-col overflow-x-hidden",
-          isMobile && !isEmbedMode && "pb-[calc(5.2rem+env(safe-area-inset-bottom))]"
+          isMobile && !isEmbedMode && mobileSafeAreaClasses.bottomNav
         )}
       >
         {isMobile && !isEmbedMode && (
-          <div className="sticky top-0 z-30 flex h-[calc(3.5rem+env(safe-area-inset-top))] items-center justify-between border-b border-border/70 bg-white/80 px-4 pt-[env(safe-area-inset-top)] backdrop-blur-xl dark:bg-slate-950/75 lg:hidden">
+          <div className={cn(
+            "sticky top-0 z-30 flex items-center justify-between border-b border-border/70 bg-white/80 px-4 backdrop-blur-xl dark:bg-slate-950/75 lg:hidden",
+            "h-[calc(3.5rem+env(safe-area-inset-top))]",
+            mobileSafeAreaClasses.header
+          )}>
             <Button
               variant="ghost"
               size="icon"
@@ -745,10 +743,10 @@ function App() {
             </Button>
             <div className="text-center">
               <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
-                Command Desk
+                AlterEgo
               </div>
               <div className="text-sm font-semibold">
-                {integrationContext.isAlterEgo ? 'AlterEgo Coach' : 'Agentic Workspace'}
+                Your AI Partner
               </div>
               <div className="text-[11px] text-slate-500 dark:text-slate-400 capitalize">
                 {activeMobileView?.label || currentView.replace('_', ' ')}
@@ -763,9 +761,9 @@ function App() {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-teal-700 dark:text-teal-200">
-                  Connected Workspace
+                  Connected
                 </p>
-                <p className="text-sm text-slate-800 dark:text-slate-100">AlterEgo Coach Bridge Active</p>
+                <p className="text-sm text-slate-800 dark:text-slate-100">AlterEgo Link Active</p>
               </div>
               <Button
                 variant="outline"
@@ -810,12 +808,12 @@ function App() {
                 className={cn(
                   "fixed right-4 h-11 w-11 p-0 rounded-full shadow-lg z-30 transition-all sm:right-6 sm:h-12 sm:w-12",
                   isMobile && !isEmbedMode
-                    ? "bottom-[calc(4.5rem+env(safe-area-inset-bottom))]"
+                    ? "bottom-[calc(4rem+env(safe-area-inset-bottom))]"
                     : "bottom-4 sm:bottom-20",
                   "bg-gradient-to-r from-teal-700 to-cyan-600 text-white hover:from-teal-800 hover:to-cyan-700",
                   showDeepAgentPanel && !isMobile ? "right-[25rem]" : "right-4 sm:right-6"
                 )}
-                title="Toggle Deep Agent Panel"
+                title="Show/Hide Action Panel"
               >
                 <div className="relative">
                   <Brain className="w-6 h-6" />
@@ -841,12 +839,12 @@ function App() {
                   isMobile
                     ? isEmbedMode
                       ? "fixed inset-0 z-40 w-full border-t"
-                      : "fixed inset-x-0 bottom-[calc(4rem+env(safe-area-inset-bottom))] top-[calc(3.5rem+env(safe-area-inset-top))] z-40 w-full border-t"
+                      : "fixed inset-x-0 z-40 w-full border-t " + mobileSafeAreaClasses.bottomNav + " top-[calc(3.5rem+env(safe-area-inset-top))]"
                     : "w-96 rounded-l-3xl border-l border-border/70"
                 )}
               >
                 <div className="p-4 border-b flex items-center justify-between">
-                  <h3 className="font-semibold text-lg">Deep Agent System</h3>
+                  <h3 className="font-semibold text-lg">Advanced Actions</h3>
                   <Button
                     variant="ghost"
                     size="sm"
@@ -918,22 +916,26 @@ function App() {
       </motion.div>
 
       {isMobile && !isEmbedMode && (
-        <nav className="fixed bottom-0 left-0 right-0 z-30 grid grid-cols-5 border-t border-border/70 bg-white/90 px-1 pb-[max(0.25rem,env(safe-area-inset-bottom))] pt-1 backdrop-blur-xl dark:bg-slate-950/85 lg:hidden">
+        <nav className="fixed bottom-0 left-0 right-0 z-30 grid grid-cols-5 border-t border-border/70 bg-white/90 px-1 pb-[env(safe-area-inset-bottom)] pt-2 backdrop-blur-xl dark:bg-slate-950/85 lg:hidden">
           {mobileViews.map((view) => {
             const isActive = currentView === view.id
             return (
               <button
                 key={view.id}
                 type="button"
-                onClick={() => handleViewChange(view.id)}
+                onClick={() => {
+                  hapticButtonPress() // Haptic feedback on mobile
+                  handleViewChange(view.id)
+                }}
                 className={cn(
-                  "flex flex-col items-center justify-center rounded-xl py-2 text-[11px] font-semibold transition",
+                  "flex flex-col items-center justify-center rounded-xl min-h-[44px] text-[11px] font-semibold transition",
                   isActive
                     ? "bg-gradient-to-r from-teal-700 via-cyan-600 to-amber-500 text-white shadow-md"
                     : "text-muted-foreground hover:bg-accent"
                 )}
+                aria-label={view.label}
               >
-                <view.icon className="mb-1 h-4 w-4" />
+                <view.icon className="mb-1 h-5 w-5" />
                 {view.label}
               </button>
             )
@@ -957,6 +959,10 @@ function App() {
         richColors
         closeButton
       />
+
+      {/* Offline/Connectivity Indicators */}
+      <OfflineIndicator />
+      <BackendStatusIndicator />
 
       {/* Floating Approval Notification */}
       <FloatingApprovalNotification 

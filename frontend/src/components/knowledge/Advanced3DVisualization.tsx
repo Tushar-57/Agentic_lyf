@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useMemo, Suspense } from 'react'
+import React, { useRef, useEffect, useState, useMemo, Suspense, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import {
@@ -1080,16 +1080,35 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
         }
     }
 
+    // AbortController ref for cancelling pending requests
+    const abortControllerRef = useRef<AbortController | null>(null)
+
+    const cancelPendingRequests = useCallback(() => {
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort()
+            abortControllerRef.current = null
+        }
+    }, [])
+
+    // Cleanup on unmount
+    useEffect(() => {
+        return () => {
+            cancelPendingRequests()
+        }
+    }, [cancelPendingRequests])
+
     // Load embeddings data when component opens
     useEffect(() => {
         if (isOpen) {
-            loadEmbeddingsData()
-            loadEmbeddingQuality(true)
+            // Cancel any pending before loading
+            cancelPendingRequests()
+            void loadEmbeddingsData()
+            void loadEmbeddingQuality(true)
             if (typeof window !== 'undefined' && window.innerWidth < 1024) {
                 setIsControlPanelOpen(false)
             }
         }
-    }, [isOpen])
+    }, [isOpen, cancelPendingRequests])
 
     useEffect(() => {
         if (typeof window === 'undefined') {
@@ -1260,8 +1279,21 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
         }
     }, [types, typeFilter])
 
+    const isLoadingEmbeddingsRef = useRef(false)
+
     const loadEmbeddingsData = async () => {
+        // Prevent concurrent/duplicate requests
+        if (isLoadingEmbeddingsRef.current || isLoading) {
+            return
+        }
+
+        isLoadingEmbeddingsRef.current = true
         setIsLoading(true)
+
+        // Create new abort controller for this request
+        cancelPendingRequests()
+        const controller = new AbortController()
+        abortControllerRef.current = controller
 
         try {
             const response = await fetch('/api/knowledge/embeddings/visualization', {
@@ -1269,6 +1301,7 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
                 headers: {
                     'Cache-Control': 'no-cache',
                 },
+                signal: controller.signal,
             })
             if (response.ok) {
                 const data = (await response.json()) as EmbeddingPoint[]
@@ -1288,6 +1321,10 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
             setProcessedPoints([])
             toast.error('Failed to load embeddings data')
         } finally {
+            isLoadingEmbeddingsRef.current = false
+            if (abortControllerRef.current === controller) {
+                abortControllerRef.current = null
+            }
             setIsLoading(false)
         }
     }
@@ -2348,3 +2385,6 @@ export const Advanced3DVisualization: React.FC<Advanced3DVisualizationProps> = (
         </motion.div>
     )
 }
+
+// Default export for lazy loading
+export default Advanced3DVisualization

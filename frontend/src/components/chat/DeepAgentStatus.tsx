@@ -82,26 +82,26 @@ interface DeepAgentStatusProps {
   onEscalationResponse?: (escalationId: string, resolution: string) => void
 }
 
-const priorityColors = {
-  low: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
-  normal: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-  medium: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
-  high: 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200',
-  critical: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+const priorityVariants = {
+  low: 'bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300',
+  normal: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300',
+  medium: 'bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300',
+  high: 'bg-orange-100 text-orange-800 dark:bg-orange-900/50 dark:text-orange-300',
+  critical: 'bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300'
 }
 
-const statusColors = {
-  'not-started': 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200',
-  'in-progress': 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
-  'completed': 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-  'planning': 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200',
-  'executing': 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
-  'pending': 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200',
-  'approved': 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-  'denied': 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
-  'timeout': 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-200',
-  'answered': 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-  'resolved': 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+const statusVariants = {
+  'not-started': 'bg-muted text-muted-foreground',
+  'in-progress': 'bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300',
+  'completed': 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300',
+  'planning': 'bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300',
+  'executing': 'bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300',
+  'pending': 'bg-orange-100 text-orange-800 dark:bg-orange-900/50 dark:text-orange-300',
+  'approved': 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300',
+  'denied': 'bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300',
+  'timeout': 'bg-muted text-muted-foreground',
+  'answered': 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300',
+  'resolved': 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300'
 }
 
 const ApprovalRequestCard = ({ 
@@ -118,19 +118,19 @@ const ApprovalRequestCard = ({
     <Card className="p-4 border-l-4 border-orange-400">
       <div className="flex items-start justify-between mb-3">
         <div>
-          <h4 className="font-medium text-sm text-gray-900 dark:text-gray-100">
+          <h4 className="font-medium text-sm text-foreground">
             Approval Required
           </h4>
-          <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+          <p className="text-xs text-muted-foreground mt-1">
             {request.agent_id} • {request.action_type}
           </p>
         </div>
-        <Badge className={priorityColors[request.priority]}>
+        <Badge className={priorityVariants[request.priority]}>
           {request.priority}
         </Badge>
       </div>
       
-      <p className="text-sm text-gray-700 dark:text-gray-300 mb-4">
+      <p className="text-sm text-muted-foreground mb-4">
         {request.description}
       </p>
       
@@ -139,7 +139,7 @@ const ApprovalRequestCard = ({
           <Button
             size="sm"
             onClick={() => onResponse(request.id, 'approve', feedback)}
-            className="bg-green-600 hover:bg-green-700 text-white"
+            className="bg-emerald-600 hover:bg-emerald-700 text-white dark:bg-emerald-700 dark:hover:bg-emerald-600"
           >
             Approve
           </Button>
@@ -147,7 +147,7 @@ const ApprovalRequestCard = ({
             size="sm"
             variant="outline"
             onClick={() => onResponse(request.id, 'deny', feedback)}
-            className="border-red-300 text-red-600 hover:bg-red-50"
+            className="border-red-300 text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/30"
           >
             Deny
           </Button>
@@ -186,7 +186,7 @@ const TodoCard = ({ todo }: { todo: DeepAgentState['todos'][0] }) => {
   return (
     <motion.div
       layout
-      className="border rounded-lg p-3 bg-white dark:bg-gray-800"
+      className="border rounded-lg p-3 bg-card"
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -200,7 +200,7 @@ const TodoCard = ({ todo }: { todo: DeepAgentState['todos'][0] }) => {
           </Button>
           <span className="font-medium text-sm">{todo.title}</span>
         </div>
-        <Badge className={statusColors[todo.status]}>
+        <Badge className={statusVariants[todo.status]}>
           {todo.status.replace('-', ' ')}
         </Badge>
       </div>
@@ -401,7 +401,7 @@ export const DeepAgentStatus: React.FC<DeepAgentStatusProps> = ({
                   <div key={plan.id} className="p-3 border rounded-lg">
                     <div className="flex items-center justify-between mb-2">
                       <span className="font-medium text-sm">{plan.title}</span>
-                      <Badge className={statusColors[plan.status]}>
+                      <Badge className={statusVariants[plan.status]}>
                         {plan.status}
                       </Badge>
                     </div>
@@ -514,7 +514,7 @@ export const DeepAgentStatus: React.FC<DeepAgentStatusProps> = ({
                       <Card key={request.id} className="p-4 border-l-4 border-blue-400">
                         <div className="flex items-start justify-between mb-2">
                           <span className="font-medium text-sm">{request.agent_id}</span>
-                          <Badge className={priorityColors[request.urgency as keyof typeof priorityColors] || priorityColors.medium}>
+                          <Badge className={priorityVariants[request.urgency as keyof typeof priorityVariants] || priorityVariants.medium}>
                             {request.urgency}
                           </Badge>
                         </div>
@@ -542,7 +542,7 @@ export const DeepAgentStatus: React.FC<DeepAgentStatusProps> = ({
                       <Card key={escalation.id} className="p-4 border-l-4 border-red-400">
                         <div className="flex items-start justify-between mb-2">
                           <span className="font-medium text-sm">{escalation.agent_id}</span>
-                          <Badge className={priorityColors[escalation.severity]}>
+                          <Badge className={priorityVariants[escalation.severity]}>
                             {escalation.severity}
                           </Badge>
                         </div>

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react'
 import { BellRing, Sparkles } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -95,7 +95,16 @@ export const AINotificationsCenter: React.FC = () => {
   const [error, setError] = useState<string | null>(null)
   const [persistenceEnabled, setPersistenceEnabled] = useState(false)
 
-  const loadNotifications = async (refresh: boolean) => {
+  // Use ref to track if component is mounted
+  const isMountedRef = useRef(true)
+
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false
+    }
+  }, [])
+
+  const loadNotifications = useCallback(async (refresh: boolean) => {
     setError(null)
     setIsLoading(true)
     if (refresh) {
@@ -115,24 +124,31 @@ export const AINotificationsCenter: React.FC = () => {
       const payload = (await response.json()) as AINotificationEnvelope
       const list = Array.isArray(payload.notifications) ? payload.notifications : []
 
-      setNotifications(
-        list.map((entry) => ({
-          ...entry,
-          severity: normalizeSeverity(entry.severity),
-          status: normalizeStatus(entry.status),
-        })),
-      )
-      setPersistenceEnabled(Boolean(payload.persistence_enabled))
+      // Only update state if component is still mounted
+      if (isMountedRef.current) {
+        setNotifications(
+          list.map((entry) => ({
+            ...entry,
+            severity: normalizeSeverity(entry.severity),
+            status: normalizeStatus(entry.status),
+          })),
+        )
+        setPersistenceEnabled(Boolean(payload.persistence_enabled))
+      }
     } catch (loadError) {
       console.error('Failed to load AI notifications:', loadError)
-      setError(loadError instanceof Error ? loadError.message : 'Unable to load notifications.')
+      if (isMountedRef.current) {
+        setError(loadError instanceof Error ? loadError.message : 'Unable to load notifications.')
+      }
     } finally {
-      setIsLoading(false)
-      if (refresh) {
-        setIsRefreshing(false)
+      if (isMountedRef.current) {
+        setIsLoading(false)
+        if (refresh) {
+          setIsRefreshing(false)
+        }
       }
     }
-  }
+  }, [])
 
   const setAcknowledged = async (notificationId: number, acknowledged: boolean) => {
     try {
@@ -158,7 +174,7 @@ export const AINotificationsCenter: React.FC = () => {
 
   useEffect(() => {
     void loadNotifications(true)
-  }, [])
+  }, [loadNotifications])
 
   const sortedNotifications = useMemo(() => {
     const severityRank: Record<string, number> = {
