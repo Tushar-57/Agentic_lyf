@@ -167,10 +167,10 @@ class BaseAgent(ABC):
             self.graph = workflow
             self._compiled_graph = workflow.compile(checkpointer=self.checkpointer)
             
-            logger.info(f"Initialized LangGraph workflow for agent {self.agent_id}")
+            logger.info("workflow_initialized", f"Initialized LangGraph workflow for agent {self.agent_id}", {"agent_id": self.agent_id})
             
         except Exception as e:
-            logger.error(f"Failed to initialize graph for agent {self.agent_id}: {e}")
+            logger.error("graph_init_failed", f"Failed to initialize graph for agent {self.agent_id}", {"agent_id": self.agent_id}, error=e)
             raise
     
     async def _process_input(self, state: AgentState) -> AgentState:
@@ -201,7 +201,7 @@ class BaseAgent(ABC):
             return state
             
         except Exception as e:
-            logger.error(f"Error processing input in agent {self.agent_id}: {e}")
+            logger.error("process_input_error", f"Error processing input in agent {self.agent_id}", {"agent_id": self.agent_id}, error=e)
             # Production error tracking - captures exception context for monitoring
             self._track_error("process_input", e, {"input_length": len(str(user_input))})
             state["status"] = AgentStatus.ERROR
@@ -223,7 +223,7 @@ class BaseAgent(ABC):
             return state
             
         except Exception as e:
-            logger.error(f"Error executing task in agent {self.agent_id}: {e}")
+            logger.error("execute_task_error", f"Error executing task in agent {self.agent_id}", {"agent_id": self.agent_id}, error=e)
             # Production error tracking - captures exception context for monitoring
             self._track_error("execute_task", e, {"task_type": state.get("task_type", "unknown")})
             state["status"] = AgentStatus.ERROR
@@ -251,7 +251,7 @@ class BaseAgent(ABC):
             return state
             
         except Exception as e:
-            logger.error(f"Error generating response in agent {self.agent_id}: {e}")
+            logger.error("response_generation_error", f"Error generating response in agent {self.agent_id}", {"agent_id": self.agent_id}, error=e)
             state["status"] = AgentStatus.ERROR
             return state
     
@@ -277,7 +277,7 @@ class BaseAgent(ABC):
             return state
             
         except Exception as e:
-            logger.error(f"Error handling handoff in agent {self.agent_id}: {e}")
+            logger.error("handoff_error", f"Error handling handoff in agent {self.agent_id}", {"agent_id": self.agent_id}, error=e)
             state["status"] = AgentStatus.ERROR
             return state
     
@@ -297,7 +297,7 @@ class BaseAgent(ABC):
             return "execute"
             
         except Exception as e:
-            logger.error(f"Error determining handoff in agent {self.agent_id}: {e}")
+            logger.error("determine_handoff_error", f"Error determining handoff in agent {self.agent_id}", {"agent_id": self.agent_id}, error=e)
             return "execute"
     
     def _track_error(self, operation: str, error: Exception, context: Dict[str, Any] = None) -> None:
@@ -318,7 +318,7 @@ class BaseAgent(ABC):
         # Log structured error for production monitoring integration
         # In production, integrate with Sentry, Datadog, or similar:
         # import sentry_sdk; sentry_sdk.capture_exception(error, extras=error_context)
-        logger.error(f"Agent error tracked: {error_context}")
+        logger.error("error_tracked", f"Agent error tracked", {"error_context": error_context})
 
     @abstractmethod
     async def execute(self, state: AgentState) -> str:
@@ -376,7 +376,7 @@ class BaseAgent(ABC):
             }
             
         except Exception as e:
-            logger.error(f"Error processing message in agent {self.agent_id}: {e}")
+            logger.error("message_processing_error", f"Error processing message in agent {self.agent_id}", {"agent_id": self.agent_id}, error=e)
             return {
                 "response": f"Error processing request: {str(e)}",
                 "status": AgentStatus.ERROR.value,
@@ -388,14 +388,14 @@ class BaseAgent(ABC):
     def add_capability(self, capability: AgentCapability) -> None:
         """Add a new capability to the agent."""
         self.capabilities.append(capability)
-        logger.info(f"Added capability '{capability.name}' to agent {self.agent_id}")
+        logger.info("capability_added", f"Added capability '{capability.name}' to agent {self.agent_id}", {"agent_id": self.agent_id, "capability": capability.name})
     
     def remove_capability(self, capability_name: str) -> bool:
         """Remove a capability from the agent."""
         for i, cap in enumerate(self.capabilities):
             if cap.name == capability_name:
                 del self.capabilities[i]
-                logger.info(f"Removed capability '{capability_name}' from agent {self.agent_id}")
+                logger.info("capability_removed", f"Removed capability '{capability_name}' from agent {self.agent_id}", {"agent_id": self.agent_id, "capability": capability_name})
                 return True
         return False
     
@@ -420,14 +420,14 @@ class BaseAgent(ABC):
         )
         
         self.message_history.append(message)
-        logger.debug(f"Agent {self.agent_id} sent message to {to_agent}: {message_type}")
+        logger.debug("message_sent", f"Agent {self.agent_id} sent message to {to_agent}", {"from_agent": self.agent_id, "to_agent": to_agent, "message_type": message_type})
         
         return message
     
     def receive_message(self, message: AgentMessage) -> None:
         """Receive a message from another agent."""
         self.message_history.append(message)
-        logger.debug(f"Agent {self.agent_id} received message from {message.from_agent}: {message.message_type}")
+        logger.debug("message_received", f"Agent {self.agent_id} received message from {message.from_agent}", {"agent_id": self.agent_id, "from_agent": message.from_agent, "message_type": message.message_type})
     
     def get_status_info(self) -> Dict[str, Any]:
         """Get current status information."""
@@ -445,9 +445,9 @@ class BaseAgent(ABC):
     def update_context(self, key: str, value: Any) -> None:
         """Update agent context."""
         self.context[key] = value
-        logger.debug(f"Updated context for agent {self.agent_id}: {key}")
+        logger.debug("context_updated", f"Updated context for agent {self.agent_id}", {"agent_id": self.agent_id, "key": key})
     
     def clear_context(self) -> None:
         """Clear agent context."""
         self.context.clear()
-        logger.debug(f"Cleared context for agent {self.agent_id}")
+        logger.debug("context_cleared", f"Cleared context for agent {self.agent_id}", {"agent_id": self.agent_id})

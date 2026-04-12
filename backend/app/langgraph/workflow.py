@@ -46,15 +46,15 @@ class AgentGraphWorkflow:
                 node_callable = agent if callable(agent) else None
 
             if node_callable is None:
-                logger.warning(f"Agent {node_name} has no callable execute() - skipping")
+                logger.warning("no_callable_execute", f"Agent {node_name} has no callable execute() - skipping", {"node_name": node_name})
                 continue
 
             # Wrap the node callable to ensure proper state handling for LangGraph
             def create_node_wrapper(agent_execute_method):
                 async def node_wrapper(state):
-                    logger.debug(f"Node wrapper calling {agent_execute_method} with state: {state}")
+                    logger.debug("node_wrapper_calling", f"Node wrapper calling {agent_execute_method}", {"method": str(agent_execute_method)})
                     result = await agent_execute_method(state)
-                    logger.debug(f"Node wrapper received result: {result}")
+                    logger.debug("node_wrapper_result", f"Node wrapper received result", {"result_type": type(result).__name__})
                     return result
                 return node_wrapper
             
@@ -68,14 +68,14 @@ class AgentGraphWorkflow:
         agent_names = list(self.graph.nodes.keys())
         orchestrator_name = None
         
-        logger.info(f"Searching for orchestrator in agent names: {agent_names}")
+        logger.info("searching_orchestrator", f"Searching for orchestrator", {"agent_names": agent_names})
         
         # Find the orchestrator among registered agents
         for name in agent_names:
-            logger.debug(f"Checking agent name: {name}, contains orchestrator: {'orchestrator' in name.lower()}")
+            logger.debug("checking_agent", f"Checking agent: {name}", {"name": name, "is_orchestrator": "orchestrator" in name.lower()})
             if "orchestrator" in name.lower():
                 orchestrator_name = name
-                logger.info(f"Found orchestrator: {orchestrator_name}")
+                logger.info("found_orchestrator", f"Found orchestrator: {orchestrator_name}", {"name": orchestrator_name})
                 break
         
         if orchestrator_name:
@@ -168,7 +168,7 @@ class AgentGraphWorkflow:
                 logger.info("Response formatting completed successfully")
                 
             except Exception as e:
-                logger.warning(f"LLM formatting failed: {e}, using fallback formatting")
+                logger.warning("llm_formatting_failed", "LLM formatting failed, using fallback formatting", error=e)
                 # Fallback: basic formatting
                 enhanced_response = self._apply_basic_formatting(raw_response_text, final_agent, user_input)
                 state["response"] = enhanced_response
@@ -177,7 +177,7 @@ class AgentGraphWorkflow:
             return state
             
         except Exception as e:
-            logger.error(f"Error in format_response_final_step: {e}")
+            logger.error("format_response_error", "Error in format_response_final_step", error=e)
             # Return original state if formatting fails
             return state
 

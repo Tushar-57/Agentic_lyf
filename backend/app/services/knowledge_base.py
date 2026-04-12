@@ -382,7 +382,7 @@ class KnowledgeBaseService:
 
         persisted = self.knowledge_db_store.upsert_entry(entry)
         if not persisted:
-            logger.warning("Failed to persist knowledge entry to DB: %s", entry.entry_id)
+            logger.warning("persist_entry_failed", f"Failed to persist knowledge entry to DB: {entry.entry_id}", {"entry_id": entry.entry_id})
 
     def _remove_entry_from_db(self, entry_id: str) -> None:
         if not self.knowledge_db_store or not self.knowledge_db_store.is_available:
@@ -481,11 +481,9 @@ class KnowledgeBaseService:
                 persisted_count += 1
 
         logger.info(
-            "Knowledge DB reconciliation persisted %d/%d entries for user %s (db_before=%d)",
-            persisted_count,
-            len(vector_entries),
-            self.user_id,
-            existing_count,
+            "knowledge_db_reconciliation",
+            f"Knowledge DB reconciliation persisted {persisted_count}/{len(vector_entries)} entries",
+            {"persisted": persisted_count, "total": len(vector_entries), "user_id": self.user_id, "db_before": existing_count}
         )
 
     def _merge_preference_payload(
@@ -525,7 +523,7 @@ class KnowledgeBaseService:
         try:
             return UserPreferences(**merged)
         except (TypeError, ValueError) as exc:
-            logger.warning("Failed to hydrate user preferences from preference DB store: %s", exc)
+            logger.warning("hydrate_preferences_failed", "Failed to hydrate user preferences from preference DB store", error=exc)
             return None
 
     def _persist_preferences_to_db_store(self, preferences: UserPreferences) -> bool:
@@ -711,6 +709,7 @@ class KnowledgeBaseService:
         normalized_tags = [" ".join(str(tag).split()).strip().lower() for tag in (tags or []) if str(tag).strip()]
 
         context_payload = metadata_payload.get("context") if isinstance(metadata_payload.get("context"), dict) else {}
+
         source = str(context_payload.get("source", "")).strip().lower()
         source_action = str(context_payload.get("source_action", "")).strip().lower()
 
@@ -886,7 +885,11 @@ class KnowledgeBaseService:
         if strategy_category == "habit_snapshot":
             add_fact(facts, "Snapshot", normalized_title or "Habit progress snapshot")
             add_fact(facts, "Captured at", context_payload.get("captured_at") or metadata_payload.get("captured_at"))
-            add_fact(facts, "Total habits", context_payload.get("total_habits") or metadata_payload.get("total_habits"))
+            add_fact(
+                facts,
+                "Total habits",
+                context_payload.get("total_habits") or metadata_payload.get("total_habits"),
+            )
             add_fact(
                 facts,
                 "Completion events",
@@ -1212,9 +1215,9 @@ class KnowledgeBaseService:
         if cached_embedding:
             if EMBEDDING_LOG_ENABLED:
                 embedding_logger.info(
-                    "EMBEDDING_QUERY_CACHE_HIT user=%s key=%s",
-                    self.user_id,
-                    query_key,
+                    "embedding_cache_hit",
+                    f"EMBEDDING_QUERY_CACHE_HIT user={self.user_id} key={query_key}",
+                    {"user_id": self.user_id, "query_key": query_key}
                 )
             return list(cached_embedding)
 
@@ -1222,10 +1225,9 @@ class KnowledgeBaseService:
         self._cache_embedding_value(query_key, generated_embedding)
         if EMBEDDING_LOG_ENABLED:
             embedding_logger.info(
-                "EMBEDDING_QUERY_GENERATED user=%s key=%s dimension=%d",
-                self.user_id,
-                query_key,
-                len(generated_embedding),
+                "embedding_generated",
+                f"EMBEDDING_QUERY_GENERATED user={self.user_id} key={query_key}",
+                {"user_id": self.user_id, "query_key": query_key, "dimension": len(generated_embedding)}
             )
         return generated_embedding
 
@@ -1403,7 +1405,7 @@ class KnowledgeBaseService:
             return formatted_results
             
         except Exception as e:
-            logger.warning(f"Knowledge search failed: {e}")
+            logger.warning("search_knowledge", f"Knowledge search failed: {e}")
             # Return empty results for graceful degradation
             return []
     
@@ -1461,6 +1463,7 @@ class KnowledgeBaseService:
 
             # Extract sync_event_key for deterministic ID generation (prevents duplicates)
             context_from_meta = metadata_payload.get("context") if isinstance(metadata_payload.get("context"), dict) else {}
+
             sync_event_key = str(context_from_meta.get("sync_event_key", "")).strip()
             
             # Generate deterministic ID based on sync_event_key, or random UUID if no sync key
@@ -1545,7 +1548,7 @@ class KnowledgeBaseService:
             # Get existing entry
             existing_entry = self.vector_store.get_entry(entry_id)
             if not existing_entry:
-                logger.warning(f"Entry {entry_id} not found for update")
+                logger.warning("entry_not_found", f"Entry {entry_id} not found for update")
                 return None
             
             # Update fields
@@ -1628,9 +1631,9 @@ class KnowledgeBaseService:
             self._remove_indexed_sync_event_for_entry(entry_id)
             success = self.vector_store.remove_entry(entry_id)
             if success:
-                logger.info(f"Deleted knowledge entry: {entry_id}")
+                logger.info("entry_deleted", f"Deleted knowledge entry: {entry_id}")
             else:
-                logger.warning(f"Entry {entry_id} not found for deletion")
+                logger.warning("entry_not_found", f"Entry {entry_id} not found for deletion")
 
             self._remove_entry_from_db(entry_id)
             self._invalidate_get_all_cache()
@@ -1660,7 +1663,7 @@ class KnowledgeBaseService:
             self._remove_entries_from_db(normalized_ids)
             self._invalidate_get_all_cache()
             if removed > 0:
-                logger.info("Deleted %d knowledge entries in bulk", removed)
+                logger.info("bulk_delete", f"Deleted {removed} knowledge entries in bulk", {"count": removed})
             return removed
         except Exception as e:
             logger.error("delete_entries", "Failed to bulk delete knowledge entries", error=e)
@@ -1706,13 +1709,14 @@ class KnowledgeBaseService:
                 
                 filtered_results.append(result)
             
-            logger.debug(f"Knowledge search returned {len(filtered_results)} results")
+            logger.debug("search_complete", f"Knowledge search returned {len(filtered_results)} results", {"result_count": len(filtered_results)})
             return filtered_results
+            
         except ImportError as e:
-            logger.warning(f"Knowledge search failed due to missing dependencies: {e}")
+            logger.warning("search_failed", "Knowledge search failed due to missing dependencies", error=e)
             return []
         except Exception as e:
-            logger.warning(f"Failed to search knowledge base: {e}")
+            logger.warning("search_failed", "Failed to search knowledge base", error=e)
             return []
     
     async def _fetch_all_entries_fresh(self) -> List[KnowledgeEntry]:
@@ -1816,7 +1820,7 @@ class KnowledgeBaseService:
                                     prefs_dict[section] = value
                             loaded_from_knowledge = True
                     except Exception as snapshot_error:
-                        logger.warning(f"Failed to parse system preference snapshot: {snapshot_error}")
+                        logger.warning("parse_failed", "Failed to parse system preference snapshot", error=snapshot_error)
 
                 sectioned_pref_entries = [
                     entry
@@ -1888,14 +1892,14 @@ class KnowledgeBaseService:
                             prefs_dict["journal"]["check_in_time"] = availability.get("checkIn", {}).get("preferredTime", "09:00")
 
                 if loaded_from_knowledge:
-                    logger.info(f"Loaded user preferences from knowledge base: {prefs_dict}")
+                    logger.info("preferences_loaded", "Loaded user preferences from knowledge base")
                     prefs_dict["user_id"] = self.user_id
                     self._user_preferences = UserPreferences(**prefs_dict)
                     self._persist_preferences_to_db_store(self._user_preferences)
                     return self._user_preferences
 
             except Exception as e:
-                logger.warning(f"Failed to load preferences from knowledge base: {e}, trying JSON file")
+                logger.warning("load_failed", "Failed to load preferences from knowledge base, trying JSON file", error=e)
 
             # Fallback to JSON file
             prefs_path = os.path.join(os.path.dirname(__file__), "user_preferences.json")
@@ -1911,7 +1915,7 @@ class KnowledgeBaseService:
                         self._persist_preferences_to_db_store(self._user_preferences)
                         return self._user_preferences
             except Exception as e:
-                logger.warning(f"Failed to parse stored preferences: {e}. Using defaults.")
+                logger.warning("parse_failed", "Failed to parse stored preferences. Using defaults.", error=e)
 
             self._user_preferences = UserPreferences(user_id=self.user_id)
             self._persist_preferences_to_db_store(self._user_preferences)
@@ -1922,7 +1926,7 @@ class KnowledgeBaseService:
 
     def _is_time_entry_entry(self, entry: KnowledgeEntry) -> bool:
         """Detect AlterEgo time entries that are persisted as interaction events."""
-        metadata = entry.metadata or {}
+        metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
         context = metadata.get("context") if isinstance(metadata.get("context"), dict) else {}
 
         category = str(entry.category or "").strip().lower()
@@ -2013,7 +2017,6 @@ class KnowledgeBaseService:
             entry_type=resolved_entry_type,
             semantic_sections=semantic_sections,
         )
-
         self._log_embedding_payload(
             action="backfill",
             embedding_key=embedding_key,
@@ -2042,7 +2045,7 @@ class KnowledgeBaseService:
         self._index_sync_event_key(updated_entry)
         self._cache_entry_embedding(updated_entry)
 
-        logger.info("Backfilled missing embedding for entry %s", entry.entry_id)
+        logger.info("backfill_embedding", f"Backfilled missing embedding for entry {entry.entry_id}", {"entry_id": entry.entry_id})
         return generated_embedding
 
     def _infer_interaction_category_and_sub_type(
@@ -2393,8 +2396,9 @@ class KnowledgeBaseService:
         return f"Interaction with {title_source}"
 
     def _extract_sync_event_key(self, entry: KnowledgeEntry) -> str:
-        metadata = entry.metadata or {}
+        metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
         context = metadata.get("context") if isinstance(metadata.get("context"), dict) else {}
+
         return str(context.get("sync_event_key", "")).strip()
 
     def _index_sync_event_key(self, entry: KnowledgeEntry) -> None:
@@ -2500,7 +2504,7 @@ class KnowledgeBaseService:
             success = await self.update_user_preferences(updated_prefs)
             
             if success:
-                logger.info(f"Added user preference: {category}.{key} = {value}")
+                logger.info("preference_added", f"Added user preference: {category}.{key}", {"category": category, "key": key})
             
             return success
         except Exception as e:
@@ -2527,7 +2531,7 @@ class KnowledgeBaseService:
             
             # Check if category and key exist
             if category not in prefs_dict or key not in prefs_dict[category]:
-                logger.warning(f"Preference {category}.{key} not found for removal")
+                logger.warning("preference_not_found", f"Preference {category}.{key} not found for removal", {"category": category, "key": key})
                 return False
             
             # Remove the preference
@@ -2543,7 +2547,7 @@ class KnowledgeBaseService:
             success = await self.update_user_preferences(updated_prefs)
             
             if success:
-                logger.info(f"Removed user preference: {category}.{key}")
+                logger.info("preference_removed", f"Removed user preference: {category}.{key}", {"category": category, "key": key})
             
             return success
         except Exception as e:
@@ -2615,7 +2619,11 @@ class KnowledgeBaseService:
         if not isinstance(prefs_payload, dict):
             return False
 
-        existing_entries = await self.get_all_entries(entry_type=KnowledgeEntryType.PREFERENCE)
+        existing_entries = await self.get_all_entries(
+            category="system",
+            entry_type=KnowledgeEntryType.PREFERENCE,
+        )
+
         section_entries: Dict[str, KnowledgeEntry] = {}
         legacy_entries: List[KnowledgeEntry] = []
 
@@ -2702,7 +2710,7 @@ class KnowledgeBaseService:
             if self.preference_db_store and self.preference_db_store.is_available:
                 persisted_to_db = self._persist_preferences_to_db_store(self._user_preferences)
                 if not persisted_to_db:
-                    logger.warning("Falling back to legacy knowledge-entry preference persistence")
+                    logger.warning("preference_persistence_fallback", "Falling back to legacy knowledge-entry preference persistence")
 
             sectioned_persistence_ok = await self._sync_preference_snapshot_entries(self._user_preferences)
             if persisted_to_db and sectioned_persistence_ok:
@@ -2863,7 +2871,7 @@ class KnowledgeBaseService:
             # Use LLM to extract preferences from the conversation
             llm_service = await get_llm_service()
             if not llm_service:
-                logger.warning("LLM service not available for preference extraction")
+                logger.warning("llm_unavailable", "LLM service not available for preference extraction")
                 return []
             
             # Simplified and faster preference extraction prompt
@@ -2957,12 +2965,12 @@ class KnowledgeBaseService:
                             if entry:
                                 created_entries.append(entry)
                 
-                logger.info(f"Successfully extracted {len(created_entries)} preferences")
+                logger.info("extraction_complete", f"Successfully extracted {len(created_entries)} preferences", {"count": len(created_entries)})
                 return created_entries
                 
             except (json.JSONDecodeError, KeyError, TypeError) as e:
-                logger.warning(f"Failed to parse preferences extraction response: {e}")
-                logger.debug(f"Response content: {response.content}")
+                logger.warning("parse_failed", "Failed to parse preferences extraction response", error=e)
+                logger.debug("response_content", "Response content", {"content": str(response.content)[:500]})
                 return []
                 
         except Exception as e:
@@ -3105,8 +3113,9 @@ class KnowledgeBaseService:
         # Deduplicate by entry_id, keeping highest score
         seen_ids: Dict[str, KnowledgeSearchResult] = {}
         for result in results:
-            entry_id = result.entry.entry_id
-            if entry_id not in seen_ids or result.similarity_score > seen_ids[entry_id].similarity_score:
+            entry = result.entry if hasattr(result, "entry") else None
+            entry_id = getattr(entry, "entry_id", None)
+            if entry_id not in seen_ids or float(result.similarity_score) > float(seen_ids[entry_id].similarity_score):
                 seen_ids[entry_id] = result
         
         unique_results = list(seen_ids.values())
@@ -3448,7 +3457,7 @@ class KnowledgeBaseService:
             raw_duration = context_payload.get("duration_minutes")
             if raw_duration is None and context_payload.get("duration_seconds") is not None:
                 try:
-                    raw_duration = float(context_payload.get("duration_seconds", 0.0)) / 60.0
+                    raw_duration = float(context_payload.get("duration_seconds")) / 60.0
                 except (TypeError, ValueError):
                     raw_duration = None
 
@@ -3612,12 +3621,9 @@ class KnowledgeBaseService:
         filtered_records = self._filter_records_for_window(time_records, window)
 
         logger.info(
-            "[TIME_WINDOW_DEBUG] query=%s window=%s total_interactions=%d time_records=%d filtered=%d",
-            user_input[:50],
-            window.get("key", "unknown"),
-            len(interaction_entries),
-            len(time_records),
-            len(filtered_records),
+            "time_window_debug",
+            f"[TIME_WINDOW_DEBUG] query={user_input[:50]} window={window.get('key', 'unknown')}",
+            {"total_interactions": len(interaction_entries), "time_records": len(time_records), "filtered": len(filtered_records)}
         )
 
         summary = self._summarize_time_window_records(filtered_records, window)
@@ -3672,11 +3678,11 @@ class KnowledgeBaseService:
         pref_payload = preferences.model_dump()
         snippets: List[Dict[str, Any]] = []
 
-        for category, values in pref_payload.items():
-            if category == "user_id" or not isinstance(values, dict):
+        for section, value in pref_payload.items():
+            if section == "user_id" or not isinstance(value, dict):
                 continue
 
-            for key, value in values.items():
+            for key, value in value.items():
                 if str(key).startswith("__"):
                     continue
 
@@ -3687,7 +3693,7 @@ class KnowledgeBaseService:
                 snippets.append(
                     {
                         "content": f"{key}: {normalized_value}",
-                        "category": category,
+                        "category": section,
                         "metadata": {"source": "preference_store", "key": key},
                         "similarity": 0.5,
                     }
@@ -3969,18 +3975,14 @@ class KnowledgeBaseService:
             ]
 
             logger.info(
-                "[RAG_CONTEXT] agent=%s query=%s total=%d interactions=%d preferences=%d patterns=%d recent_time_entries=%d window=%s window_entries=%s fallback=%s top_matches=%s",
-                agent_type,
-                self._truncate_for_log(user_input, 150),
-                len(combined_results),
-                len(interaction_results),
-                len(preference_results),
-                len(pattern_results),
-                len(recent_time_entries),
-                time_window_summary.get("window_key"),
-                time_window_summary.get("entry_count"),
-                fallback_modes or ["none"],
-                top_matches,
+                "rag_context",
+                f"[RAG_CONTEXT] agent={agent_type} query={self._truncate_for_log(user_input, 150)}",
+                {"total": len(combined_results), "interactions": len(interaction_results), 
+                 "preferences": len(preference_results), "patterns": len(pattern_results),
+                 "recent_time_entries": len(recent_time_entries), 
+                 "window": time_window_summary.get("window_key"),
+                 "window_entries": time_window_summary.get("entry_count"),
+                 "fallback": fallback_modes or ["none"], "top_matches": top_matches}
             )
             
             return context
@@ -4173,7 +4175,7 @@ class KnowledgeBaseService:
             self._embedding_cache_loaded = False
             self._embedding_provider_cooldown_until = 0.0
             self._clear_entries_from_db()
-            logger.info("Cleared all knowledge base entries")
+            logger.info("knowledge_base_cleared", "Cleared all knowledge base entries")
             return True
         except Exception as e:
             logger.error("clear_all", "Failed to clear knowledge base", error=e)
@@ -4203,9 +4205,10 @@ class KnowledgeBaseService:
                     embedding = await self._ensure_embedding_for_visualization_entry(entry)
                 except Exception as embedding_error:
                     logger.warning(
-                        "Skipping entry %s in visualization due to invalid embedding: %s",
-                        entry.entry_id,
-                        embedding_error,
+                        "visualization_embedding_error",
+                        f"Skipping entry {entry.entry_id} in visualization due to invalid embedding",
+                        {"entry_id": entry.entry_id},
+                        error=embedding_error
                     )
                     continue
 
@@ -4240,7 +4243,7 @@ class KnowledgeBaseService:
                         raise ValueError("PCA returned non-finite coordinates")
 
                     positions_3d = pca_positions
-                    logger.info("Using PCA for dimensionality reduction")
+                    logger.info("pca_projection_used", "Using PCA for dimensionality reduction")
                 except Exception as pca_error:
                     pca_error_reason = str(pca_error)
                     positions_3d = np.empty((0, 3), dtype=float)
@@ -4253,7 +4256,7 @@ class KnowledgeBaseService:
                     raise ValueError("Embedding dimension is below 3; cannot project to 3D")
 
                 if pca_error_reason:
-                    logger.warning("PCA projection unavailable: %s. Using direct semantic projection.", pca_error_reason)
+                    logger.warning("pca_unavailable", f"PCA projection unavailable: {pca_error_reason}. Using direct semantic projection.")
 
                 positions_3d = embeddings_array[:, :3].copy()
                 centroid = positions_3d.mean(axis=0)
@@ -4264,7 +4267,7 @@ class KnowledgeBaseService:
                 if max_raw_norm > 0:
                     positions_3d = (positions_3d / max_raw_norm) * 35.0
 
-                logger.info("Using direct semantic projection from embedding dimensions")
+                logger.info("direct_projection_used", "Using direct semantic projection from embedding dimensions")
 
             positions_array = np.array(positions_3d, dtype=float)
 
@@ -4326,7 +4329,7 @@ class KnowledgeBaseService:
                 }
                 embeddings_data.append(visualization_data)
             
-            logger.info(f"Generated visualization data for {len(embeddings_data)} embeddings")
+            logger.info("visualization_complete", f"Generated visualization data for {len(embeddings_data)} embeddings", {"count": len(embeddings_data)})
             return embeddings_data
             
         except Exception as e:
@@ -4352,9 +4355,10 @@ class KnowledgeBaseService:
                 embedding = await self._ensure_embedding_for_visualization_entry(entry)
             except Exception as embedding_error:
                 logger.warning(
-                    "Embedding details for %s have no valid vector: %s",
-                    entry_id,
-                    embedding_error,
+                    "embedding_details_invalid",
+                    f"Embedding details for {entry_id} have no valid vector",
+                    {"entry_id": entry_id},
+                    error=embedding_error
                 )
                 embedding = None
             

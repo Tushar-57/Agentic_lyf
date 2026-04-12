@@ -59,7 +59,7 @@ class SchedulingAgent(BaseAgent):
         try:
             user_input = state.get("user_input", "")
             state_context = state.get("context", {}) if isinstance(state, dict) else {}
-            logger.info(f"SchedulingAgent processing: {user_input}")
+            logger.info("scheduling_processing", "SchedulingAgent processing", {"input_preview": user_input[:100]})
             
             # Get contextual knowledge from knowledge base
             contextual_knowledge = await self.knowledge_base.get_contextual_knowledge_for_agent(
@@ -103,7 +103,7 @@ class SchedulingAgent(BaseAgent):
             }
             
         except Exception as e:
-            logger.error(f"SchedulingAgent execution failed: {e}")
+            logger.error("scheduling_execution_failed", "SchedulingAgent execution failed", error=e)
             return {
                 "response": "I'm having trouble with scheduling right now. Please try again later.",
                 "reasoning": {"error": str(e), "agent_type": "scheduling"}
@@ -144,7 +144,7 @@ class SchedulingAgent(BaseAgent):
             return response.content
             
         except Exception as e:
-            logger.error(f"Scheduling failed: {e}")
+            logger.error("scheduling_failed", "Scheduling failed", error=e)
             return "📅 I'd be happy to help you with scheduling! What specific appointment or event would you like to schedule?"
     
     async def _handle_time_optimization(self, user_input: str, context: Dict[str, Any]) -> str:
@@ -182,7 +182,7 @@ class SchedulingAgent(BaseAgent):
             return response.content
             
         except Exception as e:
-            logger.error(f"Time optimization failed: {e}")
+            logger.error("time_optimization_failed", "Time optimization failed", error=e)
             return "⏰ I'd be happy to help you optimize your time! What specific areas of your schedule would you like to improve?"
     
     async def _handle_appointment_booking(self, user_input: str, context: Dict[str, Any]) -> str:
@@ -220,7 +220,7 @@ class SchedulingAgent(BaseAgent):
             return response.content
             
         except Exception as e:
-            logger.error(f"Appointment booking failed: {e}")
+            logger.error("appointment_booking_failed", "Appointment booking failed", error=e)
             return "📞 I'd be happy to help you book appointments! What type of appointment do you need to schedule?"
     
     async def _handle_general_scheduling(self, user_input: str, context: Dict[str, Any]) -> str:
@@ -252,7 +252,7 @@ class SchedulingAgent(BaseAgent):
             return response.content
             
         except Exception as e:
-            logger.error(f"General scheduling failed: {e}")
+            logger.error("general_scheduling_failed", "General scheduling failed", error=e)
             return "📅 I'm here to help with your scheduling needs! What would you like assistance with?"
     
     def _build_schedule_context(self, context: Dict[str, Any], schedule_type: str) -> str:

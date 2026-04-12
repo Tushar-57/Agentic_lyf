@@ -126,7 +126,7 @@ class LLMService:
             self._initialized = True
             logger.info("LLM service initialized successfully")
         except Exception as e:
-            logger.error(f"Failed to initialize LLM service: {e}")
+            logger.error("init_failed", "Failed to initialize LLM service", error=e)
             raise
 
     def has_valid_provider_config(self, config: Optional[LLMConfig] = None) -> bool:
@@ -158,7 +158,7 @@ class LLMService:
             logger.info("LLM service reloaded from latest configuration")
             return True
         except Exception as reload_error:
-            logger.error(f"Failed to reload LLM service from config: {reload_error}")
+            logger.error("reload_failed", "Failed to reload LLM service from config", error=reload_error)
             return False
 
     async def _resolve_provider(self):
@@ -209,7 +209,7 @@ class LLMService:
 
             return response
         except Exception as e:
-            logger.error(f"Chat completion failed: {e}")
+            logger.error("completion_failed", "Chat completion failed", error=e)
             normalized = _normalize_provider_exception(e)
             raise normalized from e
     
@@ -238,7 +238,7 @@ class LLMService:
                     _prepare_conversation_text_for_log("".join(streamed_parts)),
                 )
         except Exception as e:
-            logger.error(f"Streaming chat completion failed: {e}")
+            logger.error("streaming_failed", "Streaming chat completion failed", error=e)
             normalized = _normalize_provider_exception(e)
             raise normalized from e
     
@@ -248,7 +248,7 @@ class LLMService:
             provider = await self._resolve_provider()
             return await provider.generate_embedding(request)
         except Exception as e:
-            logger.error(f"Embedding generation failed: {e}")
+            logger.error("embedding_failed", "Embedding generation failed", error=e)
             normalized = _normalize_provider_exception(e)
             raise normalized from e
     
@@ -301,7 +301,7 @@ class LLMService:
             else:
                 return []
         except Exception as e:
-            logger.error(f"Failed to get available models: {e}")
+            logger.error("models_failed", "Failed to get available models", error=e)
             return []
     
     async def update_config(self, new_config: LLMConfig) -> bool:
@@ -320,7 +320,7 @@ class LLMService:
             logger.info("LLM service configuration updated successfully")
             return True
         except Exception as e:
-            logger.error(f"Failed to update LLM service configuration: {e}")
+            logger.error("update_config_failed", "Failed to update LLM service configuration", error=e)
             return False
     
     async def shutdown(self) -> None:

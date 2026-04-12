@@ -357,7 +357,7 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
             return updated_state
             
         except Exception as e:
-            logger.error(f"Error in enhanced orchestrator execution: {e}", exc_info=True)
+            logger.error("execution_error", "Error in enhanced orchestrator execution", error=e)
             return {
                 **normalized_state,
                 "response": f"I apologize, but I encountered an error while processing your request: {str(e)}",
@@ -532,7 +532,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
             return plan
             
         except Exception as e:
-            logger.error(f"Error creating strategic plan: {e}")
+            logger.error("plan_creation_error", "Error creating strategic plan", error=e)
             return None
 
     def _generate_plan_steps(
@@ -764,10 +764,10 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
                 )
                 deep_state["todos"].append(todo.model_dump())
             
-            logger.info(f"Stored strategic plan with {len(plan.get('steps', []))} steps")
+            logger.info("plan_stored", f"Stored strategic plan with {len(plan.get('steps', []))} steps", {"step_count": len(plan.get('steps', []))})
             
         except Exception as e:
-            logger.error(f"Error storing plan context: {e}")
+            logger.error("store_plan_error", "Error storing plan context", error=e)
 
     async def _handle_simple_task(self, user_input: str, context: Dict[str, Any]) -> str:
         \"\"\"Handle simple tasks directly without delegation.\"\"\"
@@ -791,7 +791,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
             return response.content
             
         except Exception as e:
-            logger.error(f"Error handling simple task: {e}")
+            logger.error("simple_task_error", "Error handling simple task", error=e)
             return f"I apologize, but I encountered an error processing your request: {str(e)}"
 
     async def _delegate_to_specialist(
@@ -849,7 +849,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
             return response
             
         except Exception as e:
-            logger.error(f"Error delegating to {agent_type.value} agent: {e}")
+            logger.error("delegation_error", f"Error delegating to {agent_type.value} agent", {"agent_type": agent_type.value}, error=e)
             return f"I apologize, but I encountered an error while working with the {agent_type.value} specialist: {str(e)}"
 
     async def _orchestrate_complex_workflow(
@@ -878,10 +878,10 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
                 
                 # Check if dependencies are met
                 if dependencies and not all(dep_id in [s["id"] for s in executed_steps] for dep_id in dependencies):
-                    logger.warning(f"Skipping step {step_id}: dependencies not met")
+                    logger.warning("step_skipped", f"Skipping step {step_id}: dependencies not met", {"step_id": step_id})
                     continue
                 
-                logger.info(f"Executing step {step_id}: {action} ({agent_name})")
+                logger.info("step_executing", f"Executing step {step_id}: {action}", {"step_id": step_id, "action": action, "agent": agent_name})
                 
                 try:
                     if agent_name == "orchestrator":
@@ -900,7 +900,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
                     executed_steps.append(step)
                     
                 except Exception as e:
-                    logger.error(f"Error executing step {step_id}: {e}")
+                    logger.error("step_execution_error", f"Error executing step {step_id}", {"step_id": step_id}, error=e)
                     results.append({
                         "step": step_id,
                         "action": action,
@@ -929,7 +929,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
             return synthesis
             
         except Exception as e:
-            logger.error(f"Error orchestrating complex workflow: {e}")
+            logger.error("workflow_error", "Error orchestrating complex workflow", error=e)
             return f"I apologize, but I encountered an error while coordinating the workflow: {str(e)}"
 
     async def _execute_orchestrator_step(
@@ -1045,7 +1045,7 @@ Focus on value and practical guidance for the user.\"\"\"
             return response.content
             
         except Exception as e:
-            logger.error(f"Error synthesizing workflow results: {e}")
+            logger.error("synthesis_error", "Error synthesizing workflow results", error=e)
             
             # Fallback to simple concatenation
             successful_results = [r for r in results if r['status'] == 'completed']
@@ -1105,7 +1105,7 @@ Focus on value and practical guidance for the user.\"\"\"
             deep_state["files"][insights_filename] = json.dumps(existing_insights, indent=2)
             
         except Exception as e:
-            logger.error(f"Error storing interaction insights: {e}")
+            logger.error("insights_storage_error", "Error storing interaction insights", error=e)
 
 
 # Create global instance for use in workflows

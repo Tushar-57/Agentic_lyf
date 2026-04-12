@@ -191,7 +191,7 @@ Remember: Your role is to be a trusted health partner that combines AI insights 
         try:
             user_input = state.get("user_input", "")
             state_context = state.get("context", {}) if isinstance(state, dict) else {}
-            logger.info(f"HealthAgent executing request: {user_input}")
+            logger.info("health_agent_executing", "HealthAgent executing request", {"input_preview": user_input[:100]})
             
             # Get relevant context from knowledge base
             context = await self.knowledge_base.get_contextual_knowledge_for_agent(
@@ -201,12 +201,12 @@ Remember: Your role is to be a trusted health partner that combines AI insights 
             )
             merged_context = self._merge_with_routing_context(context, state_context)
             
-            logger.info(f"Retrieved context with keys: {list(merged_context.keys())}")
-            logger.info(f"Context details: {merged_context}")
+            logger.info("context_retrieved", f"Retrieved context with keys: {list(merged_context.keys())}", {"context_keys": list(merged_context.keys())})
+            logger.info("context_details", "Context details", {"context": str(merged_context)[:500]})
             
             # Determine intent more intelligently
             intent = self._classify_user_intent(user_input)
-            logger.info(f"Classified intent as: {intent}")
+            logger.info("intent_classified", f"Classified intent as: {intent}", {"intent": intent})
             
             # Route to appropriate handler based on intent
             if intent == "preference_sharing":
@@ -257,7 +257,7 @@ Remember: Your role is to be a trusted health partner that combines AI insights 
             }
             
         except Exception as e:
-            logger.error(f"Health agent execution failed: {e}")
+            logger.error("execution_failed", "Health agent execution failed", error=e)
             return {
                 "response": "I apologize, but I encountered an issue while processing your health request. Please try again.",
                 "reasoning": {
@@ -348,21 +348,21 @@ Remember: Your role is to be a trusted health partner that combines AI insights 
             )
             
             response = await llm_service.chat_completion(request)
-            logger.info(f"Generated preference acknowledgment: {response.content[:200]}...")
+            logger.info("acknowledgment_generated", "Generated preference acknowledgment", {"preview": response.content[:200]})
             return response.content
             
         except Exception as e:
-            logger.error(f"Preference sharing handling failed: {e}")
+            logger.error("preference_handling_failed", "Preference sharing handling failed", error=e)
             return "Thank you for sharing that with me! I've noted your preference and it will help me provide better personalized advice in the future."
 
     async def _handle_meal_planning(self, user_input: str, context: Dict[str, Any]) -> str:
         """Handle explicit meal planning requests with personalized context."""
         try:
-            logger.info(f"Handling meal planning with context: {context}")
+            logger.info("meal_planning_start", "Handling meal planning", {"context_keys": list(context.keys())})
             
             # Build context-aware prompt
             context_info = self._build_meal_planning_context(context)
-            logger.info(f"Built context info: {context_info}")
+            logger.info("context_info_built", "Built context info", {"info": str(context_info)[:500]})
             
             meal_planning_prompt = f"""
             You are a health and nutrition expert helping with meal planning. The user has specifically requested meal planning assistance.
@@ -389,11 +389,11 @@ Remember: Your role is to be a trusted health partner that combines AI insights 
             )
             
             response = await llm_service.chat_completion(request)
-            logger.info(f"Generated meal planning response: {response.content[:200]}...")
+            logger.info("meal_planning_response", "Generated meal planning response", {"preview": response.content[:200]})
             return response.content
             
         except Exception as e:
-            logger.error(f"Meal planning failed: {e}")
+            logger.error("meal_planning_failed", "Meal planning failed", error=e)
             return "I'd be happy to help with meal planning! Could you tell me about your dietary preferences, any restrictions, and your health goals?"
 
     def _get_existing_preferences(self, context: Dict[str, Any]) -> str:
@@ -483,7 +483,7 @@ Remember: Your role is to be a trusted health partner that combines AI insights 
             return response.content
             
         except Exception as e:
-            logger.error(f"General health query failed: {e}")
+            logger.error("health_query_failed", "General health query failed", error=e)
             return "I'm here to help with your health and wellness goals. How can I assist you today?"
 
     def _extract_knowledge_sources(self, context: Dict[str, Any]) -> List[Dict[str, Any]]:

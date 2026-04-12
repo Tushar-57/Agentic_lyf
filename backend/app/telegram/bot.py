@@ -47,7 +47,7 @@ class TelegramBot:
         user = update.effective_user
         chat_id = update.effective_chat.id
         
-        logger.info(f"New user started bot: {user.username} (ID: {user.id})")
+        logger.info("new_user", f"New user started bot: {user.username}", {"username": user.username, "user_id": user.id})
         
         # Initialize user session
         self.user_sessions[chat_id] = {
@@ -163,7 +163,7 @@ Need more help? Just ask! 😊
             )
             
         except Exception as e:
-            logger.error(f"Profile command failed: {e}")
+            logger.error("profile_command_failed", "Profile command failed", error=e)
             await update.message.reply_text(
                 "❌ Error loading profile. Please try again later."
             )
@@ -199,7 +199,7 @@ All systems operational! 🚀
             )
             
         except Exception as e:
-            logger.error(f"Status command failed: {e}")
+            logger.error("status_command_failed", "Status command failed", error=e)
             await update.message.reply_text("❌ Error checking status.")
     
     async def reset_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -265,7 +265,7 @@ All systems operational! 🚀
                 return
             
             # Execute orchestrator workflow
-            logger.info(f"Processing Telegram message from {chat_id}: {user_message[:50]}...")
+            logger.info("processing_message", f"Processing Telegram message", {"chat_id": chat_id, "message_preview": user_message[:50]})
             
             # Call the orchestrator's process_message method
             result = await orchestrator.process_message(
@@ -317,7 +317,7 @@ All systems operational! 🚀
                     await update.message.reply_text(formatted_response)
             
         except Exception as e:
-            logger.error(f"Message handling failed: {e}", exc_info=True)
+            logger.error("message_handling_failed", "Message handling failed", error=e)
             await update.message.reply_text(
                 "❌ Oops! Something went wrong processing your message.\n\n"
                 "Please try again or use /help for assistance."
@@ -325,7 +325,7 @@ All systems operational! 🚀
     
     async def error_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle errors."""
-        logger.error(f"Telegram bot error: {context.error}", exc_info=context.error)
+        logger.error("bot_error", "Telegram bot error", {"error": str(context.error)}, error=context.error if isinstance(context.error, Exception) else None)
         
         if update and update.effective_message:
             await update.effective_message.reply_text(

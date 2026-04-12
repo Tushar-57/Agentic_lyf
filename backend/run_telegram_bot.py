@@ -39,14 +39,14 @@ async def main():
             logger.info("3. Set TELEGRAM_ENABLED=true in .env")
             return
     except ValueError as e:
-        logger.error(f"Configuration error: {e}")
+        logger.error("config_error", "Configuration error", error=e)
         return
     
     # Initialize agent factory
     logger.info("Initializing agent factory...")
     agent_factory = AgentFactory()
     await agent_factory.initialize_agent_ecosystem()
-    logger.info(f"✅ Initialized {len(agent_factory.registry.get_all_agents())} agents")
+    logger.info("agents_initialized", f"Initialized {len(agent_factory.registry.get_all_agents())} agents", {"agent_count": len(agent_factory.registry.get_all_agents())})
     
     # Create and start bot
     token = TelegramConfig.get_bot_token()
@@ -58,7 +58,7 @@ async def main():
     except KeyboardInterrupt:
         logger.info("\n🛑 Received keyboard interrupt")
     except Exception as e:
-        logger.error(f"❌ Bot error: {e}", exc_info=True)
+        logger.error("bot_error", "Bot error", error=e)
     finally:
         logger.info("Shutting down...")
         await bot.stop()

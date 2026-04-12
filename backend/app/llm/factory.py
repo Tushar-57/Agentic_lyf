@@ -36,9 +36,9 @@ class LLMProviderFactory:
                 if primary_provider:
                     self._providers[self.config.provider] = primary_provider
                     self._current_provider = primary_provider
-                    logger.info(f"Initialized primary provider: {self.config.provider}")
+                    logger.info("provider_initialized", f"Initialized primary provider: {self.config.provider}", {"provider": str(self.config.provider)})
             else:
-                logger.warning(f"Primary provider {self.config.provider} has invalid configuration, skipping initialization")
+                logger.warning("invalid_config", f"Primary provider {self.config.provider} has invalid configuration, skipping initialization", {"provider": str(self.config.provider)})
             
             # Initialize fallback provider if enabled and has valid config
             if (self.config.fallback_enabled and 
@@ -50,14 +50,14 @@ class LLMProviderFactory:
                 if fallback_provider:
                     self._providers[self.config.fallback_provider] = fallback_provider
                     self._fallback_provider = fallback_provider
-                    logger.info(f"Initialized fallback provider: {self.config.fallback_provider}")
+                    logger.info("provider_initialized", f"Initialized fallback provider: {self.config.fallback_provider}", {"provider": str(self.config.fallback_provider), "type": "fallback"})
                     
                     # If primary provider failed but fallback succeeded, use fallback as current
                     if not self._current_provider:
                         self._current_provider = fallback_provider
-                        logger.info(f"Using fallback provider as current: {self.config.fallback_provider}")
+                        logger.info("fallback_active", f"Using fallback provider as current: {self.config.fallback_provider}", {"provider": str(self.config.fallback_provider)})
             elif self.config.fallback_enabled and self.config.fallback_provider:
-                logger.warning(f"Fallback provider {self.config.fallback_provider} has invalid configuration, skipping initialization")
+                logger.warning("invalid_config", f"Fallback provider {self.config.fallback_provider} has invalid configuration, skipping initialization", {"provider": str(self.config.fallback_provider)})
             
             # If no providers were initialized, create a minimal setup
             if not self._current_provider:
@@ -65,7 +65,7 @@ class LLMProviderFactory:
                 # Don't raise an exception, just log a warning
                 
         except Exception as e:
-            logger.error(f"Failed to initialize LLM providers: {e}")
+            logger.error("initialization_failed", "Failed to initialize LLM providers", error=e)
             raise
     
     def _get_provider_class(self, provider_type: LLMProviderType):
@@ -122,7 +122,7 @@ class LLMProviderFactory:
                     temperature=provider_config_dict["temperature"]
                 )
             else:
-                logger.error(f"Unsupported provider type: {provider_type}")
+                logger.error("unsupported_provider", f"Unsupported provider type: {provider_type}", {"provider_type": str(provider_type)})
                 return None
             
             # Initialize the provider only if not skipping health check
@@ -132,7 +132,7 @@ class LLMProviderFactory:
             return provider
             
         except Exception as e:
-            logger.error(f"Failed to create provider {provider_type}: {e}")
+            logger.error("provider_creation_failed", f"Failed to create provider {provider_type}", {"provider_type": str(provider_type)}, error=e)
             return None
     
     async def get_provider(self) -> BaseLLMProvider:
@@ -148,7 +148,7 @@ class LLMProviderFactory:
         # Try fallback if primary is unhealthy
         if (self._fallback_provider and 
             self._is_provider_healthy(self._fallback_provider.provider_type)):
-            logger.warning(f"Switching to fallback provider: {self._fallback_provider.provider_type}")
+            logger.warning("switching_fallback", f"Switching to fallback provider: {self._fallback_provider.provider_type}", {"fallback_provider": str(self._fallback_provider.provider_type)})
             self._current_provider = self._fallback_provider
             return self._current_provider
         
@@ -163,7 +163,7 @@ class LLMProviderFactory:
                 if health.is_healthy:
                     return self._current_provider
             except Exception as e:
-                logger.error(f"Failed to reinitialize primary provider: {e}")
+                logger.error("reinitialize_failed", "Failed to reinitialize primary provider", error=e)
         
         raise RuntimeError("LLM_PROVIDER_UNAVAILABLE: No healthy providers available")
     
@@ -187,10 +187,10 @@ class LLMProviderFactory:
                     self._last_health_check[provider_type] = now
                     
                     if not health.is_healthy:
-                        logger.warning(f"Provider {provider_type} is unhealthy: {health.error}")
+                        logger.warning("provider_unhealthy", f"Provider {provider_type} is unhealthy: {health.error}", {"provider_type": str(provider_type), "error": health.error})
                     
                 except asyncio.TimeoutError:
-                    logger.error(f"Health check timeout for provider: {provider_type}")
+                    logger.error("health_check_timeout", f"Health check timeout for provider: {provider_type}", {"provider_type": str(provider_type)})
                     self._health_status[provider_type] = HealthCheckResult(
                         is_healthy=False,
                         provider_type=provider_type,
@@ -199,7 +199,7 @@ class LLMProviderFactory:
                     self._last_health_check[provider_type] = now
                     
                 except Exception as e:
-                    logger.error(f"Health check failed for provider {provider_type}: {e}")
+                    logger.error("health_check_failed", f"Health check failed for provider {provider_type}", {"provider_type": str(provider_type)}, error=e)
                     self._health_status[provider_type] = HealthCheckResult(
                         is_healthy=False,
                         provider_type=provider_type,
@@ -227,7 +227,7 @@ class LLMProviderFactory:
             if skip_health_check:
                 # Skip health check and just switch
                 self._current_provider = provider
-                logger.info(f"Switched to provider: {provider_type} (health check skipped)")
+                logger.info("provider_switched", f"Switched to provider: {provider_type} (health check skipped)", {"provider_type": str(provider_type), "health_check": "skipped"})
                 return True
             else:
                 # Check health
@@ -237,14 +237,14 @@ class LLMProviderFactory:
                 
                 if health.is_healthy:
                     self._current_provider = provider
-                    logger.info(f"Switched to provider: {provider_type}")
+                    logger.info("provider_switched", f"Switched to provider: {provider_type}", {"provider_type": str(provider_type)})
                     return True
                 else:
-                    logger.error(f"Cannot switch to unhealthy provider {provider_type}: {health.error}")
+                    logger.error("unhealthy_provider", f"Cannot switch to unhealthy provider {provider_type}: {health.error}", {"provider_type": str(provider_type), "error": health.error})
                     return False
                 
         except Exception as e:
-            logger.error(f"Failed to switch to provider {provider_type}: {e}")
+            logger.error("switch_failed", f"Failed to switch to provider {provider_type}", {"provider_type": str(provider_type)}, error=e)
             return False
     
     def get_health_status(self) -> Dict[LLMProviderType, HealthCheckResult]:

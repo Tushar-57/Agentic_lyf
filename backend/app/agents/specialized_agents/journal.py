@@ -59,7 +59,7 @@ class JournalAgent(BaseAgent):
         try:
             user_input = state.get("user_input", "")
             state_context = state.get("context", {}) if isinstance(state, dict) else {}
-            logger.info(f"JournalAgent processing: {user_input}")
+            logger.info("journal_processing", "JournalAgent processing", {"input_preview": user_input[:100]})
             
             # Get contextual knowledge from knowledge base
             contextual_knowledge = await self.knowledge_base.get_contextual_knowledge_for_agent(
@@ -105,7 +105,7 @@ class JournalAgent(BaseAgent):
             }
             
         except Exception as e:
-            logger.error(f"JournalAgent execution failed: {e}")
+            logger.error("journal_execution_failed", "JournalAgent execution failed", error=e)
             return {
                 "response": "I'm having trouble with journaling assistance right now. Please try again later.",
                 "reasoning": {"error": str(e), "agent_type": "journal"}
@@ -146,7 +146,7 @@ class JournalAgent(BaseAgent):
             return response.content
             
         except Exception as e:
-            logger.error(f"Daily journaling failed: {e}")
+            logger.error("daily_journaling_failed", "Daily journaling failed", error=e)
             return "📝 I'd be happy to guide your journaling practice! What would you like to reflect on today?"
     
     async def _handle_goal_tracking(self, user_input: str, context: Dict[str, Any]) -> str:
@@ -184,7 +184,7 @@ class JournalAgent(BaseAgent):
             return response.content
             
         except Exception as e:
-            logger.error(f"Goal tracking failed: {e}")
+            logger.error("goal_tracking_failed", "Goal tracking failed", error=e)
             return "🎯 I'd love to help you track your goals! What goals are you working on?"
     
     async def _handle_habit_tracking(self, user_input: str, context: Dict[str, Any]) -> str:
@@ -222,7 +222,7 @@ class JournalAgent(BaseAgent):
             return response.content
             
         except Exception as e:
-            logger.error(f"Habit tracking failed: {e}")
+            logger.error("habit_tracking_failed", "Habit tracking failed", error=e)
             return "🔄 I'd be happy to help with your habit tracking! What habits are you building?"
     
     async def _handle_emotional_wellness(self, user_input: str, context: Dict[str, Any]) -> str:
@@ -261,7 +261,7 @@ class JournalAgent(BaseAgent):
             return response.content
             
         except Exception as e:
-            logger.error(f"Emotional wellness failed: {e}")
+            logger.error("emotional_wellness_failed", "Emotional wellness failed", error=e)
             return "💙 I'm here to support your emotional wellness! How are you feeling today?"
     
     async def _handle_general_journaling(self, user_input: str, context: Dict[str, Any]) -> str:
@@ -293,7 +293,7 @@ class JournalAgent(BaseAgent):
             return response.content
             
         except Exception as e:
-            logger.error(f"General journaling failed: {e}")
+            logger.error("general_journaling_failed", "General journaling failed", error=e)
             return "📖 I'm here to support your journaling journey! What would you like to explore?"
     
     def _build_journal_context(self, context: Dict[str, Any], journal_type: str) -> str:

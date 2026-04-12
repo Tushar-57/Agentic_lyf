@@ -77,7 +77,7 @@ class CommunicationProtocol:
         )
         
         self._message_handlers[agent_id][message_type] = handler
-        logger.debug(f"Registered handler for {message_type} on agent {agent_id}")
+        logger.debug("handler_registered", f"Registered handler for {message_type} on agent {agent_id}", {"message_type": str(message_type), "agent_id": agent_id})
     
     def unregister_handler(self, agent_id: str, message_type: MessageType) -> bool:
         """
@@ -93,7 +93,7 @@ class CommunicationProtocol:
         if agent_id in self._message_handlers:
             if message_type in self._message_handlers[agent_id]:
                 del self._message_handlers[agent_id][message_type]
-                logger.debug(f"Unregistered handler for {message_type} on agent {agent_id}")
+                logger.debug("handler_unregistered", f"Unregistered handler for {message_type} on agent {agent_id}", {"message_type": str(message_type), "agent_id": agent_id})
                 return True
         return False
     
@@ -143,7 +143,7 @@ class CommunicationProtocol:
             # Queue the message for processing
             self._message_queue.append(message)
             
-            logger.debug(f"Queued message from {from_agent} to {to_agent}: {message_type}")
+            logger.debug("message_queued", f"Queued message from {from_agent} to {to_agent}", {"from_agent": from_agent, "to_agent": to_agent, "message_type": str(message_type)})
             
             # If response is required, wait for it
             if requires_response:
@@ -152,7 +152,7 @@ class CommunicationProtocol:
             return None
             
         except Exception as e:
-            logger.error(f"Failed to send message from {from_agent} to {to_agent}: {e}")
+            logger.error("send_failed", "Failed to send message", {"from_agent": from_agent, "to_agent": to_agent}, error=e)
             return None
     
     async def broadcast_message(self,
@@ -206,11 +206,11 @@ class CommunicationProtocol:
                 )
                 sent_count += 1
             
-            logger.debug(f"Broadcast message from {from_agent} to {sent_count} agents")
+            logger.debug("message_broadcast", f"Broadcast message from {from_agent} to {sent_count} agents", {"from_agent": from_agent, "recipient_count": sent_count})
             return sent_count
             
         except Exception as e:
-            logger.error(f"Failed to broadcast message from {from_agent}: {e}")
+            logger.error("broadcast_failed", "Failed to broadcast message", {"from_agent": from_agent}, error=e)
             return 0
     
     async def handoff_task(self,
@@ -252,14 +252,14 @@ class CommunicationProtocol:
             )
             
             if response and response.metadata.get("handoff_accepted", False):
-                logger.info(f"Task successfully handed off from {from_agent} to {to_agent}")
+                logger.info("handoff_success", f"Task successfully handed off from {from_agent} to {to_agent}", {"from_agent": from_agent, "to_agent": to_agent})
                 return True
             else:
-                logger.warning(f"Task handoff rejected from {from_agent} to {to_agent}")
+                logger.warning("handoff_rejected", f"Task handoff rejected from {from_agent} to {to_agent}", {"from_agent": from_agent, "to_agent": to_agent})
                 return False
                 
         except Exception as e:
-            logger.error(f"Failed to handoff task from {from_agent} to {to_agent}: {e}")
+            logger.error("handoff_failed", "Failed to handoff task", {"from_agent": from_agent, "to_agent": to_agent}, error=e)
             return False
     
     async def request_capability(self,
@@ -284,7 +284,7 @@ class CommunicationProtocol:
             capable_agents = self.registry.get_agents_by_capability(capability_name)
             
             if not capable_agents:
-                logger.warning(f"No agents found with capability: {capability_name}")
+                logger.warning("no_capable_agents", f"No agents found with capability: {capability_name}", {"capability": capability_name})
                 return None
             
             # Choose target agent
@@ -298,7 +298,7 @@ class CommunicationProtocol:
                     target_agent = available_agents[0].agent_id
             
             if not target_agent:
-                logger.warning(f"No available agents for capability: {capability_name}")
+                logger.warning("no_available_agents", f"No available agents for capability: {capability_name}", {"capability": capability_name})
                 return None
             
             # Send the capability request
@@ -322,7 +322,7 @@ class CommunicationProtocol:
             return response
             
         except Exception as e:
-            logger.error(f"Failed to request capability {capability_name} from {from_agent}: {e}")
+            logger.error("capability_request_failed", "Failed to request capability", {"capability": capability_name, "from_agent": from_agent}, error=e)
             return None
     
     async def _wait_for_response(self, original_message: AgentMessage, timeout_seconds: int) -> Optional[AgentMessage]:
@@ -345,11 +345,11 @@ class CommunicationProtocol:
             
             # Timeout occurred
             self._pending_responses.pop(original_message.message_id, None)
-            logger.warning(f"Response timeout for message {original_message.message_id}")
+            logger.warning("response_timeout", f"Response timeout for message {original_message.message_id}", {"message_id": original_message.message_id})
             return None
             
         except Exception as e:
-            logger.error(f"Error waiting for response: {e}")
+            logger.error("wait_error", "Error waiting for response", error=e)
             return None
     
     async def _process_message_queue(self) -> None:
@@ -367,7 +367,7 @@ class CommunicationProtocol:
                 await self._handle_message(message)
                 
             except Exception as e:
-                logger.error(f"Error processing message queue: {e}")
+                logger.error("queue_processing_error", "Error processing message queue", error=e)
                 await asyncio.sleep(1)  # Prevent tight error loop
     
     async def _handle_message(self, message: AgentMessage) -> None:
@@ -376,7 +376,7 @@ class CommunicationProtocol:
             # Check if target agent exists
             target_agent = self.registry.get_agent(message.to_agent)
             if not target_agent:
-                logger.warning(f"Target agent {message.to_agent} not found for message")
+                logger.warning("target_not_found", f"Target agent {message.to_agent} not found for message", {"agent_id": message.to_agent})
                 return
             
             # Deliver message to target agent
@@ -403,7 +403,7 @@ class CommunicationProtocol:
                         self._conversation_threads[thread_id].append(response)
                     
                 except Exception as e:
-                    logger.error(f"Error in message handler for {message.to_agent}: {e}")
+                    logger.error("handler_error", "Error in message handler", {"agent_id": message.to_agent}, error=e)
                     
                     # Send error response if required
                     if message.requires_response:
@@ -418,10 +418,10 @@ class CommunicationProtocol:
                         response_key = f"response_to_{message.message_id}"
                         self._pending_responses[response_key] = error_response
             
-            logger.debug(f"Processed message from {message.from_agent} to {message.to_agent}")
+            logger.debug("message_processed", f"Processed message from {message.from_agent} to {message.to_agent}", {"from_agent": message.from_agent, "to_agent": message.to_agent})
             
         except Exception as e:
-            logger.error(f"Error handling message: {e}")
+            logger.error("message_handling_error", "Error handling message", error=e)
     
     async def start(self) -> None:
         """Start the communication protocol."""

@@ -59,7 +59,7 @@ class FinanceAgent(BaseAgent):
         try:
             user_input = state.get("user_input", "")
             state_context = state.get("context", {}) if isinstance(state, dict) else {}
-            logger.info(f"FinanceAgent processing: {user_input}")
+            logger.info("finance_processing", "FinanceAgent processing", {"input_preview": user_input[:100]})
             
             # Get contextual knowledge from knowledge base
             contextual_knowledge = await self.knowledge_base.get_contextual_knowledge_for_agent(
@@ -104,7 +104,7 @@ class FinanceAgent(BaseAgent):
             }
             
         except Exception as e:
-            logger.error(f"FinanceAgent execution failed: {e}")
+            logger.error("finance_execution_failed", "FinanceAgent execution failed", error=e)
             return {
                 "response": "I'm having trouble with financial analysis right now. Please try again later.",
                 "reasoning": {"error": str(e), "agent_type": "finance"}
@@ -144,7 +144,7 @@ class FinanceAgent(BaseAgent):
             return response.content
             
         except Exception as e:
-            logger.error(f"Budget planning failed: {e}")
+            logger.error("budget_planning_failed", "Budget planning failed", error=e)
             return "💰 I'd be happy to help you create a personalized budget! Could you share your monthly income and main expense categories so I can provide specific recommendations?"
     
     async def _handle_expense_tracking(self, user_input: str, context: Dict[str, Any]) -> str:
@@ -182,7 +182,7 @@ class FinanceAgent(BaseAgent):
             return response.content
             
         except Exception as e:
-            logger.error(f"Expense tracking failed: {e}")
+            logger.error("expense_tracking_failed", "Expense tracking failed", error=e)
             return "📊 I'd be happy to help you track your expenses effectively! What specific expense categories would you like to focus on?"
     
     async def _handle_financial_goals(self, user_input: str, context: Dict[str, Any]) -> str:
@@ -220,7 +220,7 @@ class FinanceAgent(BaseAgent):
             return response.content
             
         except Exception as e:
-            logger.error(f"Financial goals failed: {e}")
+            logger.error("financial_goals_failed", "Financial goals failed", error=e)
             return "🎯 I'd be happy to help you set and achieve your financial goals! What specific financial objectives do you have in mind?"
     
     async def _handle_general_finance(self, user_input: str, context: Dict[str, Any]) -> str:
@@ -252,7 +252,7 @@ class FinanceAgent(BaseAgent):
             return response.content
             
         except Exception as e:
-            logger.error(f"General finance failed: {e}")
+            logger.error("general_finance_failed", "General finance failed", error=e)
             return "💰 I'm here to help with your financial questions! What specific financial topic would you like assistance with?"
     
     def _build_finance_context(self, context: Dict[str, Any], finance_type: str) -> str:

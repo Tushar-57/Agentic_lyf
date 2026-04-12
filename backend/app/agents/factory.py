@@ -385,19 +385,19 @@ class AgentFactory:
             
             created_agents = []
             failed_agents = []
-            logger.info(f"Initializing agents: {[a.value for a in agent_types]}")
+            logger.info("initializing_agents", f"Initializing agents", {"agent_types": [a.value for a in agent_types]})
             # Create agents
             for agent_type in agent_types:
-                logger.info(f"Creating agent of type: {agent_type}")
+                logger.info("creating_agent", f"Creating agent of type: {agent_type}", {"agent_type": agent_type.value})
                 agent = await self.create_agent(agent_type)
                 if agent:
-                    logger.info(f"Agent created: {agent.agent_id} ({agent_type.value})")
+                    logger.info("agent_created", f"Agent created: {agent.agent_id}", {"agent_id": agent.agent_id, "agent_type": agent_type.value})
                     created_agents.append(agent.agent_id)
                 else:
-                    logger.error(f"Agent creation failed for type: {agent_type}")
+                    logger.error("agent_creation_failed", f"Agent creation failed for type: {agent_type}", {"agent_type": agent_type.value})
                     failed_agents.append(agent_type.value)
             # Log all agents in registry after creation
-            logger.info(f"All agent IDs in registry after init: {self.registry.get_agent_ids()}")
+            logger.info("registry_status", f"All agent IDs in registry after init", {"agent_ids": self.registry.get_agent_ids()})
             # Start communication protocol
             await start_communication_protocol()
             
@@ -414,11 +414,11 @@ class AgentFactory:
                 "timestamp": datetime.utcnow().isoformat()
             }
             
-            logger.info(f"Agent ecosystem initialized: {len(created_agents)} agents created")
+            logger.info("ecosystem_initialized", f"Agent ecosystem initialized", {"agent_count": len(created_agents)})
             return result
             
         except Exception as e:
-            logger.error(f"Failed to initialize agent ecosystem: {e}")
+            logger.error("ecosystem_init_failed", "Failed to initialize agent ecosystem", error=e)
             return {
                 "status": "failed",
                 "error": str(e),
@@ -451,7 +451,7 @@ class AgentFactory:
             return result
             
         except Exception as e:
-            logger.error(f"Failed to shutdown agent ecosystem: {e}")
+            logger.error("ecosystem_shutdown_failed", "Failed to shutdown agent ecosystem", error=e)
             return {
                 "status": "failed",
                 "error": str(e),
@@ -473,7 +473,7 @@ class AgentFactory:
             }
             
         except Exception as e:
-            logger.error(f"Error getting ecosystem status: {e}")
+            logger.error("ecosystem_status_error", "Error getting ecosystem status", error=e)
             return {
                 "error": str(e),
                 "timestamp": datetime.utcnow().isoformat()
@@ -501,7 +501,7 @@ class AgentFactory:
             return agent
             
         except Exception as e:
-            logger.error(f"Error creating custom agent: {e}")
+            logger.error("custom_agent_error", "Error creating custom agent", error=e)
             return None
     
     def is_initialized(self) -> bool:

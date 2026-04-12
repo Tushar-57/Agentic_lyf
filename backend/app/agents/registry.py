@@ -34,7 +34,7 @@ class AgentRegistry:
         """
         try:
             if agent.agent_id in self._agents:
-                logger.warning(f"Agent {agent.agent_id} already registered")
+                logger.warning("agent_already_registered", f"Agent {agent.agent_id} already registered", {"agent_id": agent.agent_id})
                 return False
             
             # Register the agent
@@ -49,11 +49,11 @@ class AgentRegistry:
             if agent.agent_type == AgentType.ORCHESTRATOR:
                 self._orchestrator_agent = agent
             
-            logger.info(f"Registered agent: {agent.agent_id} ({agent.agent_type.value})")
+            logger.info("agent_registered", f"Registered agent: {agent.agent_id} ({agent.agent_type.value})", {"agent_id": agent.agent_id, "agent_type": agent.agent_type.value})
             return True
             
         except Exception as e:
-            logger.error(f"Failed to register agent {agent.agent_id}: {e}")
+            logger.error("register_failed", f"Failed to register agent {agent.agent_id}", {"agent_id": agent.agent_id}, error=e)
             return False
     
     def unregister_agent(self, agent_id: str) -> bool:
@@ -68,7 +68,7 @@ class AgentRegistry:
         """
         try:
             if agent_id not in self._agents:
-                logger.warning(f"Agent {agent_id} not found for unregistration")
+                logger.warning("agent_not_found", f"Agent {agent_id} not found for unregistration", {"agent_id": agent_id})
                 return False
             
             agent = self._agents[agent_id]
@@ -89,11 +89,11 @@ class AgentRegistry:
             if agent.agent_type == AgentType.ORCHESTRATOR:
                 self._orchestrator_agent = None
             
-            logger.info(f"Unregistered agent: {agent_id}")
+            logger.info("agent_unregistered", f"Unregistered agent: {agent_id}", {"agent_id": agent_id})
             return True
             
         except Exception as e:
-            logger.error(f"Failed to unregister agent {agent_id}: {e}")
+            logger.error("unregister_failed", f"Failed to unregister agent {agent_id}", {"agent_id": agent_id}, error=e)
             return False
     
     def get_agent(self, agent_id: str) -> Optional[BaseAgent]:
@@ -232,7 +232,7 @@ class AgentRegistry:
             return candidate_agents[0][0]
             
         except Exception as e:
-            logger.error(f"Error finding best agent for task: {e}")
+            logger.error("find_agent_error", "Error finding best agent for task", error=e)
             return None
     
     def route_message(self, message: AgentMessage) -> bool:
@@ -248,15 +248,15 @@ class AgentRegistry:
         try:
             target_agent = self.get_agent(message.to_agent)
             if not target_agent:
-                logger.warning(f"Target agent {message.to_agent} not found for message routing")
+                logger.warning("target_not_found", f"Target agent {message.to_agent} not found for message routing", {"agent_id": message.to_agent})
                 return False
             
             target_agent.receive_message(message)
-            logger.debug(f"Routed message from {message.from_agent} to {message.to_agent}")
+            logger.debug("message_routed", f"Routed message from {message.from_agent} to {message.to_agent}", {"from_agent": message.from_agent, "to_agent": message.to_agent})
             return True
             
         except Exception as e:
-            logger.error(f"Failed to route message: {e}")
+            logger.error("route_failed", "Failed to route message", error=e)
             return False
     
     def broadcast_message(self, 
@@ -306,11 +306,11 @@ class AgentRegistry:
                 agent.receive_message(agent_message)
                 delivered_count += 1
             
-            logger.debug(f"Broadcast message to {delivered_count} agents")
+            logger.debug("message_broadcast", f"Broadcast message to {delivered_count} agents", {"recipient_count": delivered_count})
             return delivered_count
             
         except Exception as e:
-            logger.error(f"Failed to broadcast message: {e}")
+            logger.error("broadcast_failed", "Failed to broadcast message", error=e)
             return 0
     
     def get_registry_stats(self) -> Dict[str, Any]:
@@ -356,7 +356,7 @@ class AgentRegistry:
             }
             
         except Exception as e:
-            logger.error(f"Failed to get registry stats: {e}")
+            logger.error("stats_failed", "Failed to get registry stats", error=e)
             return {}
     
     def health_check(self) -> Dict[str, Any]:
@@ -399,7 +399,7 @@ class AgentRegistry:
             }
             
         except Exception as e:
-            logger.error(f"Failed to perform health check: {e}")
+            logger.error("health_check_failed", "Failed to perform health check", error=e)
             return {"error": str(e), "timestamp": datetime.utcnow().isoformat()}
     
     def cleanup_stale_agents(self, max_idle_hours: int = 24) -> int:
@@ -429,12 +429,12 @@ class AgentRegistry:
                     cleanup_count += 1
             
             if cleanup_count > 0:
-                logger.info(f"Cleaned up {cleanup_count} stale agents")
+                logger.info("cleanup_complete", f"Cleaned up {cleanup_count} stale agents", {"count": cleanup_count})
             
             return cleanup_count
             
         except Exception as e:
-            logger.error(f"Failed to cleanup stale agents: {e}")
+            logger.error("cleanup_failed", "Failed to cleanup stale agents", error=e)
             return 0
     
     def get_all_agents(self) -> List[BaseAgent]:

@@ -151,7 +151,7 @@ class OrchestratorAgent(BaseAgent):
                 agent_id = state.get("agent", self.agent_id)
             else:
                 # Fallback for other types
-                logger.warning(f"Unexpected state type: {type(state)}, treating as empty input")
+                logger.warning("unexpected_state_type", f"Unexpected state type: {type(state).__name__}, treating as empty input", {"state_type": type(state).__name__})
                 user_input = str(state) if state else ""
                 context = {}
                 conversation_id = None
@@ -173,7 +173,7 @@ class OrchestratorAgent(BaseAgent):
                 else:
                     user_preferences_dict = {}
             except Exception as e:
-                logger.warning(f"Failed to parse stored preferences: {e}. Using defaults.")
+                logger.warning("parse_preferences_failed", "Failed to parse stored preferences. Using defaults.", error=e)
                 user_preferences_dict = {}
 
             # Classify intent
@@ -305,7 +305,7 @@ class OrchestratorAgent(BaseAgent):
                                 agent_type=str(target_agent_type.value)
                             )
                         except Exception as e:
-                            logger.warning(f"Failed to record interaction: {e}")
+                            logger.warning("record_interaction_failed", "Failed to record interaction", error=e)
                     
                     logger.debug("Orchestrator.execute RETURNING delegated response to merge into state")
                     return {
@@ -349,7 +349,7 @@ class OrchestratorAgent(BaseAgent):
             }
 
         except Exception as e:
-            logger.error(f"Error in orchestrator execute: {e}", exc_info=True)
+            logger.error("execute_error", "Error in orchestrator execute", error=e)
             return {
                 "response": f"I apologize, but I encountered an error while processing your request: {str(e)}",
                 "reasoning": {
@@ -383,7 +383,7 @@ class OrchestratorAgent(BaseAgent):
                 return pattern_result
                 
         except Exception as e:
-            logger.error(f"Error in intent classification: {e}")
+            logger.error("classification_error", "Error in intent classification", error=e)
             return {"agent_type": AgentType.GENERAL, "confidence": 0.5, "reason": "Classification error"}
     
     def _pattern_based_classification(self, user_input: str) -> Dict[str, Any]:
@@ -466,7 +466,7 @@ class OrchestratorAgent(BaseAgent):
                         return {"agent_type": agent, "confidence": 0.75, "reason": response_text, "method": "llm_based"}
                 return {"agent_type": AgentType.GENERAL, "confidence": 0.4, "reason": response_text, "method": "llm_based"}
         except Exception as e:
-            logger.error(f"Error in LLM-based classification: {e}")
+            logger.error("llm_classification_error", "Error in LLM-based classification", error=e)
             return {"agent_type": AgentType.GENERAL, "confidence": 0.3, "reason": f"LLM classification error: {str(e)}"}
     
     async def _handle_directly(self, user_input: str, context: Dict[str, Any]) -> str:
@@ -482,7 +482,7 @@ class OrchestratorAgent(BaseAgent):
                         for result in knowledge_results[:3]:  # Top 3 most relevant
                             knowledge_context += f"- {result.get('content', '')}\n"
             except Exception as e:
-                logger.warning(f"Knowledge search failed: {e}")
+                logger.warning("knowledge_search_failed", "Knowledge search failed", error=e)
                 knowledge_context = ""
             
             # Create a comprehensive system prompt using the prompt library
@@ -533,7 +533,7 @@ class OrchestratorAgent(BaseAgent):
             }
             
         except Exception as e:
-            logger.error(f"Error in _handle_directly: {e}")
+            logger.error("handle_directly_error", "Error in _handle_directly", error=e)
             
             # Enhanced error response
             error_prompt = PromptLibrary.get_error_response_prompt()
@@ -586,7 +586,7 @@ class OrchestratorAgent(BaseAgent):
             # Get the target agent from registry
             target_agent = self.registry.get_agent_by_type(target_agent_type)
             if not target_agent:
-                logger.warning(f"Target agent {target_agent_type.value} not found in registry")
+                logger.warning("agent_not_found", f"Target agent {target_agent_type.value} not found in registry", {"agent_type": target_agent_type.value})
                 return None
             
             # Create agent state for delegation with user preferences
@@ -598,7 +598,7 @@ class OrchestratorAgent(BaseAgent):
                 "agent": target_agent.agent_id
             }
             
-            logger.info(f"Delegating to {target_agent_type.value} with preferences: {bool(user_preferences)}")
+            logger.info("delegating", f"Delegating to {target_agent_type.value}", {"agent_type": target_agent_type.value, "has_preferences": bool(user_preferences)})
             
             # Execute the agent
             result = await target_agent.execute(agent_state)
@@ -606,17 +606,17 @@ class OrchestratorAgent(BaseAgent):
             # Return the full result with response and reasoning
             if isinstance(result, dict):
                 if result.get("response"):
-                    logger.info(f"Successfully delegated to {target_agent_type.value} agent")
+                    logger.info("delegation_success", f"Successfully delegated to {target_agent_type.value} agent", {"agent_type": target_agent_type.value})
                     return result
             elif isinstance(result, str):
-                logger.info(f"Successfully delegated to {target_agent_type.value} agent")
+                logger.info("delegation_success", f"Successfully delegated to {target_agent_type.value} agent", {"agent_type": target_agent_type.value})
                 return {"response": result, "reasoning": None}
             
-            logger.warning(f"Invalid response from {target_agent_type.value} agent: {result}")
+            logger.warning("invalid_response", f"Invalid response from {target_agent_type.value} agent", {"agent_type": target_agent_type.value})
             return None
             
         except Exception as e:
-            logger.error(f"Error delegating to {target_agent_type.value} agent: {e}")
+            logger.error("delegation_error", f"Error delegating to {target_agent_type.value} agent", {"agent_type": target_agent_type.value}, error=e)
             return None
     
     def _get_handoff_scenario(self, agent_type: AgentType) -> str:
@@ -654,7 +654,7 @@ class OrchestratorAgent(BaseAgent):
             return enhanced_response
             
         except Exception as e:
-            logger.error(f"Error handling agent response: {e}")
+            logger.error("response_handling_error", "Error handling agent response", error=e)
             return response  # Return original response if enhancement fails
     
     async def get_system_status(self) -> Dict[str, Any]:
@@ -673,7 +673,7 @@ class OrchestratorAgent(BaseAgent):
             }
             
         except Exception as e:
-            logger.error(f"Error getting system status: {e}")
+            logger.error("system_status_error", "Error getting system status", error=e)
             return {"error": str(e), "timestamp": datetime.utcnow().isoformat()}
     
     async def handle_complex_request(self, user_input: str, required_agents: List[AgentType]) -> str:
@@ -695,7 +695,7 @@ class OrchestratorAgent(BaseAgent):
                 return "I'll handle this complex request step by step for you."
                 
         except Exception as e:
-            logger.error(f"Error handling complex request: {e}")
+            logger.error("complex_request_error", "Error handling complex request", error=e)
             return "I'll work on your request, though I may need to handle it in parts."
 
 

@@ -604,7 +604,7 @@ Response contract:
             is_follow_up = self._detect_follow_up_intent(user_input, conversation_history)
             
             if is_follow_up:
-                logger.info(f"[CONVERSATION] Detected follow-up intent for conversation {conversation_id}")
+                logger.info("follow_up_detected", f"Detected follow-up intent for conversation {conversation_id}", {"conversation_id": conversation_id})
             
             # Pull user profile + recent knowledge context so routing reflects real user data.
             user_preferences_dict: Dict[str, Any] = {}
@@ -678,8 +678,8 @@ Response contract:
             # Even for SIMPLE tasks, delegate to specialist if high-confidence intent classification
             confidence = intent_result.get("confidence", 0.0)
             
-            logger.info(f"[DELEGATION DEBUG] complexity={complexity.value}, confidence={confidence}, target_agent={target_agent}")
-            logger.info(f"[DELEGATION DEBUG] Condition check: SIMPLE={complexity == TaskComplexity.SIMPLE}, conf<0.8={confidence < 0.8}, is_GENERAL={target_agent == AgentType.GENERAL}")
+            logger.info("delegation_debug", f"complexity={complexity.value}, confidence={confidence}, target_agent={target_agent}", {"complexity": complexity.value, "confidence": confidence, "target_agent": str(target_agent)})
+            logger.info("delegation_debug", f"Condition check: SIMPLE={complexity == TaskComplexity.SIMPLE}, conf<0.8={confidence < 0.8}, is_GENERAL={target_agent == AgentType.GENERAL}")
             
             if complexity == TaskComplexity.SIMPLE and confidence < 0.8 and target_agent == AgentType.GENERAL:
                 # Only handle directly if low confidence or explicitly GENERAL
@@ -687,7 +687,7 @@ Response contract:
                 response = await self._handle_simple_task(user_input, routing_context, deep_state)
             elif complexity in [TaskComplexity.SIMPLE, TaskComplexity.MODERATE]:
                 # Delegate to specialist for domain-specific tasks
-                logger.info(f"[DELEGATION DEBUG] Taking _delegate_to_specialist path with agent={target_agent}")
+                logger.info("delegation_debug", f"Taking _delegate_to_specialist path with agent={target_agent}", {"target_agent": str(target_agent)})
                 response = await self._delegate_to_specialist(
                     target_agent,
                     user_input,
@@ -779,7 +779,7 @@ Response contract:
             }
             
         except Exception as e:
-            logger.error(f"Enhanced orchestrator execution failed: {e}")
+            logger.error("execution_failed", "Enhanced orchestrator execution failed", error=e)
             return {
                 "response": f"I apologize, but I encountered an error while processing your request: {str(e)}",
                 "reasoning": {"error": str(e)},
@@ -897,7 +897,7 @@ Response contract:
             return policy_result
                 
         except Exception as e:
-            logger.error(f"Error in intent classification: {e}", exc_info=True)
+            logger.error("classification_error", "Error in intent classification", error=e)
             return {
                 "agent_type": AgentType.GENERAL, 
                 "confidence": 0.5, 
@@ -1054,7 +1054,7 @@ Response contract:
                 }
                 
             except (json.JSONDecodeError, ValueError) as parse_error:
-                logger.warning(f"Failed to parse LLM JSON response: {parse_error}. Response: {response_text}")
+                logger.warning("parse_failed", f"Failed to parse LLM JSON response: {parse_error}", {"response_preview": response_text[:200]}, error=parse_error)
                 
                 # Fallback: scan for agent type keywords in response
                 for agent in AgentType:
@@ -1083,7 +1083,7 @@ Response contract:
                 }
                 
         except Exception as e:
-            logger.error(f"Error in LLM-based classification: {e}", exc_info=True)
+            logger.error("classification_error", "Error in LLM-based classification", error=e)
             return {
                 "agent_type": AgentType.GENERAL,
                 "confidence": 0.3,
@@ -1187,7 +1187,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
             return plan
             
         except Exception as e:
-            logger.warning(f"Failed to create strategic plan: {e}")
+            logger.warning("plan_creation_failed", "Failed to create strategic plan", error=e)
             return None
 
     def _generate_plan_steps(
@@ -1374,10 +1374,10 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
             plan_filename = f"strategic_plan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
             deep_state.files[plan_filename] = plan_content
             
-            logger.info(f"Strategic plan stored in {plan_filename}")
+            logger.info("plan_stored", f"Strategic plan stored in {plan_filename}", {"filename": plan_filename})
             
         except Exception as e:
-            logger.warning(f"Failed to store plan in context: {e}")
+            logger.warning("store_plan_failed", "Failed to store plan in context", error=e)
 
     async def _load_user_preferences(self, user_id: str) -> Dict[str, Any]:
         """Load user preferences from knowledge base."""
@@ -1385,7 +1385,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
             kb_result = await self.knowledge_base.get_user_preferences(user_id)
             return kb_result if kb_result else {}
         except Exception as e:
-            logger.warning(f"Failed to load user preferences: {e}")
+            logger.warning("load_preferences_failed", "Failed to load user preferences", error=e)
             return {}
 
     async def _handle_simple_task(
@@ -1413,7 +1413,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
             return self._normalize_completion_text(getattr(response, "content", response))
             
         except Exception as e:
-            logger.error(f"Simple task handling failed: {e}")
+            logger.error("simple_task_failed", "Simple task handling failed", error=e)
             return f"I apologize, but I encountered an error processing your request: {str(e)}"
 
     async def _delegate_to_specialist(
@@ -1431,12 +1431,12 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
             agents = registry.get_agents_by_type(normalized_agent_type)
             
             if not agents:
-                logger.warning(f"No agent found for type {normalized_agent_type}, falling back to simple handling")
+                logger.warning("agent_not_found", f"No agent found for type {normalized_agent_type}, falling back to simple handling", {"agent_type": str(normalized_agent_type)})
                 return await self._handle_simple_task(user_input, context, deep_state)
             
             # Use the first registered agent of this type
             specialist_agent = agents[0]
-            logger.info(f"[DELEGATION DEBUG] Delegating to specialist: {specialist_agent.agent_id} ({normalized_agent_type.value})")
+            logger.info("delegation_debug", f"Delegating to specialist: {specialist_agent.agent_id}", {"agent_id": specialist_agent.agent_id, "agent_type": normalized_agent_type.value})
             
             # Prepare state for delegation
             delegation_state = AgentState(
@@ -1451,7 +1451,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
             
             # Execute the specialist agent
             result = await specialist_agent.execute(delegation_state)
-            logger.info(f"[DELEGATION DEBUG] Specialist returned result type: {type(result)}")
+            logger.info("delegation_debug", f"Specialist returned result type: {type(result).__name__}", {"result_type": type(result).__name__})
             
             # Extract response
             if isinstance(result, dict):
@@ -1461,11 +1461,11 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
             else:
                 response = str(result)
             
-            logger.info(f"[DELEGATION DEBUG] Extracted response preview: {response[:200] if isinstance(response, str) else str(response)[:200]}")
+            logger.info("delegation_debug", "Extracted response preview", {"preview": response[:200] if isinstance(response, str) else str(response)[:200]})
             return response
                 
         except Exception as e:
-            logger.error(f"Specialist delegation failed: {e}")
+            logger.error("delegation_failed", "Specialist delegation failed", error=e)
             return f"I encountered an issue while delegating to the specialist: {str(e)}"
 
     async def _orchestrate_complex_workflow(
@@ -1508,7 +1508,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
             )
             
         except Exception as e:
-            logger.error(f"Complex workflow orchestration failed: {e}")
+            logger.error("workflow_failed", "Complex workflow orchestration failed", error=e)
             return f"I encountered an issue during workflow execution: {str(e)}"
 
     async def _execute_workflow_step(
@@ -1659,7 +1659,7 @@ Please create a comprehensive, well-structured response that:
             return self._normalize_completion_text(getattr(response, "content", response))
             
         except Exception as e:
-            logger.error(f"Result synthesis failed: {e}")
+            logger.error("synthesis_failed", "Result synthesis failed", error=e)
             # Fallback to simple concatenation
             results_text = "\n\n".join([
                 f"**{result['action']}:** {result['result']}" 

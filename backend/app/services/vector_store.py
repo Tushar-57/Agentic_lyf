@@ -76,11 +76,11 @@ class VectorStore:
                     self.id_to_faiss_id = data.get('id_to_faiss_id', {})
                     self.next_faiss_id = data.get('next_faiss_id', 0)
                 
-                logger.info(f"Loaded vector store with {self.index.ntotal} entries")
+                logger.info("vector_store_loaded", f"Loaded vector store with {self.index.ntotal} entries", {"entry_count": self.index.ntotal})
             else:
                 logger.info("No existing vector store found, starting fresh")
         except Exception as e:
-            logger.error(f"Failed to load vector store: {e}")
+            logger.error("load_failed", "Failed to load vector store", error=e)
             # Reset to empty state on error
             self.index = faiss.IndexFlatIP(self.dimension)
             self.entry_metadata = {}
@@ -103,9 +103,9 @@ class VectorStore:
             with open(self.metadata_path, 'wb') as f:
                 pickle.dump(metadata, f)
             
-            logger.debug(f"Saved vector store with {self.index.ntotal} entries")
+            logger.debug("vector_store_saved", f"Saved vector store with {self.index.ntotal} entries", {"entry_count": self.index.ntotal})
         except Exception as e:
-            logger.error(f"Failed to save vector store: {e}")
+            logger.error("save_failed", "Failed to save vector store", error=e)
             raise
     
     def _evict_oldest_entries_if_needed(self) -> None:
@@ -115,7 +115,7 @@ class VectorStore:
             oldest_faiss_id, _ = self._insertion_order.popitem(last=False)
             # Remove from index (FAISS doesn't support single deletion, rebuild without it)
             self._rebuild_without_entry(oldest_faiss_id)
-            logger.debug(f"Evicted oldest entry {oldest_faiss_id} to maintain size limit")
+            logger.debug("entry_evicted", f"Evicted oldest entry {oldest_faiss_id}", {"faiss_id": oldest_faiss_id})
 
     def _rebuild_without_entry(self, exclude_faiss_id: int) -> None:
         """Rebuild index excluding a specific faiss_id."""
@@ -193,9 +193,9 @@ class VectorStore:
             if persist:
                 self._save_index()
             
-            logger.debug(f"Added entry {entry.entry_id} to vector store")
+            logger.debug("entry_added", f"Added entry {entry.entry_id}", {"entry_id": entry.entry_id})
         except Exception as e:
-            logger.error(f"Failed to add entry to vector store: {e}")
+            logger.error("add_failed", "Failed to add entry to vector store", error=e)
             raise
     
     def update_entry(self, entry: KnowledgeEntry, embedding: List[float], persist: bool = True) -> None:
@@ -215,9 +215,9 @@ class VectorStore:
             if persist:
                 self._save_index()
             
-            logger.debug(f"Updated entry {entry.entry_id} in vector store")
+            logger.debug("entry_updated", f"Updated entry {entry.entry_id}", {"entry_id": entry.entry_id})
         except Exception as e:
-            logger.error(f"Failed to update entry in vector store: {e}")
+            logger.error("update_failed", "Failed to update entry in vector store", error=e)
             raise
     
     def remove_entry(self, entry_id: str, persist: bool = True) -> bool:
@@ -244,10 +244,10 @@ class VectorStore:
 
             self._rebuild_from_entries(remaining_entries, persist=persist)
             
-            logger.debug(f"Removed entry {entry_id} from vector store")
+            logger.debug("entry_removed", f"Removed entry {entry_id}", {"entry_id": entry_id})
             return True
         except Exception as e:
-            logger.error(f"Failed to remove entry from vector store: {e}")
+            logger.error("remove_failed", "Failed to remove entry from vector store", error=e)
             return False
 
     def remove_entries(self, entry_ids: List[str], persist: bool = True) -> int:
@@ -277,7 +277,7 @@ class VectorStore:
             logger.debug("Removed %d entries from vector store", len(ids_to_remove))
             return len(ids_to_remove)
         except Exception as e:
-            logger.error(f"Failed to remove entries from vector store: {e}")
+            logger.error("remove_failed", "Failed to remove entries from vector store", error=e)
             return 0
     
     def search(self, query_embedding: List[float], k: int = 10, 
@@ -318,10 +318,10 @@ class VectorStore:
                             similarity_score=similarity_score
                         ))
             
-            logger.debug(f"Vector search returned {len(results)} results")
+            logger.debug("search_complete", f"Vector search returned {len(results)} results", {"result_count": len(results)})
             return results
         except Exception as e:
-            logger.error(f"Failed to search vector store: {e}")
+            logger.error("search_failed", "Failed to search vector store", error=e)
             return []
     
     def get_entry(self, entry_id: str) -> Optional[KnowledgeEntry]:
@@ -340,7 +340,7 @@ class VectorStore:
                 return self.entry_metadata.get(faiss_id)
             return None
         except Exception as e:
-            logger.error(f"Failed to get entry from vector store: {e}")
+            logger.error("get_failed", "Failed to get entry from vector store", error=e)
             return None
     
     def get_embedding(self, entry_id: str) -> Optional[List[float]]:
@@ -359,7 +359,7 @@ class VectorStore:
                 return entry.embedding
             return None
         except Exception as e:
-            logger.error(f"Failed to get embedding from vector store: {e}")
+            logger.error("get_embedding_failed", "Failed to get embedding from vector store", error=e)
             return None
     
     def get_all_embeddings(self) -> Dict[str, List[float]]:
@@ -377,7 +377,7 @@ class VectorStore:
                     embeddings[entry_id] = entry.embedding
             return embeddings
         except Exception as e:
-            logger.error(f"Failed to get all embeddings from vector store: {e}")
+            logger.error("get_all_failed", "Failed to get all embeddings from vector store", error=e)
             return {}
     
     def get_all_entries(self) -> List[KnowledgeEntry]:
@@ -390,7 +390,7 @@ class VectorStore:
         try:
             return list(self.entry_metadata.values())
         except Exception as e:
-            logger.error(f"Failed to get all entries from vector store: {e}")
+            logger.error("get_all_failed", "Failed to get all entries from vector store", error=e)
             return []
     
     def get_stats(self) -> Dict[str, Any]:
@@ -408,7 +408,7 @@ class VectorStore:
                 'last_updated': datetime.utcnow().isoformat()
             }
         except Exception as e:
-            logger.error(f"Failed to get vector store stats: {e}")
+            logger.error("stats_failed", "Failed to get vector store stats", error=e)
             return {}
     
     def clear(self) -> None:
@@ -421,7 +421,7 @@ class VectorStore:
             self._save_index()
             logger.info("Cleared vector store")
         except Exception as e:
-            logger.error(f"Failed to clear vector store: {e}")
+            logger.error("clear_failed", "Failed to clear vector store", error=e)
             raise
 
 

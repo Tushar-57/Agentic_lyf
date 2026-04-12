@@ -59,7 +59,7 @@ class ProductivityAgent(BaseAgent):
         try:
             user_input = state.get("user_input", "")
             state_context = state.get("context", {}) if isinstance(state, dict) else {}
-            logger.info(f"ProductivityAgent processing: {user_input}")
+            logger.info("productivity_processing", "ProductivityAgent processing", {"input_preview": user_input[:100]})
             
             # Get contextual knowledge from knowledge base
             contextual_knowledge = await self.knowledge_base.get_contextual_knowledge_for_agent(
@@ -111,7 +111,7 @@ class ProductivityAgent(BaseAgent):
             }
             
         except Exception as e:
-            logger.error(f"ProductivityAgent execution failed: {e}")
+            logger.error("productivity_execution_failed", "ProductivityAgent execution failed", error=e)
             return {
                 "response": "I'm having trouble with productivity assistance right now. Please try again later.",
                 "reasoning": {"error": str(e), "agent_type": "productivity"}
@@ -161,7 +161,7 @@ class ProductivityAgent(BaseAgent):
             return response_text
             
         except Exception as e:
-            logger.error(f"Task management failed: {e}")
+            logger.error("task_management_failed", "Task management failed", error=e)
             return "📋 I'd be happy to help you manage your tasks! What specific tasks would you like to organize?"
     
     async def _handle_goal_setting(self, user_input: str, context: Dict[str, Any]) -> str:
@@ -208,7 +208,7 @@ class ProductivityAgent(BaseAgent):
             return response_text
             
         except Exception as e:
-            logger.error(f"Goal setting failed: {e}")
+            logger.error("goal_setting_failed", "Goal setting failed", error=e)
             return "🎯 I'd love to help you set and achieve your goals! What specific goals would you like to work on?"
     
     async def _handle_time_management(self, user_input: str, context: Dict[str, Any]) -> str:
@@ -255,7 +255,7 @@ class ProductivityAgent(BaseAgent):
             return response_text
             
         except Exception as e:
-            logger.error(f"Time management failed: {e}")
+            logger.error("time_management_failed", "Time management failed", error=e)
             return "⏰ I'd be happy to help optimize your time! What specific time management areas would you like to improve?"
     
     async def _handle_general_productivity(self, user_input: str, context: Dict[str, Any]) -> str:
@@ -301,7 +301,7 @@ class ProductivityAgent(BaseAgent):
             return response_text
             
         except Exception as e:
-            logger.error(f"General productivity failed: {e}")
+            logger.error("general_productivity_failed", "General productivity failed", error=e)
             return "🚀 I'm here to boost your productivity! What specific area would you like help with?"
 
     def _is_performance_review_request(self, normalized_input: str) -> bool:
@@ -381,7 +381,7 @@ class ProductivityAgent(BaseAgent):
             self._log_rag_trace("review_response", user_input=user_input, context=context, response=response_text)
             return response_text
         except Exception as e:
-            logger.error(f"Performance review failed: {e}")
+            logger.error("performance_review_failed", "Performance review failed", error=e)
             return "I couldn't complete a reliable performance review right now. Please try again in a moment."
 
     def _handle_activity_fact_check(self, user_input: str, context: Dict[str, Any]) -> str:
