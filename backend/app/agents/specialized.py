@@ -388,10 +388,15 @@ Use emojis and format nicely with actionable task management advice.
     
     async def _handle_goal_setting(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None, coach_profile: Dict[str, Any] = None) -> str:
         """Handle goal setting and tracking requests with personalized context and AI Persona alignment."""
+        LeetcodeTools = None
         try:
             from .prompts import PromptLibrary
-            from .leetcode_tools import LeetcodeTools
-            
+            from .leetcode_tools import LeetcodeTools as _LeetcodeTools
+            LeetcodeTools = _LeetcodeTools
+        except ImportError as e:
+            logger.warning(f"LeetcodeTools import failed: {e}")
+
+        try:
             goal_context = self._build_productivity_context(context, "goals")
             
             llm_service = await get_llm_service()
@@ -415,8 +420,8 @@ Use emojis and format nicely with actionable task management advice.
                 
                 logger.info(f"[LEETCODE DEBUG] has_goals: {has_goals}, goals: {existing_goals}")
                 
-                # If asking for problems, get specific leetcode problems
-                if is_leetcode_request and has_goals:
+                # If asking for problems, get specific leetcode problems (guard check for import success)
+                if is_leetcode_request and has_goals and LeetcodeTools is not None:
                     logger.info(f"[LEETCODE DEBUG] Calling LeetcodeTools.get_todays_problems")
                     leetcode_data = LeetcodeTools.get_todays_problems(existing_goals, count=2)
                     logger.info(f"[LEETCODE DEBUG] leetcode_data: {leetcode_data}")

@@ -1,6 +1,7 @@
 """
 Knowledge base service providing CRUD operations and RAG functionality.
 """
+import asyncio
 import os
 import hashlib
 import json
@@ -9,6 +10,7 @@ import pickle
 import re
 import time
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -34,6 +36,8 @@ embedding_logger = get_embedding_category_logger("app.embedding.knowledge")
 
 EMBEDDING_CACHE_KEY_FIELD = "_embedding_cache_key"
 EMBEDDING_PROVIDER_COOLDOWN_SECONDS = 30.0
+EMBEDDING_CACHE_MAX_SIZE = 1000  # LRU cache size limit to prevent unbounded growth
+GET_ALL_CACHE_TTL_SECONDS = 5.0  # Short-lived cache to reduce redundant Pinecone calls
 
 
 def _generate_deterministic_entry_id(sync_event_key: str, user_id: str) -> str:
@@ -350,9 +354,15 @@ class KnowledgeBaseService:
         self._user_preferences: Optional[UserPreferences] = None
         self._sync_event_index: Dict[str, str] = {}
         self._sync_event_index_loaded = False
-        self._embedding_cache: Dict[str, List[float]] = {}
+        # Use OrderedDict for LRU cache with size limiting
+        self._embedding_cache: OrderedDict[str, List[float]] = OrderedDict()
         self._embedding_cache_loaded = False
+        self._embedding_cache_lock = asyncio.Lock()
         self._embedding_provider_cooldown_until = 0.0
+        # Request-level cache for get_all_entries to avoid redundant Pinecone calls
+        self._get_all_cache: Optional[List[KnowledgeEntry]] = None
+        self._get_all_cache_at = 0.0
+        self._get_all_cache_lock = asyncio.Lock()
 
         self._bootstrap_knowledge_db_store()
 
@@ -598,13 +608,9 @@ class KnowledgeBaseService:
         if time.monotonic() < self._embedding_provider_cooldown_until:
             raise RuntimeError("Embedding provider is temporarily unavailable due to recent failures")
 
-        try:
-            from ..llm import service as llm_service_module
-        except ImportError as e:
-            raise RuntimeError(f"Embedding dependencies are unavailable: {e}") from e
-
-        llm_service = llm_service_module._llm_service
-        if not llm_service or not llm_service._initialized:
+        # Use get_llm_service() to avoid race conditions with direct module access
+        llm_service = await get_llm_service()
+        if not llm_service or not getattr(llm_service, '_initialized', False):
             raise RuntimeError("LLM service is not initialized for embedding generation")
 
         try:
@@ -1299,6 +1305,12 @@ class KnowledgeBaseService:
     def _cache_embedding_value(self, embedding_key: str, embedding: Optional[List[float]]) -> None:
         if not embedding_key or not self._embedding_has_signal(embedding):
             return
+        # LRU eviction: if key exists, move to end (most recently used)
+        if embedding_key in self._embedding_cache:
+            self._embedding_cache.move_to_end(embedding_key)
+        # If at capacity, evict oldest (first item)
+        elif len(self._embedding_cache) >= EMBEDDING_CACHE_MAX_SIZE:
+            self._embedding_cache.popitem(last=False)
         self._embedding_cache[embedding_key] = list(embedding)
 
     def _cache_entry_embedding(self, entry: Optional[KnowledgeEntry]) -> None:
@@ -1307,15 +1319,25 @@ class KnowledgeBaseService:
         self._cache_embedding_value(self._extract_embedding_cache_key(entry), entry.embedding)
 
     async def _ensure_embedding_cache_loaded(self) -> None:
+        # Fast path: already loaded
         if self._embedding_cache_loaded:
             return
 
-        try:
-            existing_entries = await self.get_all_entries()
-            for entry in existing_entries:
-                self._cache_entry_embedding(entry)
-        finally:
-            self._embedding_cache_loaded = True
+        # Slow path: acquire lock and load
+        async with self._embedding_cache_lock:
+            # Double-check after acquiring lock
+            if self._embedding_cache_loaded:
+                return
+
+            try:
+                existing_entries = await self.get_all_entries()
+                for entry in existing_entries:
+                    self._cache_entry_embedding(entry)
+                self._embedding_cache_loaded = True
+            except Exception as e:
+                logger.error(f"Failed to load embedding cache: {e}")
+                # Don't set flag on error - allow retry on next call
+                raise
 
     def _preserve_embeddings_for_entry_ids(self, entry_ids: List[str]) -> None:
         for entry_id in entry_ids:
@@ -1481,7 +1503,8 @@ class KnowledgeBaseService:
             self._index_sync_event_key(entry)
             self._cache_entry_embedding(entry)
             self._persist_entry_to_db(entry)
-            
+            self._invalidate_get_all_cache()
+
             logger.info(f"Created knowledge entry: {entry_id}")
             return entry
         except Exception as e:
@@ -1592,7 +1615,8 @@ class KnowledgeBaseService:
             self._index_sync_event_key(updated_entry)
             self._cache_entry_embedding(updated_entry)
             self._persist_entry_to_db(updated_entry)
-            
+            self._invalidate_get_all_cache()
+
             logger.info(f"Updated knowledge entry: {entry_id}")
             return updated_entry
         except Exception as e:
@@ -1619,10 +1643,16 @@ class KnowledgeBaseService:
                 logger.warning(f"Entry {entry_id} not found for deletion")
 
             self._remove_entry_from_db(entry_id)
+            self._invalidate_get_all_cache()
             return success
         except Exception as e:
             logger.error(f"Failed to delete knowledge entry {entry_id}: {e}")
             return False
+
+    def _invalidate_get_all_cache(self) -> None:
+        """Invalidate the request-level cache for get_all_entries."""
+        self._get_all_cache = None
+        self._get_all_cache_at = 0.0
 
     async def delete_entries(self, entry_ids: List[str]) -> int:
         """Delete multiple knowledge entries in a single vector index rebuild pass."""
@@ -1638,6 +1668,7 @@ class KnowledgeBaseService:
 
             removed = self.vector_store.remove_entries(normalized_ids)
             self._remove_entries_from_db(normalized_ids)
+            self._invalidate_get_all_cache()
             if removed > 0:
                 logger.info("Deleted %d knowledge entries in bulk", removed)
             return removed
@@ -1694,38 +1725,46 @@ class KnowledgeBaseService:
             logger.warning(f"Failed to search knowledge base: {e}")
             return []
     
-    async def get_all_entries(self, 
+    async def _fetch_all_entries_fresh(self) -> List[KnowledgeEntry]:
+        """Fetch all entries from vector store (internal method for caching)."""
+        if self.knowledge_db_store and self.knowledge_db_store.is_available:
+            db_entries = self.knowledge_db_store.list_entries(self.user_id)
+            hydrated_entries: List[KnowledgeEntry] = []
+            for entry in db_entries:
+                hydrated = self._attach_embedding_to_entry(entry)
+                if hydrated:
+                    hydrated_entries.append(hydrated)
+            return hydrated_entries
+        return self.vector_store.get_all_entries()
+
+    async def get_all_entries(self,
                              category: Optional[str] = None,
                              entry_type: Optional[KnowledgeEntryType] = None) -> List[KnowledgeEntry]:
         """
         Get all knowledge entries, optionally filtered by category or type.
-        
+        Uses short-lived cache to avoid redundant Pinecone calls within same request.
+
         Args:
             category: Filter by category (optional)
             entry_type: Filter by entry type (optional)
-            
+
         Returns:
             List of knowledge entries
         """
         try:
-            if self.knowledge_db_store and self.knowledge_db_store.is_available:
-                db_entries = self.knowledge_db_store.list_entries(
-                    self.user_id,
-                    category=category,
-                    entry_type=entry_type,
-                )
+            # Check cache first (with lock for thread safety)
+            async with self._get_all_cache_lock:
+                now = time.time()
+                if (self._get_all_cache is not None and
+                    (now - self._get_all_cache_at) < GET_ALL_CACHE_TTL_SECONDS):
+                    all_entries = self._get_all_cache
+                else:
+                    # Cache miss or expired - fetch fresh
+                    all_entries = await self._fetch_all_entries_fresh()
+                    self._get_all_cache = all_entries
+                    self._get_all_cache_at = now
 
-                hydrated_entries: List[KnowledgeEntry] = []
-                for entry in db_entries:
-                    hydrated = self._attach_embedding_to_entry(entry)
-                    if hydrated:
-                        hydrated_entries.append(hydrated)
-
-                return hydrated_entries
-
-            all_entries = self.vector_store.get_all_entries()
-            
-            # Apply filters
+            # Apply filters (outside lock for better concurrency)
             filtered_entries = []
             for entry in all_entries:
                 if getattr(entry, "user_id", self.user_id) != self.user_id:
@@ -1735,7 +1774,7 @@ class KnowledgeBaseService:
                 if entry_type and entry.entry_type != entry_type:
                     continue
                 filtered_entries.append(entry)
-            
+
             return filtered_entries
         except Exception as e:
             logger.error(f"Failed to get all entries: {e}")

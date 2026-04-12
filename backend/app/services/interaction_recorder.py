@@ -4,6 +4,7 @@ Enhanced Interaction Recording Service with User Approval
 This service requires explicit user approval before recording interactions
 to prevent knowledge base pollution with unvalidated assumptions.
 """
+import asyncio
 import logging
 import re
 from typing import Dict, Any, Optional, List
@@ -36,6 +37,7 @@ class InteractionRecorder:
         
         # Store pending interactions waiting for user approval
         self.pending_interactions: List[PendingInteraction] = []
+        self._pending_lock = asyncio.Lock()  # Thread-safe access to pending_interactions
         
         # Common trivial patterns to filter out
         self.trivial_patterns = [
@@ -229,7 +231,8 @@ class InteractionRecorder:
                 knowledge_sources=resolved_sources
             )
             
-            self.pending_interactions.append(pending)
+            async with self._pending_lock:
+                self.pending_interactions.append(pending)
             self.logger.info("Created pending interaction %s for user approval (%s)", pending.id, agent_type)
             return pending.id
             
@@ -268,7 +271,8 @@ class InteractionRecorder:
             )
             
             # Remove from pending list
-            self.pending_interactions.remove(pending)
+            async with self._pending_lock:
+                self.pending_interactions.remove(pending)
             self.logger.info(
                 "USER APPROVED and recorded interaction %s (%s) entry_id=%s category=%s insight=%s",
                 interaction_id,
@@ -286,29 +290,33 @@ class InteractionRecorder:
     async def reject_interaction(self, interaction_id: str) -> bool:
         """
         Reject a pending interaction without recording.
-        
+
         Returns:
             bool: True if rejected successfully
         """
         try:
-            # Find and remove the pending interaction
-            for interaction in self.pending_interactions:
-                if interaction.id == interaction_id:
-                    self.pending_interactions.remove(interaction)
-                    self.logger.info("USER REJECTED interaction %s (%s)", interaction_id, interaction.agent_type)
-                    return True
-            
+            # Find and remove the pending interaction with lock protection
+            async with self._pending_lock:
+                for interaction in self.pending_interactions:
+                    if interaction.id == interaction_id:
+                        self.pending_interactions.remove(interaction)
+                        self.logger.info("USER REJECTED interaction %s (%s)", interaction_id, interaction.agent_type)
+                        return True
+
             self.logger.warning("Pending interaction not found for rejection: %s", interaction_id)
             return False
-            
+
         except Exception as e:
             self.logger.error("Error rejecting interaction: %s", str(e))
             return False
     
-    def get_pending_interactions(self) -> List[Dict[str, Any]]:
+    async def get_pending_interactions(self) -> List[Dict[str, Any]]:
         """Get all pending interactions waiting for approval."""
-        self.logger.info("Getting pending interactions - count: %d, instance id: %s", 
-                        len(self.pending_interactions), id(self))
+        async with self._pending_lock:
+            pending_count = len(self.pending_interactions)
+            pending_list = list(self.pending_interactions)  # Copy under lock
+        self.logger.info("Getting pending interactions - count: %d, instance id: %s",
+                        pending_count, id(self))
         return [
             {
                 "id": pending.id,
@@ -319,7 +327,7 @@ class InteractionRecorder:
                 "status": pending.status,
                 "knowledge_sources": pending.knowledge_sources or []
             }
-            for pending in self.pending_interactions
+            for pending in pending_list
         ]
 
     async def record_if_valuable(self, user_input: str, agent_response: str, 
