@@ -2114,52 +2114,69 @@ async def _upsert_checkup_insight(
     content: str,
     metadata: Dict[str, Any],
     tags: List[str],
-) -> None:
-    """Persist a single daily checkup insight entry with date/type upsert semantics."""
-    existing_entries = await kb_service.get_all_entries(
-        category="daily_checkup",
-        entry_type=KnowledgeEntryType.INSIGHT,
-    )
-
+) -> Optional[str]:
+    """Persist a single daily checkup insight entry with date/type upsert semantics.
+    
+    Returns:
+        entry_id if successful, None if failed
+    """
     checkup_date_iso = checkup_date.isoformat()
-    target_entry = None
-    for entry in existing_entries:
-        entry_metadata = entry.metadata or {}
-        if (
-            str(entry_metadata.get("checkup_type", "")).strip().lower() == checkup_type
-            and str(entry_metadata.get("checkup_date", "")).strip() == checkup_date_iso
-        ):
-            target_entry = entry
-            break
+    sync_event_key = f"checkup:{checkup_type}:{checkup_date_iso}"
+    
+    try:
+        existing_entries = await kb_service.get_all_entries(
+            category="daily_checkup",
+            entry_type=KnowledgeEntryType.INSIGHT,
+        )
 
-    merged_metadata = dict(metadata or {})
-    merged_metadata["checkup_type"] = checkup_type
-    merged_metadata["checkup_date"] = checkup_date_iso
-    # Add sync_event_key for deterministic ID (prevents duplicates on re-sync)
-    merged_metadata["context"] = {"sync_event_key": f"checkup:{checkup_type}:{checkup_date_iso}"}
+        target_entry = None
+        for entry in existing_entries:
+            entry_metadata = entry.metadata or {}
+            if (
+                str(entry_metadata.get("checkup_type", "")).strip().lower() == checkup_type
+                and str(entry_metadata.get("checkup_date", "")).strip() == checkup_date_iso
+            ):
+                target_entry = entry
+                break
 
-    normalized_tags = sorted(set([*tags, "daily_checkup", checkup_type, "insight"]))
+        merged_metadata = dict(metadata or {})
+        merged_metadata["checkup_type"] = checkup_type
+        merged_metadata["checkup_date"] = checkup_date_iso
+        # Add sync_event_key for deterministic ID (prevents duplicates on re-sync)
+        merged_metadata["context"] = {"sync_event_key": sync_event_key}
 
-    if target_entry:
-        updated_entry = await kb_service.update_entry(
-            entry_id=target_entry.entry_id,
+        normalized_tags = sorted(set([*tags, "daily_checkup", checkup_type, "insight"]))
+
+        if target_entry:
+            logger.info(f"Updating existing checkup insight: {target_entry.entry_id} ({sync_event_key})")
+            updated_entry = await kb_service.update_entry(
+                entry_id=target_entry.entry_id,
+                title=title,
+                content=content,
+                metadata=merged_metadata,
+                tags=normalized_tags,
+            )
+            if updated_entry:
+                logger.info(f"Successfully updated checkup insight: {updated_entry.entry_id}")
+                return updated_entry.entry_id
+            else:
+                logger.warning(f"Update returned None for checkup insight: {sync_event_key}")
+
+        logger.info(f"Creating new checkup insight: {sync_event_key}")
+        new_entry = await kb_service.create_entry(
+            entry_type=KnowledgeEntryType.INSIGHT,
+            entry_sub_type=KnowledgeEntrySubType.MISC_INSIGHT,
+            category="daily_checkup",
             title=title,
             content=content,
             metadata=merged_metadata,
             tags=normalized_tags,
         )
-        if updated_entry:
-            return
-
-    await kb_service.create_entry(
-        entry_type=KnowledgeEntryType.INSIGHT,
-        entry_sub_type=KnowledgeEntrySubType.MISC_INSIGHT,
-        category="daily_checkup",
-        title=title,
-        content=content,
-        metadata=merged_metadata,
-        tags=normalized_tags,
-    )
+        logger.info(f"Successfully created checkup insight: {new_entry.entry_id} ({sync_event_key})")
+        return new_entry.entry_id
+    except Exception as e:
+        logger.error(f"Failed to upsert checkup insight {sync_event_key}: {e}", exc_info=True)
+        return None
 
 
 @router.get("/analytics")
@@ -2680,6 +2697,13 @@ async def run_morning_checkup(request: DailyCheckupRequest):
             ]
         )
 
+        # Build detailed time entry analysis for deep reasoning
+        yesterday_entries = [item for item in time_entries if item["event_date"] == (checkup_date - timedelta(days=1))]
+        time_entry_details = " | ".join([
+            f"{entry['project_name']}: {entry['description']} ({entry['duration_minutes']:.0f}min, focus:{entry['focus_score']:.0f})"
+            for entry in yesterday_entries[:5]
+        ]) if yesterday_entries else "No tracked sessions yesterday"
+
         fallback_html = _build_morning_schedule_html(
             checkup_date=checkup_date,
             focus_target=focus_target,
@@ -2713,10 +2737,29 @@ async def run_morning_checkup(request: DailyCheckupRequest):
             f"Deep work coverage ratio from context: {round(deep_work_coverage_ratio, 2)}\n"
             f"Planned deep work minutes: {planned_deep_work_minutes}\n"
             f"User confidence: {confidence_score if confidence_score > 0 else 'n/a'}\n"
+            f"Yesterday's time sessions: {time_entry_details}\n"
             f"Today existing entries: {len(today_entries)}\n"
             f"Schedule seed blocks: {schedule_seed or 'none'}\n"
             "Use the schedule seed block times exactly as provided; do not invent or shift block start/end times. "
-            "Reason over task priorities, deadlines, habits, and tracked time to produce a practical daily schedule. "
+            "DEEP REASONING INSTRUCTIONS - Analyze the following before creating schedule:\n"
+            "1. QUALITY ANALYSIS: Review what was actually accomplished (not just hours logged). "
+            "   - What specific tasks were completed?\n"
+            "   - Were they high-value or just busy work?\n"
+            "   - Did they align with stated goals and priorities?\n"
+            "2. FOCUS PATTERN: Look at the work distribution\n"
+            "   - Was time fragmented across many small tasks or concentrated on important work?\n"
+            "   - Any signs of procrastination or distraction?\n"
+            "3. GOAL ALIGNMENT: Check if work moved the needle\n"
+            "   - Did the logged work directly serve the user's top goals?\n"
+            "   - What percentage was deep work vs shallow work?\n"
+            "4. PRODUCTIVITY INSIGHTS: Identify patterns\n"
+            "   - What times of day showed best focus (based on time entry patterns)?\n"
+            "   - Any recurring interruptions or context switching?\n"
+            "5. ACTIONABLE RECOMMENDATIONS: Based on analysis\n"
+            "   - What should be protected/amplified today?\n"
+            "   - What should be eliminated/reduced?\n"
+            "   - Specific strategies for better focus based on yesterday's patterns.\n"
+            "CRITICAL: Do NOT simply praise hours logged. Analyze EFFECTIVENESS and INTENTIONALITY. "
             "Return ONLY valid HTML that can be rendered directly. "
             "Use this exact semantic structure and class names: "
             "<section class='daily-checkup'>"
@@ -2805,7 +2848,7 @@ async def run_morning_checkup(request: DailyCheckupRequest):
             f"Coach Guidance:\n{coach_message}"
         )
 
-        await _upsert_checkup_insight(
+        insight_id = await _upsert_checkup_insight(
             kb_service=kb_service,
             checkup_type="morning",
             checkup_date=checkup_date,
@@ -2814,6 +2857,10 @@ async def run_morning_checkup(request: DailyCheckupRequest):
             metadata=response_payload,
             tags=["planning"],
         )
+        if insight_id:
+            logger.info(f"Morning checkup insight persisted: {insight_id}")
+        else:
+            logger.error(f"Failed to persist morning checkup insight for {checkup_date.isoformat()}")
         _persist_checkup_payload_to_db("morning", checkup_date, response_payload)
 
         return response_payload
@@ -3004,22 +3051,33 @@ async def run_evening_checkup(request: DailyCheckupRequest):
         communication_profile = _extract_communication_profile(all_entries)
         style_directive = _build_style_directive(communication_profile, "evening")
 
-        recap_line = (
-            f"You logged {_format_minutes(total_minutes)} across {len(today_entries)} sessions with an estimated score of {performance_score}/10."
-        )
-        fallback_html = _build_evening_reflection_html(
-            checkup_date=checkup_date,
-            recap_line=recap_line,
-            total_minutes=total_minutes,
-            billable_minutes=billable_minutes,
-            performance_score=performance_score,
-            avg_focus=avg_focus,
-            avg_energy=avg_energy,
-            wins=wins,
-            blockers=blockers,
-            tomorrow_focus=tomorrow_focus,
-            focus_task_titles=focus_task_titles,
-            top_projects=top_projects,
+        # Prepare precomputed metrics
+        wins = _compute_wins(overdue_tasks, completed_tasks_today, habits_completed_today, total_minutes, billable_minutes, focus_tasks, avg_focus)
+        tomorrow_focus = _compute_tomorrow_focus(upcoming_tasks, overdue_tasks, due_today_tasks, avg_energy, blockers, focus_tasks, communication_profile)
+        
+        # Build detailed time entry analysis for deep reasoning
+        today_time_entries = [item for item in time_entries if item["event_date"] == checkup_date]
+        time_entry_details = " | ".join([
+            f"{entry['project_name']}: {entry['description']} ({entry['duration_minutes']:.0f}min, focus:{entry['focus_score']:.0f})"
+            for entry in today_time_entries[:8]
+        ]) if today_time_entries else "No tracked sessions today"
+        
+        fallback_lines = _build_evening_fallback(
+            total_minutes,
+            billable_minutes,
+            len(today_entries),
+            top_projects,
+            avg_focus,
+            avg_energy,
+            blockers,
+            focus_task_titles,
+            completed_tasks_today,
+            habits_completed_today,
+            habits_total,
+            wins,
+            tomorrow_focus,
+            habits_completion_rate_7d,
+            communication_profile
         )
         fallback_text = _build_fallback_checkup_message(fallback_lines, communication_profile, "evening")
 
@@ -3050,6 +3108,27 @@ async def run_evening_checkup(request: DailyCheckupRequest):
             f"Objective score: {objective_score}/10\n"
             f"Precomputed wins: {', '.join(wins) if wins else 'none'}\n"
             f"Precomputed tomorrow focus: {', '.join(tomorrow_focus) if tomorrow_focus else 'none'}\n"
+            f"Today's detailed sessions: {time_entry_details}\n"
+            "DEEP REASONING INSTRUCTIONS - Before writing the summary, analyze:\n"
+            "1. QUALITY ANALYSIS: Review what was actually accomplished (not just hours logged). "
+            "   - What specific tasks/projects were completed?\n"
+            "   - Were they high-value deep work or just busy work/shallow tasks?\n"
+            "   - Did the work align with stated goals and priorities? What percentage?\n"
+            "2. EFFECTIVENESS EVALUATION: Judge the day's productivity honestly\n"
+            "   - Was time fragmented across many small tasks or concentrated on important work?\n"
+            "   - Any signs of procrastination, distractions, or low-value activities?\n"
+            "   - Compare planned vs actual - where did the day go off track?\n"
+            "3. PATTERN RECOGNITION: Identify insights\n"
+            "   - What times of day showed best focus (based on time entry patterns)?\n"
+            "   - What triggered blockers or friction points?\n"
+            "   - What led to the biggest wins today?\n"
+            "4. ACTIONABLE TAKEAWAYS: What to carry forward\n"
+            "   - What specific behavior/habit should be amplified tomorrow?\n"
+            "   - What should be eliminated or reduced?\n"
+            "   - What concrete strategy will improve tomorrow's effectiveness?\n"
+            "CRITICAL: Do NOT simply praise hours logged. Analyze EFFECTIVENESS, INTENTIONALITY, and ALIGNMENT with goals. "
+            "Celebrate real wins (goal progress, deep work) not just 'being busy'. "
+            "Provide a reflective evening summary that celebrates wins, acknowledges friction honestly, and sets up tomorrow with specific strategies. "
             "Return ONLY valid HTML that can be rendered directly. "
             "Use this exact semantic structure and class names: "
             "<section class='daily-checkup evening-checkup'>"
@@ -3168,7 +3247,7 @@ async def run_evening_checkup(request: DailyCheckupRequest):
             f"Coach Reflection:\n{coach_message}"
         )
 
-        await _upsert_checkup_insight(
+        insight_id = await _upsert_checkup_insight(
             kb_service=kb_service,
             checkup_type="evening",
             checkup_date=checkup_date,
@@ -3177,6 +3256,10 @@ async def run_evening_checkup(request: DailyCheckupRequest):
             metadata=response_payload,
             tags=["reflection"],
         )
+        if insight_id:
+            logger.info(f"Evening checkup insight persisted: {insight_id}")
+        else:
+            logger.error(f"Failed to persist evening checkup insight for {checkup_date.isoformat()}")
         _persist_checkup_payload_to_db("evening", checkup_date, response_payload)
 
         return response_payload

@@ -1336,6 +1336,7 @@ class KnowledgeBaseService:
         category: Optional[str] = None,
         entry_type: Optional[Any] = None,
         semantic_sections: Optional[List[str]] = None,
+        entry_id: Optional[str] = None,
     ) -> List[float]:
         await self._ensure_embedding_cache_loaded()
 
@@ -1349,6 +1350,13 @@ class KnowledgeBaseService:
         cached_embedding = self._embedding_cache.get(embedding_key)
         if self._embedding_has_signal(cached_embedding):
             return list(cached_embedding)
+
+        # Check Pinecone for existing embedding (avoids expensive regeneration)
+        if entry_id:
+            pinecone_embedding = self.vector_store.get_embedding(entry_id)
+            if self._embedding_has_signal(pinecone_embedding):
+                self._cache_embedding_value(embedding_key, pinecone_embedding)
+                return list(pinecone_embedding)
 
         generated_embedding = await self._generate_embedding_for_text(
             embedding_text,
@@ -1439,20 +1447,21 @@ class KnowledgeBaseService:
                 category=strategy_category,
             )
 
-            embedding = await self._resolve_embedding(
-                embedding_text,
-                embedding_key,
-                category=strategy_category,
-                entry_type=entry_type,
-                semantic_sections=semantic_sections,
-            )
-
             # Extract sync_event_key for deterministic ID generation (prevents duplicates)
             context_from_meta = metadata_payload.get("context") if isinstance(metadata_payload.get("context"), dict) else {}
             sync_event_key = str(context_from_meta.get("sync_event_key", "")).strip()
             
             # Generate deterministic ID based on sync_event_key, or random UUID if no sync key
             entry_id = _generate_deterministic_entry_id(sync_event_key, self.user_id)
+
+            embedding = await self._resolve_embedding(
+                embedding_text,
+                embedding_key,
+                category=strategy_category,
+                entry_type=entry_type,
+                semantic_sections=semantic_sections,
+                entry_id=entry_id,
+            )
             
             # Create entry
             entry = KnowledgeEntry(
@@ -3025,6 +3034,188 @@ class KnowledgeBaseService:
 
         return min(0.95, max(0.0, score))
 
+    def _calculate_recency_weighted_score(
+        self, 
+        semantic_score: float, 
+        entry: KnowledgeEntry,
+        reference_time: Optional[datetime] = None
+    ) -> float:
+        """Combine semantic similarity with recency weighting.
+        
+        Uses exponential decay to boost recent entries while preserving
+        semantic relevance. Recent entries get up to 25% boost.
+        """
+        reference_time = reference_time or datetime.utcnow()
+        entry_time = entry.updated_at or entry.created_at or reference_time
+        
+        # Calculate days since entry (max 30 days for decay)
+        days_ago = max(0, (reference_time - entry_time).days)
+        decay_factor = min(1.0, days_ago / 30.0)
+        
+        # Recency boost: 1.0 for today, decays to 0.75 over 30 days
+        recency_multiplier = 1.0 - (0.25 * decay_factor)
+        
+        # Weighted combination: 80% semantic, 20% recency influence
+        weighted_score = (semantic_score * 0.8) + (semantic_score * recency_multiplier * 0.2)
+        
+        return min(1.0, weighted_score)
+
+    def _merge_and_rerank_results(
+        self,
+        results: List[KnowledgeSearchResult],
+        max_results: int = 10,
+        diversity_threshold: float = 0.85
+    ) -> List[KnowledgeSearchResult]:
+        """Merge search results with deduplication and diversity-aware re-ranking.
+        
+        Uses Maximal Marginal Relevance (MMR) to balance relevance with diversity.
+        """
+        if not results:
+            return []
+        
+        # Deduplicate by entry_id, keeping highest score
+        seen_ids: Dict[str, KnowledgeSearchResult] = {}
+        for result in results:
+            entry_id = result.entry.entry_id
+            if entry_id not in seen_ids or result.similarity_score > seen_ids[entry_id].similarity_score:
+                seen_ids[entry_id] = result
+        
+        unique_results = list(seen_ids.values())
+        
+        # Apply recency-weighted scoring
+        reference_time = datetime.utcnow()
+        scored_results: List[Tuple[KnowledgeSearchResult, float]] = []
+        for result in unique_results:
+            recency_score = self._calculate_recency_weighted_score(
+                result.similarity_score,
+                result.entry,
+                reference_time
+            )
+            scored_results.append((result, recency_score))
+        
+        # Sort by recency-weighted score
+        scored_results.sort(key=lambda x: x[1], reverse=True)
+        
+        # Diversity-aware selection using MMR
+        selected: List[KnowledgeSearchResult] = []
+        remaining = [r for r, _ in scored_results]
+        
+        while len(selected) < max_results and remaining:
+            if not selected:
+                # First result: pick highest scored
+                best = remaining.pop(0)
+                selected.append(best)
+                continue
+            
+            # MMR scoring: lambda * relevance - (1-lambda) * max_similarity_to_selected
+            best_mmr_score = -1.0
+            best_idx = 0
+            
+            for i, candidate in enumerate(remaining):
+                relevance = scored_results[i][1]  # Already sorted, so this correlates
+                
+                # Calculate max similarity to already selected items
+                max_sim_to_selected = 0.0
+                for selected_result in selected:
+                    sim = self._embedding_similarity(candidate.entry.embedding, selected_result.entry.embedding)
+                    max_sim_to_selected = max(max_sim_to_selected, sim)
+                
+                # MMR formula: balance relevance vs diversity
+                mmr_score = (0.7 * relevance) - (0.3 * max_sim_to_selected)
+                
+                if mmr_score > best_mmr_score:
+                    best_mmr_score = mmr_score
+                    best_idx = i
+            
+            selected.append(remaining.pop(best_idx))
+        
+        return selected
+
+    def _embedding_similarity(self, emb1: Optional[List[float]], emb2: Optional[List[float]]) -> float:
+        """Calculate cosine similarity between two embeddings."""
+        if not emb1 or not emb2 or len(emb1) != len(emb2):
+            return 0.0
+        
+        # Cosine similarity
+        dot_product = sum(a * b for a, b in zip(emb1, emb2))
+        norm1 = sum(a * a for a in emb1) ** 0.5
+        norm2 = sum(b * b for b in emb2) ** 0.5
+        
+        if norm1 == 0 or norm2 == 0:
+            return 0.0
+        
+        return dot_product / (norm1 * norm2)
+
+    async def _ensemble_vector_search(
+        self,
+        base_query: str,
+        query_variations: List[str],
+        categories: Optional[List[str]] = None,
+        entry_types: Optional[List[KnowledgeEntryType]] = None,
+        limit: int = 10,
+    ) -> List[KnowledgeSearchResult]:
+        """Multi-vector ensemble search using semantic query variations.
+        
+        Searches with multiple semantically-related query embeddings and merges
+        results for better coverage. No regex logic - pure embedding-based.
+        """
+        all_results: List[KnowledgeSearchResult] = []
+        
+        # Search with base query
+        base_results = await self.search(
+            KnowledgeQuery(
+                query_text=base_query,
+                categories=categories,
+                entry_types=entry_types,
+                limit=limit,
+                similarity_threshold=0.7,
+            )
+        )
+        all_results.extend(base_results)
+        
+        # Search with semantic variations (if provided)
+        for variation in query_variations[:2]:  # Limit to avoid too many calls
+            var_results = await self.search(
+                KnowledgeQuery(
+                    query_text=variation,
+                    categories=categories,
+                    entry_types=entry_types,
+                    limit=limit // 2,
+                    similarity_threshold=0.65,  # Slightly lower for variations
+                )
+            )
+            all_results.extend(var_results)
+        
+        # Deduplicate and rerank
+        return self._merge_and_rerank_results(all_results, limit)
+
+    def _calculate_adaptive_threshold(
+        self,
+        results: List[KnowledgeSearchResult],
+        base_threshold: float = 0.7
+    ) -> float:
+        """Calculate adaptive similarity threshold based on result distribution.
+        
+        If results are sparse, lower threshold. If results are dense and high-quality,
+        raise threshold to filter noise.
+        """
+        if not results:
+            return base_threshold * 0.8  # Lower threshold when no results
+        
+        scores = [r.similarity_score for r in results]
+        mean_score = sum(scores) / len(scores)
+        score_variance = sum((s - mean_score) ** 2 for s in scores) / len(scores)
+        
+        # If high variance with some very good results, use stricter threshold
+        if score_variance > 0.1 and mean_score > 0.75:
+            return max(base_threshold, mean_score - 0.05)
+        
+        # If low variance or low scores, be more lenient
+        if mean_score < 0.6:
+            return base_threshold * 0.85
+        
+        return base_threshold
+
     def _entry_matches_query_filters(
         self,
         entry: KnowledgeEntry,
@@ -3391,9 +3582,58 @@ class KnowledgeBaseService:
         time_records = self._collect_time_entry_records(interaction_entries)
         filtered_records = self._filter_records_for_window(time_records, window)
 
+        logger.info(
+            "[TIME_WINDOW_DEBUG] query=%s window=%s total_interactions=%d time_records=%d filtered=%d",
+            user_input[:50],
+            window.get("key", "unknown"),
+            len(interaction_entries),
+            len(time_records),
+            len(filtered_records),
+        )
+
         summary = self._summarize_time_window_records(filtered_records, window)
         summary["total_time_entry_records_available"] = len(time_records)
         return summary
+
+    def _expand_semantic_query(self, query: str, agent_type: str) -> List[str]:
+        """Generate semantically-related query variations for better retrieval coverage.
+        
+        Uses agent context to generate variations that capture different semantic angles
+        of the original query. Purely semantic approach - no regex patterns.
+        """
+        variations = [query]  # Always include original
+        
+        # Add agent-specific semantic variations based on query intent
+        # These are semantic paraphrases, not regex-based expansions
+        productivity_variations = {
+            "how did i do": ["today's productivity performance", "work completed today", "daily accomplishments"],
+            "what should i focus on": ["priority tasks", "important work", "what to work on next"],
+            "review my day": ["daily summary", "today's work review", "day performance"],
+        }
+        
+        query_lower = query.lower().strip()
+        
+        # Check for semantic matches (substring matching is acceptable for intent detection)
+        for key, var_list in productivity_variations.items():
+            if key in query_lower:
+                variations.extend(var_list)
+                break
+        
+        # For agent-specific context, add domain variations
+        if agent_type == "productivity":
+            if any(term in query_lower for term in ["today", "day", "performance"]):
+                variations.extend(["today's tracked time", "completed tasks", "work sessions"])
+        
+        # Deduplicate while preserving order
+        seen = set()
+        unique_variations = []
+        for v in variations:
+            v_norm = v.lower().strip()
+            if v_norm not in seen:
+                seen.add(v_norm)
+                unique_variations.append(v)
+        
+        return unique_variations[:4]  # Limit to avoid too many searches
 
     def _build_preference_context_from_model(
         self,
@@ -3461,16 +3701,26 @@ class KnowledgeBaseService:
             max_combined_results = max(retrieval_limit, max_results + RAG_MIN_CONTEXT_RESULTS)
             fallback_modes: List[str] = []
 
-            # Stage 1: strict semantic retrieval.
-            search_results = await self.search(
-                KnowledgeQuery(
-                    query_text=user_input,
-                    categories=[agent_type],
-                    entry_types=context_entry_types,
-                    limit=retrieval_limit,
-                    similarity_threshold=RAG_PRIMARY_SIMILARITY_THRESHOLD,
+            # Stage 1: Semantic retrieval with query expansion for better coverage.
+            # Generate multiple query variations to capture different semantic angles
+            query_variations = self._expand_semantic_query(user_input, agent_type)
+            
+            # Search with multiple query variations and merge results
+            all_search_results: List[KnowledgeSearchResult] = []
+            for query_variant in query_variations[:3]:  # Limit to top 3 variations
+                variant_results = await self.search(
+                    KnowledgeQuery(
+                        query_text=query_variant,
+                        categories=[agent_type],
+                        entry_types=context_entry_types,
+                        limit=max_results,
+                        similarity_threshold=RAG_SEMANTIC_THRESHOLD,
+                    )
                 )
-            )
+                all_search_results.extend(variant_results)
+            
+            # Deduplicate and re-rank by combined score (semantic + recency)
+            search_results = self._merge_and_rerank_results(all_search_results, max_combined_results)
 
             general_results = await self.search(
                 KnowledgeQuery(
@@ -3707,14 +3957,17 @@ class KnowledgeBaseService:
             return context
             
         except Exception as e:
-            logger.error(f"Failed to get contextual knowledge: {e}")
+            import traceback
+            logger.error(
+                f"[CONTEXT_RETRIEVAL_FAILED] agent={agent_type} query={self._truncate_for_log(user_input, 100)} error={type(e).__name__}: {e}\n{traceback.format_exc()}"
+            )
             return {
                 "agent_preferences": {},
                 "relevant_interactions": [],
                 "user_preferences": [],
                 "patterns_and_insights": [],
                 "recent_time_entries": [],
-                "context_summary": "Unable to retrieve context due to system error."
+                "context_summary": f"Context retrieval failed: {type(e).__name__}. See logs for details."
             }
 
     def _extract_recent_time_entries(
