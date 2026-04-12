@@ -542,7 +542,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
         intent_result: Dict[str, Any], 
         complexity: TaskComplexity
     ) -> List[Dict[str, Any]]:
-        \"\"\"Generate logical plan steps based on request analysis.\"\"\"
+        """Generate logical plan steps based on request analysis."""
         steps = []
         
         # Always start with analysis
@@ -637,7 +637,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
         user_input: str, 
         intent_result: Dict[str, Any]
     ) -> List[str]:
-        \"\"\"Identify which agents are required for the request.\"\"\"
+        """Identify which agents are required for the request."""
         agents = ["orchestrator"]  # Always include orchestrator
         
         # Add primary agent
@@ -671,7 +671,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
         return agents
 
     def _define_success_criteria(self, user_input: str, complexity: TaskComplexity) -> List[str]:
-        \"\"\"Define success criteria based on request and complexity.\"\"\"
+        """Define success criteria based on request and complexity."""
         criteria = [
             "User request is fully understood and addressed",
             "Response is actionable and practical"
@@ -701,7 +701,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
         return criteria
 
     def _estimate_duration(self, complexity: TaskComplexity) -> int:
-        \"\"\"Estimate duration in minutes based on complexity.\"\"\"
+        """Estimate duration in minutes based on complexity."""
         duration_map = {
             TaskComplexity.SIMPLE: 2,
             TaskComplexity.MODERATE: 5,
@@ -711,7 +711,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
         return duration_map.get(complexity, 5)
 
     def _identify_risks(self, complexity: TaskComplexity) -> List[str]:
-        \"\"\"Identify potential risks based on complexity.\"\"\"
+        """Identify potential risks based on complexity."""
         risks = []
         
         if complexity == TaskComplexity.MODERATE:
@@ -738,7 +738,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
         return risks
 
     async def _store_plan_context(self, deep_state: DeepAgentState, plan: Dict[str, Any]) -> None:
-        \"\"\"Store plan in deep state for context preservation.\"\"\"
+        """Store plan in deep state for context preservation."""
         try:
             plan_filename = f"strategic_plan_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
             plan_content = json.dumps(plan, indent=2)
@@ -771,7 +771,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
             logger.error("store_plan_error", "Error storing plan context", error=e)
 
     async def _handle_simple_task(self, user_input: str, context: Dict[str, Any]) -> str:
-        \"\"\"Handle simple tasks directly without delegation.\"\"\"
+        """Handle simple tasks directly without delegation."""
         try:
             if not self.llm_service:
                 self.llm_service = get_llm_service()
@@ -802,7 +802,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
         context: Dict[str, Any],
         deep_state: DeepAgentState
     ) -> str:
-        \"\"\"Delegate to specialized ReAct agent.\"\"\"
+        """Delegate to specialized ReAct agent."""
         try:
             # Get the appropriate ReAct agent
             if agent_type == AgentType.PRODUCTIVITY:
@@ -861,7 +861,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
         deep_state: DeepAgentState,
         complexity: TaskComplexity
     ) -> str:
-        \"\"\"Orchestrate complex multi-agent workflow.\"\"\"
+        """Orchestrate complex multi-agent workflow."""
         try:
             if not plan:
                 return await self._handle_simple_task(user_input, context)
@@ -939,7 +939,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
         user_input: str, 
         context: Dict[str, Any]
     ) -> str:
-        \"\"\"Execute orchestrator-specific step.\"\"\"
+        """Execute orchestrator-specific step."""
         action = step["action"]
         
         if action == "analyze_request":
@@ -957,7 +957,7 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
         user_input: str, 
         deep_state: DeepAgentState
     ) -> str:
-        \"\"\"Execute step using specialized agent.\"\"\"
+        """Execute step using specialized agent."""
         agent_name = step.get("agent")
         action = step["action"]
         description = step["description"]
@@ -976,12 +976,12 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
             return f"Unknown agent type: {agent_name}"
         
         # Create context-specific prompt for this step
-        step_prompt = f\"\"\"Focus specifically on this task: {description}
+        step_prompt = f"""Focus specifically on this task: {description}
 
 Original user request: {user_input}
 Specific action needed: {action}
 
-Please provide a focused response addressing this specific aspect of the user's request.\"\"\"
+Please provide a focused response addressing this specific aspect of the user's request."""
         
         # Delegate to specialist
         result = await self._delegate_to_specialist(agent_type, step_prompt, {}, deep_state)
@@ -994,10 +994,10 @@ Please provide a focused response addressing this specific aspect of the user's 
         results: List[Dict[str, Any]], 
         user_input: str
     ) -> str:
-        \"\"\"Synthesize results from workflow execution.\"\"\"
+        """Synthesize results from workflow execution."""
         try:
             # Create synthesis prompt
-            synthesis_prompt = f\"\"\"Synthesize the following workflow results into a comprehensive response for the user.
+            synthesis_prompt = f"""Synthesize the following workflow results into a comprehensive response for the user.
 
 Original Request: {user_input}
 
@@ -1007,16 +1007,16 @@ Plan Overview:
 - Agents Involved: {', '.join(plan.get('agents_involved', []))}
 
 Execution Results:
-\"\"\"
+"""
             
             for result in results:
-                synthesis_prompt += f\"\"\"
+                synthesis_prompt += f"""
 Step {result['step']}: {result['action']} ({result['agent']})
 Status: {result['status']}
 Result: {result['result']}
-\"\"\"
+"""
             
-            synthesis_prompt += \"\"\"
+            synthesis_prompt += """
 
 Please create a coherent, comprehensive response that:
 1. Addresses the original user request completely
@@ -1025,7 +1025,7 @@ Please create a coherent, comprehensive response that:
 4. Maintains a helpful and clear tone
 5. Acknowledges any limitations or next steps needed
 
-Focus on value and practical guidance for the user.\"\"\"
+Focus on value and practical guidance for the user."""
             
             # Use LLM to synthesize
             if not self.llm_service:
@@ -1066,7 +1066,7 @@ Focus on value and practical guidance for the user.\"\"\"
         response: str, 
         reasoning: Dict[str, Any]
     ) -> None:
-        \"\"\"Store valuable insights from the interaction.\"\"\"
+        """Store valuable insights from the interaction."""
         try:
             # Create insights entry
             insights = {
@@ -1113,7 +1113,7 @@ Focus on value and practical guidance for the user.\"\"\"
 _enhanced_orchestrator = None
 
 def get_enhanced_orchestrator() -> EnhancedOrchestratorAgent:
-    \"\"\"Get global enhanced orchestrator instance.\"\"\"
+    """Get global enhanced orchestrator instance."""
     global _enhanced_orchestrator
     if _enhanced_orchestrator is None:
         _enhanced_orchestrator = EnhancedOrchestratorAgent()
