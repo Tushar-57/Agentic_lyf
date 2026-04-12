@@ -2,7 +2,6 @@
 Agent factory for creating and initializing agents with LangSmith observability.
 """
 
-import json
 import os
 from typing import Dict, List, Optional, Any
 from datetime import datetime
@@ -49,21 +48,12 @@ class AgentFactory:
             Created agent instance or None if creation failed
         """
         try:
-            logger.info(json.dumps({
-                "timestamp": datetime.utcnow().isoformat(),
-                "step": "agent_creation_start",
-                "agent_type": agent_type.value,
-                "agent_id": agent_id
-            }, indent=2))
+            logger.info("agent_creation_start", "Agent creation started", {"agent_type": agent_type.value, "agent_id": agent_id})
             if agent_id is None:
                 agent_id = f"{agent_type.value}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
             # Check if agent already exists
             if self.registry.get_agent(agent_id):
-                logger.warning(json.dumps({
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "step": "agent_exists",
-                    "agent_id": agent_id
-                }, indent=2))
+                logger.warning("agent_exists", f"Agent {agent_id} already exists", {"agent_id": agent_id})
                 return None
             agent = None
             if agent_type == AgentType.ORCHESTRATOR:
@@ -112,36 +102,16 @@ class AgentFactory:
                     for capability in custom_capabilities:
                         agent.add_capability(capability)
                 if self.registry.register_agent(agent):
-                    logger.info(json.dumps({
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "step": "agent_created",
-                        "agent_id": agent_id,
-                        "agent_type": agent_type.value
-                    }, indent=2))
+                    logger.info("agent_created", f"Agent {agent_id} created successfully", {"agent_id": agent_id, "agent_type": agent_type.value})
                     return agent
                 else:
-                    logger.error(json.dumps({
-                        "timestamp": datetime.utcnow().isoformat(),
-                        "step": "agent_register_failed",
-                        "agent_id": agent_id
-                    }, indent=2))
+                    logger.error("agent_register_failed", f"Failed to register agent {agent_id}", {"agent_id": agent_id})
                     return None
             else:
-                logger.error(json.dumps({
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "step": "agent_create_failed",
-                    "agent_type": agent_type.value,
-                    "agent_id": agent_id
-                }, indent=2))
+                logger.error("agent_create_failed", f"Failed to create agent {agent_id}", {"agent_type": agent_type.value, "agent_id": agent_id})
                 return None
         except Exception as e:
-            logger.error(json.dumps({
-                "timestamp": datetime.utcnow().isoformat(),
-                "step": "agent_creation_error",
-                "agent_type": agent_type.value,
-                "agent_id": agent_id,
-                "error": str(e)
-            }, indent=2))
+            logger.error("agent_creation_error", f"Error creating agent {agent_id}", {"agent_type": agent_type.value, "agent_id": agent_id}, error=e)
             return None
 
     async def _create_generic_agent(self,
@@ -171,13 +141,8 @@ class AgentFactory:
                             temperature=0.7
                         )
                         response = await llm_service.chat_completion(request)
-                        logger.info(json.dumps({
-                            "timestamp": datetime.utcnow().isoformat(),
-                            "step": "agent_llm_response",
-                            "agent_id": self.agent_id,
-                            "response_type": str(type(response)),
-                            "response_content": response.content[:100] + "..." if len(response.content) > 100 else response.content
-                        }, indent=2))
+                        response_preview = response.content[:100] + "..." if len(response.content) > 100 else response.content
+                        logger.info("agent_llm_response", f"Agent {self.agent_id} received LLM response", {"agent_id": self.agent_id, "response_preview": response_preview})
                         result = {
                             "response": response.content,
                             "reasoning": {
@@ -189,20 +154,10 @@ class AgentFactory:
                         logger.debug("Agent %s returned: %s", self.agent_id, result)
                         return result
                     except Exception as e:
-                        logger.error(json.dumps({
-                            "timestamp": datetime.utcnow().isoformat(),
-                            "step": "agent_execute_llm_error",
-                            "agent_id": self.agent_id,
-                            "error": str(e)
-                        }, indent=2))
+                        logger.error("agent_execute_llm_error", f"Agent {self.agent_id} LLM execution error", {"agent_id": self.agent_id}, error=e)
                         # Only fallback to skip if there's an error or skip_llm_init is True
                         if skip_llm_init:
-                            logger.info(json.dumps({
-                                "timestamp": datetime.utcnow().isoformat(),
-                                "response": "LLM call skipped for agent.",
-                                "step": "agent_execute_skipped_llm",
-                                "agent_id": self.agent_id
-                            }, indent=2))
+                            logger.info("agent_execute_skipped_llm", f"LLM call skipped for agent {self.agent_id}", {"agent_id": self.agent_id})
                             result = {
                                 "response": None,
                                 "reasoning": {
@@ -230,13 +185,7 @@ class AgentFactory:
             )
             return agent
         except Exception as e:
-            logger.error(json.dumps({
-                "timestamp": datetime.utcnow().isoformat(),
-                "step": "generic_agent_creation_error",
-                "agent_type": agent_type.value,
-                "agent_id": agent_id,
-                "error": str(e)
-            }, indent=2))
+            logger.error("generic_agent_creation_error", f"Error creating generic agent {agent_id}", {"agent_type": agent_type.value, "agent_id": agent_id}, error=e)
             return None
     
     def _get_default_capabilities(self, agent_type: AgentType) -> List[AgentCapability]:

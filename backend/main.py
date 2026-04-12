@@ -277,7 +277,7 @@ async def chat_endpoint(request: ChatRequest):
             conversation_logger.info(
                 "chat_request",
                 f"API_CHAT_REQUEST user={resolved_user_id} conversation_id={request.conversation_id}",
-                {"resolved_user_id": resolved_user_id, "conversation_id": request.conversation_id, "agent_id": request.agent_id}
+                {"resolved_user_id": resolved_user_id, "conversation_id": request.conversation_id, "agent_id": request.agent}
             )
 
         # Find orchestrator agent by type
@@ -363,7 +363,7 @@ async def chat_endpoint(request: ChatRequest):
             conversation_logger.info(
                 "chat_response",
                 f"API_CHAT_RESPONSE user={resolved_user_id} conversation_id={request.conversation_id}",
-                {"resolved_user_id": resolved_user_id, "conversation_id": request.conversation_id, "agent_id": request.agent_id}
+                {"resolved_user_id": resolved_user_id, "conversation_id": request.conversation_id, "agent_id": request.agent}
             )
 
         return ChatResponse(
@@ -392,7 +392,7 @@ async def chat_endpoint(request: ChatRequest):
             conversation_logger.error(
                 "chat_error",
                 f"API_CHAT_ERROR user={get_current_user().storage_key} conversation_id={request.conversation_id}",
-                {"user_id": get_current_user().storage_key, "conversation_id": request.conversation_id, "agent_id": request.agent_id, "error": error_text},
+                {"user_id": get_current_user().storage_key, "conversation_id": request.conversation_id, "agent_id": request.agent, "error": error_text},
                 error=Exception(error_text) if not isinstance(error_text, Exception) else error_text
             )
 
