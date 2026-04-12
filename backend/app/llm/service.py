@@ -16,10 +16,10 @@ from .base import (
 )
 from .config import LLMConfig
 from .factory import LLMProviderFactory
-from ..utils.logging import get_conversation_category_logger, get_llm_category_logger
+from ..utils.structured_logging import get_logger, LogComponent
 
-logger = get_llm_category_logger(__name__)
-conversation_logger = get_conversation_category_logger("app.conversation.llm")
+logger = get_logger(__name__, LogComponent.LLM)
+conversation_logger = get_logger("app.conversation.llm", LogComponent.LLM)
 
 
 def _parse_bool_env(name: str, default: bool) -> bool:
@@ -124,7 +124,7 @@ class LLMService:
         try:
             await self.factory.initialize()
             self._initialized = True
-            logger.info("LLM service initialized successfully")
+            logger.info("llm_service_initialized", "LLM service initialized successfully")
         except Exception as e:
             logger.error("init_failed", "Failed to initialize LLM service", error=e)
             raise
@@ -149,13 +149,13 @@ class LLMService:
         self._initialized = False
 
         if not self.has_valid_provider_config(refreshed_config):
-            logger.warning("No valid provider config available after reload")
+            logger.warning("no_valid_provider_config", "No valid provider config available after reload")
             return False
 
         try:
             await self.factory.initialize()
             self._initialized = True
-            logger.info("LLM service reloaded from latest configuration")
+            logger.info("llm_service_reloaded", "LLM service reloaded from latest configuration")
             return True
         except Exception as reload_error:
             logger.error("reload_failed", "Failed to reload LLM service from config", error=reload_error)
@@ -191,20 +191,18 @@ class LLMService:
 
             if AI_CONVERSATION_LOG_ENABLED:
                 conversation_logger.info(
-                    "CHAT_COMPLETION_REQUEST provider=%s messages=%s",
-                    provider_name,
-                    _prepare_conversation_text_for_log(_serialize_request_messages(request)),
+                    "CHAT_COMPLETION_REQUEST",
+                    f"provider={provider_name}",
+                    {"provider": provider_name, "messages": _prepare_conversation_text_for_log(_serialize_request_messages(request))}
                 )
 
             response = await provider.chat_completion(request)
 
             if AI_CONVERSATION_LOG_ENABLED:
                 conversation_logger.info(
-                    "CHAT_COMPLETION_RESPONSE provider=%s model=%s usage=%s content=%s",
-                    provider_name,
-                    response.model or "unknown",
-                    _prepare_conversation_text_for_log(response.usage or {}),
-                    _prepare_conversation_text_for_log(response.content),
+                    "CHAT_COMPLETION_RESPONSE",
+                    f"provider={provider_name} model={response.model or 'unknown'}",
+                    {"provider": provider_name, "model": response.model or "unknown", "usage": _prepare_conversation_text_for_log(response.usage or {}), "content": _prepare_conversation_text_for_log(response.content)}
                 )
 
             return response
@@ -221,9 +219,9 @@ class LLMService:
 
             if AI_CONVERSATION_LOG_ENABLED:
                 conversation_logger.info(
-                    "CHAT_COMPLETION_STREAM_REQUEST provider=%s messages=%s",
-                    provider_name,
-                    _prepare_conversation_text_for_log(_serialize_request_messages(request)),
+                    "CHAT_COMPLETION_STREAM_REQUEST",
+                    f"provider={provider_name}",
+                    {"provider": provider_name, "messages": _prepare_conversation_text_for_log(_serialize_request_messages(request))}
                 )
 
             streamed_parts: List[str] = []
@@ -233,9 +231,9 @@ class LLMService:
 
             if AI_CONVERSATION_LOG_ENABLED:
                 conversation_logger.info(
-                    "CHAT_COMPLETION_STREAM_RESPONSE provider=%s content=%s",
-                    provider_name,
-                    _prepare_conversation_text_for_log("".join(streamed_parts)),
+                    "CHAT_COMPLETION_STREAM_RESPONSE",
+                    f"provider={provider_name}",
+                    {"provider": provider_name, "content": _prepare_conversation_text_for_log("".join(streamed_parts))}
                 )
         except Exception as e:
             logger.error("streaming_failed", "Streaming chat completion failed", error=e)
@@ -312,12 +310,12 @@ class LLMService:
             self._initialized = False
 
             if not self.has_valid_provider_config(new_config):
-                logger.warning("Updated LLM config has no valid providers; service is uninitialized")
+                logger.warning("no_valid_providers", "Updated LLM config has no valid providers; service is uninitialized")
                 return False
 
             await self.factory.initialize()
             self._initialized = True
-            logger.info("LLM service configuration updated successfully")
+            logger.info("config_updated", "LLM service configuration updated successfully")
             return True
         except Exception as e:
             logger.error("update_config_failed", "Failed to update LLM service configuration", error=e)
@@ -328,7 +326,7 @@ class LLMService:
         if self._initialized:
             await self.factory.shutdown()
             self._initialized = False
-            logger.info("LLM service shutdown complete")
+            logger.info("shutdown_complete", "LLM service shutdown complete")
 
 
 # Global service instance
@@ -346,13 +344,11 @@ async def get_llm_service() -> LLMService:
         if _llm_service.has_valid_provider_config(latest_config):
             await _llm_service.initialize()
         else:
-            logger.warning(
-                "No valid LLM provider configurations found - LLM service will be created but not initialized"
-            )
+            logger.warning("llm_service_disabled", "No valid LLM providers found; service disabled")
         return _llm_service
 
     if _llm_service.config.model_dump() != latest_config.model_dump():
-        logger.info("Detected LLM configuration change; refreshing service configuration")
+        logger.info("config_change_detected", "Detected LLM configuration change; refreshing service configuration")
         updated = await _llm_service.update_config(latest_config)
         if not updated:
             _llm_service.set_uninitialized(latest_config)

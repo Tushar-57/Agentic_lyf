@@ -14,9 +14,9 @@ from langchain_core.runnables import Runnable
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
-from ..utils.logging import get_agent_logger, LogCategory
+from ..utils.structured_logging import get_logger, LogComponent
 
-logger = get_agent_logger(__name__, LogCategory.AGENT)
+logger = get_logger(__name__, LogComponent.AGENT)
 
 
 class AgentType(str, Enum):
