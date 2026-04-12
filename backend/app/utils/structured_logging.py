@@ -25,7 +25,7 @@ from typing import Any, Callable, Dict, Optional, Union
 # Context variables for request tracking
 request_id_var: ContextVar[str] = ContextVar("request_id", default="")
 user_id_var: ContextVar[str] = ContextVar("user_id", default="")
-component_path_var: ContextVar[list] = ContextVar("component_path", default_factory=list)
+component_path_var: ContextVar[list] = ContextVar("component_path", default=[])
 
 
 class LogLevel(Enum):
