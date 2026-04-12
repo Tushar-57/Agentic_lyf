@@ -53,6 +53,9 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
+// CSS class names for premium checkup rendered HTML content
+const PREMIUM_CHECKUP_HTML_CLASSNAMES = 'prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed text-foreground'
+
 interface AnalyticsData {
   interactions: {
     daily: Array<{ date: string; count: number; agent: string }>
