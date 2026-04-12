@@ -233,7 +233,7 @@ Remember: Your role is to be a trusted health partner that combines AI insights 
                 )
                 
                 if interaction_id:
-                    logger.info("pending_interaction_created", f"pending_interaction_created"{interaction_id}f"pending_interactiraction_id}f"Created pending iraction_id} for user approval", {"interaction_id": interaction_id})
+                    logger.info("pending_interaction_created", f"Created pending interaction {interaction_id} for user approval", {"interaction_id": interaction_id})
                     # Add approval request info to response
                     response += f"\n\n---\n**🔍 Review Needed**: This response contains health recommendations. Please review and approve if helpful for future personalization."
             
