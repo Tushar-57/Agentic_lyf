@@ -1,25 +1,16 @@
 """Telegram Bot implementation for Agentic Lyf."""
 
 import asyncio
-import logging
 from typing import Optional, Dict, Any
 from datetime import datetime
 
-from telegram import Update, Bot
-from telegram.ext import (
-    Application,
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    filters,
-    ContextTypes
-)
 
 from ..services.knowledge_base import KnowledgeBaseService
 from ..agents.factory import AgentFactory
 from .formatters import ResponseFormatter
+from ..utils.structured_logging import get_logger, LogComponent
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, LogComponent.NOTIFICATION)
 
 
 class TelegramBot:

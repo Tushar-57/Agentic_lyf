@@ -2,7 +2,6 @@
 Productivity Agent - Specialized agent for productivity, task management, and goal tracking.
 """
 
-import logging
 import re
 from typing import Dict, Any, List, Optional
 from datetime import datetime
@@ -14,8 +13,9 @@ from ...llm.base import CompletionRequest, ChatMessage
 from ...services.knowledge_base import get_knowledge_base_service
 from ...models.knowledge import KnowledgeEntryType
 from ...services.interaction_recorder import get_interaction_recorder
+from ...utils.structured_logging import get_logger, LogComponent
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, LogComponent.AGENT)
 
 
 class ProductivityAgent(BaseAgent):

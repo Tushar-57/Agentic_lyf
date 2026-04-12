@@ -2,7 +2,6 @@
 Agent factory for creating and initializing agents with LangSmith observability.
 """
 
-import logging
 import json
 import os
 from typing import Dict, List, Optional, Any
@@ -19,17 +18,9 @@ from .communication import get_communication_protocol, start_communication_proto
 from .prompts import get_agent_prompt
 from .communication import MessageType
 from .base import AgentMessage
+from ..utils.structured_logging import get_logger, LogComponent
 
-# Ensure logger outputs to console
-logger = logging.getLogger(__name__)
-if not logger.hasHandlers():
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter('[%(asctime)s] %(levelname)s %(name)s: %(message)s')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-logger.setLevel(logging.INFO)
-
-logger.info("[AgentFactory] Logger initialized and outputting to console.")
+logger = get_logger(__name__, LogComponent.AGENT)
 
 class AgentFactory:
     # Removed _register_capability_handlers: agent details and capabilities are already indexed and used for routing in registry and protocol.

@@ -2,7 +2,6 @@
 """Launcher script for Telegram bot."""
 
 import asyncio
-import logging
 import sys
 from pathlib import Path
 
@@ -12,14 +11,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 from app.telegram.bot import TelegramBot
 from app.telegram.config import TelegramConfig
 from app.agents.factory import AgentFactory
+from app.utils.structured_logging import get_logger, LogComponent
 
-# Setup basic logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] [%(levelname)7s] %(name)s: %(message)s',
-    datefmt='%H:%M:%S.%f'
-)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, LogComponent.NOTIFICATION)
 
 
 async def main():

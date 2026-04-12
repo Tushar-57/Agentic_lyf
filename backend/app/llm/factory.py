@@ -4,7 +4,6 @@ LLM provider factory with health checks and fallback mechanisms.
 """
 
 import asyncio
-import logging
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 
@@ -12,8 +11,9 @@ from .base import BaseLLMProvider, LLMProviderType, HealthCheckResult
 from .config import LLMConfig
 from .openai_provider import OpenAIProvider
 from .ollama_provider import OllamaProvider
+from ..utils.structured_logging import get_logger, LogComponent
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, LogComponent.LLM)
 
 
 class LLMProviderFactory:

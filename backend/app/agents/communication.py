@@ -3,17 +3,15 @@ Agent communication protocol for inter-agent messaging and coordination.
 """
 
 import asyncio
-import logging
 from typing import Dict, List, Optional, Any, Callable, Awaitable
 from datetime import datetime, timedelta
 from enum import Enum
-from dataclasses import dataclass
-from collections import defaultdict, deque
 
 from .base import AgentMessage, AgentType, BaseAgent
 from .registry import get_agent_registry
+from ..utils.structured_logging import get_logger, LogComponent
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, LogComponent.AGENT)
 
 
 class MessageType(str, Enum):

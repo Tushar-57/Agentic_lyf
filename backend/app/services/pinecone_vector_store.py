@@ -1,6 +1,5 @@
 """Pinecone-backed vector store with local metadata cache for knowledge entries."""
 
-import logging
 import os
 import pickle
 import re
@@ -14,8 +13,9 @@ import numpy as np
 
 from ..models.knowledge import KnowledgeEntry, KnowledgeSearchResult
 from .storage_paths import resolve_data_path
+from ..utils.structured_logging import get_logger, LogComponent
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, LogComponent.STORE)
 
 
 class PineconeVectorStore:

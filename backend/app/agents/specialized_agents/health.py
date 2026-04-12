@@ -4,7 +4,6 @@ Enhanced with Deep Agent patterns and human-in-the-loop capabilities.
 """
 
 from typing import Dict, Any, List
-import logging
 import re
 
 from ..base import BaseAgent, AgentType, AgentCapability, AgentState
@@ -13,8 +12,9 @@ from ...llm.service import get_llm_service
 from ...llm.base import CompletionRequest, ChatMessage
 from ...services.knowledge_base import get_knowledge_base_service
 from ...services.interaction_recorder import get_interaction_recorder
+from ...utils.structured_logging import get_logger, LogComponent
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, LogComponent.AGENT)
 
 
 class HealthAgent(BaseAgent):

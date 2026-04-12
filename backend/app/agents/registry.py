@@ -2,14 +2,14 @@
 Agent registry for managing active agents and their capabilities.
 """
 
-import logging
 from typing import Dict, List, Optional, Set, Any
 from datetime import datetime, timedelta
 from collections import defaultdict
 
 from .base import BaseAgent, AgentType, AgentStatus, AgentMessage, AgentCapability
+from ..utils.structured_logging import get_logger, LogComponent
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, LogComponent.AGENT)
 
 
 class AgentRegistry:

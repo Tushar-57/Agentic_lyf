@@ -4,7 +4,6 @@ FAISS-based vector store for knowledge base embeddings.
 
 import os
 import pickle
-import logging
 from typing import List, Dict, Any, Optional, Tuple
 from collections import OrderedDict
 import numpy as np
@@ -20,8 +19,9 @@ except Exception:  # pragma: no cover - environment-specific optional dependency
 
 from ..models.knowledge import KnowledgeEntry, KnowledgeSearchResult
 from .storage_paths import resolve_data_path
+from ..utils.structured_logging import get_logger, LogComponent
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, LogComponent.STORE)
 
 
 class VectorStore:

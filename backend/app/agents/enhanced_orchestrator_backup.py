@@ -40,8 +40,9 @@ from ..llm.service import get_llm_service
 from ..llm.base import CompletionRequest, ChatMessage
 from ..services.knowledge_base import get_knowledge_base_service
 from ..services.interaction_recorder import get_interaction_recorder
+from ..utils.structured_logging import get_logger, LogComponent
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, LogComponent.AGENT)
 
 
 class TaskComplexity(Enum):

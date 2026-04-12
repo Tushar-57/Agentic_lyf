@@ -8,7 +8,6 @@ This orchestrator incorporates the 4 principles from Deep Agents:
 4. Advanced Prompt Engineering with context awareness
 """
 
-import logging
 import re
 import json
 from typing import Dict, Any, Optional, List, Union
@@ -27,8 +26,9 @@ from ..llm.service import get_llm_service
 from ..llm.base import CompletionRequest, ChatMessage
 from ..services.knowledge_base import get_knowledge_base_service
 from ..services.interaction_recorder import get_interaction_recorder
+from ..utils.structured_logging import get_logger, LogComponent
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__, LogComponent.AGENT)
 
 
 class TaskComplexity(Enum):

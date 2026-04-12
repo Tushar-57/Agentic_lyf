@@ -1,7 +1,6 @@
 """
 LangGraph workflow for multi-agent orchestration and structured logging.
 """
-import logging
 import json
 from typing import Any
 from langgraph.graph import START, StateGraph, END
@@ -12,14 +11,9 @@ from app.agents.registry import get_agent_registry
 from app.llm.service import get_llm_service
 from app.llm.base import CompletionRequest, ChatMessage
 from app.agents.prompts import PromptLibrary
+from app.utils.structured_logging import get_logger, LogComponent
 
-logger = logging.getLogger("langgraph")
-if not logger.hasHandlers():
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter('[%(asctime)s] %(levelname)s %(name)s: %(message)s')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-logger.setLevel(logging.INFO)
+logger = get_logger("langgraph", LogComponent.WORKFLOW)
 
 class AgentGraphWorkflow:
     def __init__(self):
