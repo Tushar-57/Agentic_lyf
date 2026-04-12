@@ -353,8 +353,8 @@ def get_knowledge_db_store() -> Optional[KnowledgeDbStore]:
         _knowledge_db_store_initialized = True
 
         if _knowledge_db_store_instance:
-            logger.info("Knowledge DB store enabled via database backend")
+            logger.info("knowledge_db_enabled", "Knowledge DB store enabled via database backend")
         else:
-            logger.warning("Knowledge DB store unavailable; initialization failed")
+            logger.warning("knowledge_db_unavailable", "Knowledge DB store unavailable; initialization failed")
 
         return _knowledge_db_store_instance

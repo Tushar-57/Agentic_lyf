@@ -452,7 +452,7 @@ class AgentRegistry:
         self._capabilities_index.clear()
         self._message_queue.clear()
         self._orchestrator_agent = None
-        logger.info("Cleared agent registry")
+        logger.info("registry_cleared", "Cleared agent registry")
 
 
 # Global registry instance

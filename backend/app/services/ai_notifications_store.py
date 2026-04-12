@@ -438,8 +438,8 @@ def get_ai_notification_store() -> Optional[AINotificationStore]:
         _ai_notification_store_initialized = True
 
         if _ai_notification_store_instance:
-            logger.info("AI notification store enabled via database backend")
+            logger.info("ai_notification_store_enabled", "AI notification store enabled via database backend")
         else:
-            logger.warning("AI notification store unavailable; initialization failed")
+            logger.warning("ai_notification_store_unavailable", "AI notification store unavailable; initialization failed")
 
         return _ai_notification_store_instance

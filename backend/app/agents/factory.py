@@ -311,7 +311,7 @@ class AgentFactory:
         """
         try:
             if self._initialized:
-                logger.warning("Agent ecosystem already initialized")
+                logger.warning("ecosystem_already_initialized", "Agent ecosystem already initialized")
                 return {"status": "already_initialized"}
             
             # Default to creating all agent types
@@ -387,7 +387,7 @@ class AgentFactory:
                 "timestamp": datetime.utcnow().isoformat()
             }
             
-            logger.info("Agent ecosystem shutdown complete")
+            logger.info("ecosystem_shutdown_complete", "Agent ecosystem shutdown complete")
             return result
             
         except Exception as e:

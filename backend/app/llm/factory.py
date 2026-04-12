@@ -61,7 +61,7 @@ class LLMProviderFactory:
             
             # If no providers were initialized, create a minimal setup
             if not self._current_provider:
-                logger.warning("No providers could be initialized with valid configuration")
+                logger.warning("no_providers_initialized", "No providers could be initialized with valid configuration")
                 # Don't raise an exception, just log a warning
                 
         except Exception as e:
@@ -257,7 +257,7 @@ class LLMProviderFactory:
     
     async def shutdown(self) -> None:
         """Shutdown all providers."""
-        logger.info("Shutting down LLM providers")
+        logger.info("shutting_down_providers", "Shutting down LLM providers")
         # Note: LangChain providers don't typically need explicit shutdown,
         # but we could add cleanup logic here if needed
         self._providers.clear()

@@ -277,7 +277,7 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
 
     async def execute(self, state: Union[AgentState, str, Dict[str, Any]]) -> Dict[str, Any]:
         """Enhanced execute method with deep agent patterns."""
-        logger.debug("Enhanced Orchestrator.execute START")
+        logger.debug("enhanced_execute_start", "Enhanced Orchestrator.execute START")
         
         try:
             # Normalize input state
@@ -354,7 +354,7 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
                 "timestamp": datetime.now().isoformat()
             }
             
-            logger.debug("Enhanced Orchestrator.execute COMPLETE")
+            logger.debug("enhanced_execute_complete", "Enhanced Orchestrator.execute COMPLETE")
             return updated_state
             
         except Exception as e:

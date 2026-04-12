@@ -257,8 +257,8 @@ def get_preference_db_store() -> Optional[PreferenceDbStore]:
         _preference_db_store_initialized = True
 
         if _preference_db_store_instance:
-            logger.info("Preference DB store enabled via database backend")
+            logger.info("preference_db_enabled", "Preference DB store enabled via database backend")
         else:
-            logger.warning("Preference DB store unavailable; initialization failed")
+            logger.warning("preference_db_unavailable", "Preference DB store unavailable; initialization failed")
 
         return _preference_db_store_instance

@@ -78,7 +78,7 @@ class AgentGraphWorkflow:
             self.graph.add_edge(orchestrator_name, "format_response_final_step")
             self.graph.add_edge("format_response_final_step", END)
         else:
-            logger.warning("No orchestrator found - falling back to sequential execution")
+            logger.warning("no_orchestrator_fallback", "No orchestrator found - falling back to sequential execution")
             # Fallback to original sequential behavior if no orchestrator
             if agent_names:
                 # Remove format node from agent_names for fallback
@@ -100,7 +100,7 @@ class AgentGraphWorkflow:
     async def _format_response_final_step(self, state):
         """Final step to format and enhance the response with context and personalization."""
         try:
-            logger.info("Starting response formatting step")
+            logger.info("response_formatting_start", "Starting response formatting step")
             
             # Extract information from state
             user_input = state.get("user_input", "")
@@ -159,7 +159,7 @@ class AgentGraphWorkflow:
                 state["response"] = enhanced_response
                 state["formatting_applied"] = True
                 
-                logger.info("Response formatting completed successfully")
+                logger.info("response_formatting_complete", "Response formatting completed successfully")
                 
             except Exception as e:
                 logger.warning("llm_formatting_failed", "LLM formatting failed, using fallback formatting", error=e)

@@ -943,5 +943,5 @@ graph = get_graph_for_dev
 
 if __name__ == "__main__":
     import uvicorn
-    logger.info("[main.py] FastAPI startup: initializing agent ecosystem.")
+    logger.info("fastapi_startup", "FastAPI startup: initializing agent ecosystem")
     uvicorn.run(app, host="0.0.0.0", port=8000)

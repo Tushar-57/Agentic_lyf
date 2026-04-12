@@ -426,12 +426,12 @@ class CommunicationProtocol:
     async def start(self) -> None:
         """Start the communication protocol."""
         if self._is_running:
-            logger.warning("Communication protocol already running")
+            logger.warning("protocol_already_running", "Communication protocol already running")
             return
         
         self._is_running = True
         self._processing_task = asyncio.create_task(self._process_message_queue())
-        logger.info("Started communication protocol")
+        logger.info("protocol_started", "Started communication protocol")
     
     async def stop(self) -> None:
         """Stop the communication protocol."""
@@ -447,7 +447,7 @@ class CommunicationProtocol:
             except asyncio.CancelledError:
                 pass
         
-        logger.info("Stopped communication protocol")
+        logger.info("protocol_stopped", "Stopped communication protocol")
     
     def get_conversation_history(self, agent1: str, agent2: str) -> List[AgentMessage]:
         """Get conversation history between two agents."""

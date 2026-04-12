@@ -578,10 +578,8 @@ Response contract:
 
     async def execute(self, state: Union[AgentState, str, Dict[str, Any]]) -> Dict[str, Any]:
         """Enhanced execute method with deep agent patterns."""
-        logger.info("=" * 80)
-        logger.info("[ENHANCED ORCHESTRATOR] execute() method called!")
-        logger.info("=" * 80)
-        logger.debug("EnhancedOrchestrator.execute START")
+        logger.info("enhanced_orchestrator_execute", "Enhanced orchestrator execute() method called")
+        logger.debug("enhanced_execute_start", "EnhancedOrchestrator.execute START")
         
         try:
             # Always refresh the service reference so provider switches are immediately visible.
@@ -683,7 +681,7 @@ Response contract:
             
             if complexity == TaskComplexity.SIMPLE and confidence < 0.8 and target_agent == AgentType.GENERAL:
                 # Only handle directly if low confidence or explicitly GENERAL
-                logger.info("[DELEGATION DEBUG] Taking _handle_simple_task path")
+                logger.info("delegation_simple_task", "Taking _handle_simple_task path")
                 response = await self._handle_simple_task(user_input, routing_context, deep_state)
             elif complexity in [TaskComplexity.SIMPLE, TaskComplexity.MODERATE]:
                 # Delegate to specialist for domain-specific tasks
@@ -695,7 +693,7 @@ Response contract:
                     deep_state
                 )
             else:  # COMPLEX or ADVANCED
-                logger.info("[DELEGATION DEBUG] Taking _orchestrate_complex_workflow path")
+                logger.info("delegation_complex_workflow", "Taking _orchestrate_complex_workflow path")
                 response = await self._orchestrate_complex_workflow(
                     user_input,
                     strategic_plan,

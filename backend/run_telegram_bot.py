@@ -19,25 +19,20 @@ logger = get_logger(__name__, LogComponent.NOTIFICATION)
 async def main():
     """Main entry point for Telegram bot."""
     
-    logger.info("=" * 60)
-    logger.info("Starting Agentic Lyf Telegram Bot")
-    logger.info("=" * 60)
+    logger.info("telegram_bot_start", "Starting Agentic Lyf Telegram Bot")
     
     # Validate configuration
     try:
         if not TelegramConfig.validate():
-            logger.error("Telegram bot is disabled (TELEGRAM_ENABLED=false)")
-            logger.info("To enable:")
-            logger.info("1. Get a bot token from @BotFather on Telegram")
-            logger.info("2. Add to .env file: TELEGRAM_BOT_TOKEN=your_token_here")
-            logger.info("3. Set TELEGRAM_ENABLED=true in .env")
+            logger.error("telegram_disabled", "Telegram bot is disabled (TELEGRAM_ENABLED=false)")
+            logger.info("telegram_enable_help", "To enable: Get a bot token from @BotFather, add TELEGRAM_BOT_TOKEN to .env, set TELEGRAM_ENABLED=true")
             return
     except ValueError as e:
         logger.error("config_error", "Configuration error", error=e)
         return
     
     # Initialize agent factory
-    logger.info("Initializing agent factory...")
+    logger.info("init_agent_factory", "Initializing agent factory")
     agent_factory = AgentFactory()
     await agent_factory.initialize_agent_ecosystem()
     logger.info("agents_initialized", f"Initialized {len(agent_factory.registry.get_all_agents())} agents", {"agent_count": len(agent_factory.registry.get_all_agents())})
@@ -47,16 +42,16 @@ async def main():
     bot = TelegramBot(token=token, agent_factory=agent_factory)
     
     try:
-        logger.info("Starting Telegram bot...")
+        logger.info("telegram_bot_running", "Starting Telegram bot")
         await bot.run()
     except KeyboardInterrupt:
-        logger.info("\n🛑 Received keyboard interrupt")
+        logger.info("keyboard_interrupt", "Received keyboard interrupt")
     except Exception as e:
         logger.error("bot_error", "Bot error", error=e)
     finally:
-        logger.info("Shutting down...")
+        logger.info("shutting_down", "Shutting down")
         await bot.stop()
-        logger.info("✅ Bot stopped successfully")
+        logger.info("bot_stopped", "Bot stopped successfully")
 
 
 if __name__ == "__main__":

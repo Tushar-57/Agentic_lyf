@@ -243,7 +243,7 @@ class OrchestratorAgent(BaseAgent):
             })
             
             # Return only new fields to be merged into state
-            logger.debug("Orchestrator.execute RETURNING direct response to merge into state")
+            logger.debug("execute_return_direct", "Orchestrator.execute RETURNING direct response to merge into state")
             return {
                 "response": response,
                     "reasoning": reasoning
@@ -307,7 +307,7 @@ class OrchestratorAgent(BaseAgent):
                         except Exception as e:
                             logger.warning("record_interaction_failed", "Failed to record interaction", error=e)
                     
-                    logger.debug("Orchestrator.execute RETURNING delegated response to merge into state")
+                    logger.debug("execute_return_delegated", "Orchestrator.execute RETURNING delegated response to merge into state")
                     return {
                         "response": response,
                         "reasoning": reasoning
@@ -325,7 +325,7 @@ class OrchestratorAgent(BaseAgent):
                         "finalAgent": "orchestrator",
                         "error": f"No {target_agent_type.value} agent available"
                     })
-                    logger.debug("Orchestrator.execute RETURNING fallback response (no agent available)")
+                    logger.debug("execute_return_fallback", "Orchestrator.execute RETURNING fallback response (no agent available)")
                     return {
                         "response": response,
                         "reasoning": reasoning
@@ -342,7 +342,7 @@ class OrchestratorAgent(BaseAgent):
             reasoning.update({
                 "finalAgent": "orchestrator"
             })
-            logger.debug("Orchestrator.execute RETURNING direct response (fallback)")
+            logger.debug("execute_return_direct_fallback", "Orchestrator.execute RETURNING direct response (fallback)")
             return {
                 "response": response,
                 "reasoning": reasoning

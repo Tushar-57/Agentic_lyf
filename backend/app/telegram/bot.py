@@ -343,7 +343,7 @@ All systems operational! 🚀
         # Add error handler
         self.application.add_error_handler(self.error_handler)
         
-        logger.info("Telegram bot application built successfully")
+        logger.info("bot_app_built", "Telegram bot application built successfully")
         
         return self.application
     
@@ -352,7 +352,7 @@ All systems operational! 🚀
         if not self.application:
             self.build_application()
         
-        logger.info("Starting Telegram bot...")
+        logger.info("bot_starting", "Starting Telegram bot")
         
         # Initialize and start polling
         await self.application.initialize()
@@ -362,16 +362,16 @@ All systems operational! 🚀
             drop_pending_updates=True
         )
         
-        logger.info("✅ Telegram bot is running!")
+        logger.info("bot_running", "Telegram bot is running")
     
     async def stop(self) -> None:
         """Stop the Telegram bot."""
         if self.application:
-            logger.info("Stopping Telegram bot...")
+            logger.info("bot_stopping", "Stopping Telegram bot")
             await self.application.updater.stop()
             await self.application.stop()
             await self.application.shutdown()
-            logger.info("✅ Telegram bot stopped")
+            logger.info("bot_stopped", "Telegram bot stopped")
     
     async def run(self) -> None:
         """Run the bot (blocking)."""
@@ -382,6 +382,6 @@ All systems operational! 🚀
             # Run indefinitely
             await asyncio.Event().wait()
         except (KeyboardInterrupt, SystemExit):
-            logger.info("Received stop signal")
+            logger.info("stop_signal", "Received stop signal")
         finally:
             await self.stop()

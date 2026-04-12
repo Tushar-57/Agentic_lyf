@@ -78,7 +78,7 @@ class HealthAgent(BaseAgent):
         
         # Initialize knowledge base for health-specific data
         self.knowledge_base = get_knowledge_base_service()
-        logger.info("HealthAgent initialized with enhanced capabilities")
+        logger.info("health_agent_initialized", "HealthAgent initialized with enhanced capabilities")
 
     def get_enhanced_tools(self):
         """
@@ -113,7 +113,7 @@ class HealthAgent(BaseAgent):
             
             return tools
         except ImportError as e:
-            logger.warning("Some enhanced tools not available: %s", e)
+            logger.warning("enhanced_tools_unavailable", f"Some enhanced tools not available: {e}")
             return []
 
     def get_enhanced_system_prompt(self, context: Dict[str, Any] = None) -> str:
@@ -233,13 +233,13 @@ Remember: Your role is to be a trusted health partner that combines AI insights 
                 )
                 
                 if interaction_id:
-                    logger.info("Created pending interaction %s for user approval", interaction_id)
+                    logger.info("pending_interaction_created", f"pending_interaction_created"{interaction_id}f"pending_interactiraction_id}f"Created pending iraction_id} for user approval", {"interaction_id": interaction_id})
                     # Add approval request info to response
                     response += f"\n\n---\n**🔍 Review Needed**: This response contains health recommendations. Please review and approve if helpful for future personalization."
             
             # IMPORTANT: Do NOT auto-extract preferences without user approval
             # This prevents the knowledge base pollution issue you identified
-            logger.info("Health response generated - waiting for user approval before storing preferences")
+            logger.info("health_response_complete", "Health response generated - waiting for user approval before storing preferences")
             
             # Extract knowledge sources for transparency
             knowledge_sources = self._extract_knowledge_sources(merged_context)

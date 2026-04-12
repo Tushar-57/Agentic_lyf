@@ -261,8 +261,8 @@ def get_daily_checkup_store() -> Optional[DailyCheckupStore]:
         _checkup_store_initialized = True
 
         if _checkup_store_instance:
-            logger.info("Daily checkup store enabled via database backend")
+            logger.info("checkup_store_enabled", "Daily checkup store enabled via database backend")
         else:
-            logger.warning("Daily checkup store unavailable; database backend initialization failed")
+            logger.warning("checkup_store_unavailable", "Daily checkup store unavailable; database backend initialization failed")
 
         return _checkup_store_instance

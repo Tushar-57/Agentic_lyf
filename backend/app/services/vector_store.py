@@ -78,7 +78,7 @@ class VectorStore:
                 
                 logger.info("vector_store_loaded", f"Loaded vector store with {self.index.ntotal} entries", {"entry_count": self.index.ntotal})
             else:
-                logger.info("No existing vector store found, starting fresh")
+                logger.info("vector_store_fresh", "No existing vector store found, starting fresh")
         except Exception as e:
             logger.error("load_failed", "Failed to load vector store", error=e)
             # Reset to empty state on error
@@ -419,7 +419,7 @@ class VectorStore:
             self.id_to_faiss_id = {}
             self.next_faiss_id = 0
             self._save_index()
-            logger.info("Cleared vector store")
+            logger.info("vector_store_cleared", "Cleared vector store")
         except Exception as e:
             logger.error("clear_failed", "Failed to clear vector store", error=e)
             raise

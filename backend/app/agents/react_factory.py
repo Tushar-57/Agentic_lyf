@@ -73,7 +73,7 @@ class ReActSubAgent:
             prompt=self._build_full_prompt()
         )
         
-        logger.info(f"Created ReAct sub-agent: {self.name} ({self.agent_id})")
+        logger.info("react_agent_created", f"Created ReAct sub-agent: {self.name} ({self.agent_id})", {"agent_name": self.name, "agent_id": self.agent_id})
     
     def _create_tool_set(self) -> List[BaseTool]:
         """Create the complete tool set for this agent."""
