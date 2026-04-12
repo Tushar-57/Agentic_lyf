@@ -41,20 +41,51 @@ import { toast } from 'sonner'
 
 const INSIGHT_NODE_COLOR = '#f87171'
 
-// Color scheme helper function
+// Color scheme helper function - distinct colors for each category
 const getCategoryColor = (category: string): string => {
     const categoryColors: Record<string, string> = {
-        'productivity': '#4a9eff',
-        'health': '#00d084',
-        'finance': '#ffb347',
-        'journal': '#a855f7',
-        'system': '#64748b',
-        'interaction': '#f472b6',
-        'time_entry': '#3b82f6',
-        'insight': INSIGHT_NODE_COLOR,
-        'daily_checkup': INSIGHT_NODE_COLOR
+        // Time & Productivity
+        'time_entry': '#3b82f6',      // Blue
+        'productivity': '#0ea5e9',   // Sky blue
+        'planner': '#06b6d4',        // Cyan
+        
+        // Goals & Habits
+        'goals': '#f59e0b',          // Amber
+        'goal': '#f59e0b',           // Amber (alias)
+        'habit_snapshot': '#10b981', // Emerald
+        'habit': '#10b981',          // Emerald (alias)
+        'habit_progress': '#34d399', // Light emerald
+        
+        // User & Profile
+        'user_profile': '#8b5cf6',   // Violet
+        'userpreference': '#8b5cf6', // Violet
+        'profile': '#a78bfa',        // Light violet
+        
+        // Health & Wellness
+        'health': '#ef4444',         // Red
+        'journal': '#ec4899',        // Pink
+        'daily_checkup': '#f97316',  // Orange
+        
+        // Finance & Data
+        'finance': '#14b8a6',        // Teal
+        'insight': '#f43f5e',        // Rose
+        'important_insight': '#e11d48', // Dark rose
+        'deep_insight': '#be123c',   // Burgundy
+        
+        // System & Interactions
+        'system': '#6b7280',         // Gray
+        'interaction': '#d946ef',    // Fuchsia
+        'alterego_sync': '#a855f7',  // Purple
+        
+        // Memory & Knowledge
+        'memory': '#94a3b8',         // Slate
+        'pattern': '#64748b',        // Dark slate
+        'preference': '#818cf8'      // Indigo
     }
-    return categoryColors[category] || '#64748b'
+    
+    // Normalize category name for lookup
+    const normalized = category?.toLowerCase().replace(/[_\s-]+/g, '_') || ''
+    return categoryColors[normalized] || categoryColors[category?.toLowerCase() || ''] || '#94a3b8'
 }
 
 const normalizeEnumLikeValue = (value: string): string => {

@@ -78,7 +78,7 @@ export function useBackendStatus(pollingInterval = 30000) {
         const timeoutId = setTimeout(() => controller.abort(), 5000)
         
         const response = await fetch('/api/health', {
-          method: 'HEAD',
+          method: 'GET',
           signal: controller.signal
         })
         

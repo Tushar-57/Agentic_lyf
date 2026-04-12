@@ -137,49 +137,122 @@ class JSONFormatter(logging.Formatter):
 
 
 class PrettyFormatter(logging.Formatter):
-    """Human-readable formatter for development."""
+    """Beautiful human-readable formatter for development with full colors and separators."""
 
-    COLORS = {
-        "DEBUG": "\033[36m",      # Cyan
-        "INFO": "\033[32m",       # Green
-        "WARNING": "\033[33m",    # Yellow
-        "ERROR": "\033[31m",      # Red
-        "CRITICAL": "\033[1;31m", # Bold Red
-        "RESET": "\033[0m",
+    # Level colors (bold for visibility)
+    LEVEL_COLORS = {
+        "DEBUG": "\033[38;5;245m",     # Gray
+        "INFO": "\033[38;5;82m",       # Bright Green
+        "WARNING": "\033[38;5;214m",  # Orange
+        "ERROR": "\033[38;5;196m",    # Bright Red
+        "CRITICAL": "\033[48;5;196m\033[38;5;231m",  # Red bg, white text
     }
 
+    # Component colors
+    COMPONENT_COLORS = {
+        "api": "\033[38;5;39m",        # Blue
+        "agent": "\033[38;5;141m",     # Purple
+        "llm": "\033[38;5;208m",       # Orange
+        "service": "\033[38;5;117m",  # Light blue
+        "knowledge": "\033[38;5;183m", # Light purple
+        "embedding": "\033[38;5;178m", # Yellow-green
+        "workflow": "\033[38;5;79m",   # Sea green
+        "notification": "\033[38;5;213m", # Pink
+        "store": "\033[38;5;250m",    # Light gray
+        "system": "\033[38;5;255m",    # White
+        "security": "\033[38;5;203m",  # Salmon
+        "performance": "\033[38;5;228m", # Light yellow
+    }
+
+    # Accent colors
+    DIM = "\033[38;5;240m"
+    BRIGHT = "\033[1m"
+    RESET = "\033[0m"
+    SEPARATOR_COLOR = "\033[38;5;238m"
+
     def format(self, record: logging.LogRecord) -> str:
-        """Format log record for human readability."""
+        """Format log record with beautiful separators and full coloring."""
         structured_data = getattr(record, "structured_data", None)
 
         if structured_data:
-            # Format structured data nicely
-            color = self.COLORS.get(structured_data.level, "")
-            reset = self.COLORS["RESET"]
+            return self._format_structured(structured_data)
 
-            parts = [
-                f"[{color}{structured_data.level}{reset}]",
-                f"[{structured_data.component}]",
-                f"{structured_data.operation}",
-            ]
+        # Fallback for non-structured logs
+        level_color = self.LEVEL_COLORS.get(record.levelname, "")
+        return f"{level_color}[{record.levelname}]{self.RESET} {self.DIM}{record.name}{self.RESET}: {record.getMessage()}"
 
-            if structured_data.request_id:
-                parts.append(f"req={structured_data.request_id[:8]}")
+    def _format_structured(self, data: StructuredLogRecord) -> str:
+        """Format structured data with visual components."""
+        level_color = self.LEVEL_COLORS.get(data.level, "")
+        comp_color = self.COMPONENT_COLORS.get(data.component, "\033[38;5;250m")
+        dim = self.DIM
+        reset = self.RESET
+        sep = self.SEPARATOR_COLOR
 
-            if structured_data.user_id:
-                parts.append(f"user={structured_data.user_id[:12]}")
+        parts = []
 
-            parts.append(f"{structured_data.message}")
+        # Timestamp with subtle color
+        parts.append(f"{dim}{data.timestamp.strftime('%H:%M:%S')}{reset}")
 
-            if structured_data.duration_ms:
-                parts.append(f"({structured_data.duration_ms}ms)")
+        # Separator
+        parts.append(f"{sep}│{reset}")
 
-            return " ".join(parts)
+        # Level badge (padded to 8 chars)
+        level_padded = f"{data.level:8}"
+        parts.append(f"{level_color}{self.BRIGHT}{level_padded}{reset}")
 
-        # Standard format
-        color = self.COLORS.get(record.levelname, "")
-        reset = self.COLORS["RESET"]
-        return f"[{color}{record.levelname}{reset}] {record.name}: {record.getMessage()}"
+        # Separator
+        parts.append(f"{sep}│{reset}")
+
+        # Component (padded to 12 chars)
+        comp_padded = f"{data.component:12}"
+        parts.append(f"{comp_color}{comp_padded}{reset}")
+
+        # Separator
+        parts.append(f"{sep}│{reset}")
+
+        # Request ID (shortened, dim)
+        if data.request_id:
+            short_req = data.request_id[:8]
+            parts.append(f"{dim}req:{short_req}{reset}")
+            parts.append(f"{sep}│{reset}")
+
+        # User ID (shortened, dim)
+        if data.user_id:
+            short_user = data.user_id[:12]
+            parts.append(f"{dim}usr:{short_user}{reset}")
+            parts.append(f"{sep}│{reset}")
+
+        # Operation (highlighted)
+        parts.append(f"{self.BRIGHT}{data.operation}{reset}")
+
+        # Message
+        if data.message:
+            parts.append(f"{sep}→{reset} {data.message}")
+
+        # Duration (colored based on speed)
+        if data.duration_ms is not None:
+            dur_color = "\033[38;5;82m"  # Green
+            if data.duration_ms > 100:
+                dur_color = "\033[38;5;214m"  # Orange
+            if data.duration_ms > 500:
+                dur_color = "\033[38;5;196m"  # Red
+            parts.append(f"{dur_color}({data.duration_ms:.1f}ms){reset}")
+
+        # Metadata (dimmed, inline)
+        if data.metadata:
+            meta_parts = []
+            for key, val in data.metadata.items():
+                if key not in ("error", "error_type"):
+                    meta_parts.append(f"{key}={val}")
+            if meta_parts:
+                parts.append(f"{dim}[{', '.join(meta_parts)}]{reset}")
+
+        # Error (prominent)
+        if data.error:
+            parts.append(f"\033[38;5;196m✗ {data.error.get('type', 'Error')}: {data.error.get('message', '')}{reset}")
+
+        return " ".join(parts)
 
 
 class StructuredLogger:

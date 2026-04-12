@@ -10,7 +10,9 @@ import re
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 
-logger = logging.getLogger(__name__)
+from ..utils.structured_logging import get_logger, LogComponent
+
+logger = get_logger(__name__, LogComponent.SERVICE)
 
 class PendingInteraction:
     """Represents an interaction awaiting user approval."""
@@ -33,7 +35,7 @@ class InteractionRecorder:
     def __init__(self, knowledge_base_service, llm_service):
         self.knowledge_base = knowledge_base_service
         self.llm_service = llm_service
-        self.logger = logging.getLogger(__name__)
+        self.logger = logger
         
         # Store pending interactions waiting for user approval
         self.pending_interactions: List[PendingInteraction] = []

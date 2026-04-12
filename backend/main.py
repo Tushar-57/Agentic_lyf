@@ -25,7 +25,7 @@ from app.llm.service import get_llm_service
 from app.llm.base import LLMProviderType
 from app.llm.config import LLMConfig
 from app.llm.ollama_provider import OllamaProvider
-from app.utils.logging import get_api_category_logger, get_conversation_category_logger
+from app.utils.structured_logging import setup_structured_logging, get_logger, LogComponent, request_id_var, user_id_var
 from app.services.config_storage import get_config_storage
 from app.services.interaction_recorder import get_interaction_recorder
 from app.services.knowledge_base import get_knowledge_base_service
@@ -35,9 +35,13 @@ from langgraph.graph import StateGraph, START, END
 # Load environment variables from .env file
 load_dotenv()
 
-# Use enhanced logging
-logger = get_api_category_logger("main")
-conversation_logger = get_conversation_category_logger("app.conversation.api")
+# Initialize structured logging
+log_format = os.getenv("LOG_FORMAT", "pretty")  # "json" for production, "pretty" for dev
+setup_structured_logging(level=os.getenv("LOG_LEVEL", "INFO"), format_style=log_format)
+
+# Use structured logging
+logger = get_logger("main", LogComponent.SYSTEM)
+conversation_logger = get_logger("app.conversation.api", LogComponent.API)
 
 
 def parse_bool_env(name: str, default: bool) -> bool:
@@ -96,9 +100,9 @@ def bind_registry_knowledge_base_for_request(registry) -> str:
 
     if rebound_count:
         logger.info(
-            "Rebound %d agent knowledge_base references for user=%s",
-            rebound_count,
-            resolved_user_id,
+            "rebind_knowledge_base",
+            f"Rebound {rebound_count} agent knowledge_base references",
+            {"rebound_count": rebound_count, "user_id": resolved_user_id}
         )
 
     return resolved_user_id
@@ -114,18 +118,18 @@ async def lifespan(_app: FastAPI):
         knowledge_service = get_knowledge_base_service()
         llm_service = await get_llm_service()
         _ = get_interaction_recorder(knowledge_service, llm_service)
-        logger.info("Successfully initialized interaction recorder")
+        logger.info("init_interaction_recorder", "Successfully initialized interaction recorder")
     except Exception as e:
-        logger.warning(f"Could not initialize interaction recorder: {e}")
+        logger.warning("init_interaction_recorder", f"Could not initialize interaction recorder: {e}")
     
     # Initialize the workflow with agents now loaded
     global _workflow, _graph
     try:
         _workflow = AgentGraphWorkflow()
         _graph = _workflow.get_compiled_graph()
-        logger.info("Successfully initialized LangGraph workflow with agents")
+        logger.info("init_workflow", "Successfully initialized LangGraph workflow with agents")
     except Exception as e:
-        logger.warning(f"Could not initialize workflow with agents: {e}")
+        logger.warning("init_workflow", f"Could not initialize workflow with agents: {e}")
     
     yield
     # (Optional) Add shutdown/cleanup logic here
@@ -140,16 +144,23 @@ app = FastAPI(
 
 @app.middleware("http")
 async def attach_user_context(request: Request, call_next):
-    """Resolve and attach request user scope for per-user data partitioning."""
+    """Resolve and attach request user scope and correlation ID for per-user data partitioning."""
+    import uuid
     resolved_user = resolve_request_user(request)
     context_token = set_request_user(resolved_user)
+    request_id = str(uuid.uuid4())[:16]
+    request_token = request_id_var.set(request_id)
+    user_token = user_id_var.set(resolved_user.storage_key)
 
     try:
         response = await call_next(request)
     finally:
         reset_request_user(context_token)
+        request_id_var.reset(request_token)
+        user_id_var.reset(user_token)
 
     response.headers["X-Agentic-User"] = resolved_user.storage_key
+    response.headers["X-Request-ID"] = request_id
     return response
 
 def parse_csv_env(name: str, default: str) -> List[str]:
@@ -208,8 +219,9 @@ cors_allowed_origins, cors_allowed_origin_regex = build_cors_config(
 )
 
 logger.info(
-    f"Configured CORS origins={cors_allowed_origins} "
-    f"origin_regex={cors_allowed_origin_regex}"
+    "configure_cors",
+    f"Configured CORS origins={cors_allowed_origins}",
+    {"origins": cors_allowed_origins, "origin_regex": cors_allowed_origin_regex}
 )
 
 # Add CORS middleware
@@ -263,15 +275,13 @@ async def chat_endpoint(request: ChatRequest):
 
         if API_CHAT_LOG_ENABLED:
             conversation_logger.info(
-                "API_CHAT_REQUEST user=%s conversation_id=%s agent=%s message=%s",
-                resolved_user_id,
-                request.conversation_id,
-                request.agent,
-                serialize_chat_payload(request.message),
+                "chat_request",
+                f"API_CHAT_REQUEST user={resolved_user_id} conversation_id={request.conversation_id}",
+                {"resolved_user_id": resolved_user_id, "conversation_id": request.conversation_id, "agent_id": request.agent_id}
             )
 
         # Find orchestrator agent by type
-        logger.info(f"{registry.get_agent_ids()}")
+        logger.info("get_agents", f"Available agents: {registry.get_agent_ids()}", {"agent_ids": registry.get_agent_ids()})
         orchestrators = registry.get_agents_by_type(AgentType.ORCHESTRATOR)
         orchestrator = orchestrators[0] if orchestrators else None
         if orchestrator is None:
@@ -291,18 +301,18 @@ async def chat_endpoint(request: ChatRequest):
         # Use LangGraph workflow for multi-agent orchestration
         graph_workflow = await get_workflow()
         result = await graph_workflow.run(state)
-        logger.info(f"[DEBUG] workflow.run result type: {type(result)} value: {result}")
+        logger.debug("workflow_run", f"workflow.run result type: {type(result)}", {"result_type": str(type(result))})
         response = None
         reasoning = None
-        logger.info(f"[DEBUG] Step: result type: {type(result)} value: {result}")
+        logger.debug("workflow_result", f"Step result type: {type(result)}", {"result_type": str(type(result))})
         # Handle dict
         if isinstance(result, dict):
-            logger.info(f"[DEBUG] Dict result keys: {list(result.keys())}")
+            logger.debug("dict_result", "Dict result", {"keys": list(result.keys())})
             response = result.get("response")
             reasoning = result.get("reasoning")
         # Handle tuple
         elif isinstance(result, tuple):
-            logger.info(f"[DEBUG] Tuple result length: {len(result)} value: {result}")
+            logger.debug("tuple_result", f"Tuple result length: {len(result)}", {"length": len(result)})
             if len(result) == 2:
                 response, reasoning = result
             elif len(result) == 1:
@@ -313,18 +323,18 @@ async def chat_endpoint(request: ChatRequest):
                 reasoning = None
         # Handle string (try to parse as JSON)
         elif isinstance(result, str):
-            logger.info(f"[DEBUG] String result: {result}")
+            logger.debug("string_result", "String result", {"result_preview": str(result)[:100]})
             try:
                 parsed = json.loads(result)
-                logger.info(f"[DEBUG] Parsed JSON from string result: {parsed}")
+                logger.debug("parsed_json", "Parsed JSON from string result")
                 response = parsed.get("response", str(parsed))
                 reasoning = parsed.get("reasoning")
             except Exception as json_err:
-                logger.info(f"[DEBUG] Could not parse string result as JSON: {json_err}")
+                logger.debug("parse_json_error", "Could not parse string result as JSON", {"error": str(json_err)})
                 response = result
                 reasoning = None
         else:
-            logger.info(f"[DEBUG] Unexpected result type: {type(result)} value: {result}")
+            logger.debug("unexpected_result", f"Unexpected result type: {type(result)}", {"result_type": str(type(result))})
             response = str(result)
             reasoning = None
 
@@ -346,17 +356,14 @@ async def chat_endpoint(request: ChatRequest):
                     "Please connect OpenAI in settings or ensure Ollama is running, then retry your message."
                 )
 
-        logger.info(f"[DEBUG] Final response type: {type(response)} value: {response}")
-        logger.info(f"[DEBUG] Final reasoning type: {type(reasoning)} value: {reasoning}")
+        logger.debug("final_response", f"Final response type: {type(response)}")
+        logger.debug("final_reasoning", f"Final reasoning type: {type(reasoning)}")
 
         if API_CHAT_LOG_ENABLED:
             conversation_logger.info(
-                "API_CHAT_RESPONSE user=%s conversation_id=%s agent=%s response=%s reasoning=%s",
-                resolved_user_id,
-                request.conversation_id,
-                state.get("agent", orchestrator.agent_id),
-                serialize_chat_payload(response),
-                serialize_chat_payload(reasoning),
+                "chat_response",
+                f"API_CHAT_RESPONSE user={resolved_user_id} conversation_id={request.conversation_id}",
+                {"resolved_user_id": resolved_user_id, "conversation_id": request.conversation_id, "agent_id": request.agent_id}
             )
 
         return ChatResponse(
@@ -366,7 +373,7 @@ async def chat_endpoint(request: ChatRequest):
             timestamp=datetime.now()
         )
     except Exception as e:
-        logging.error("Orchestrator Error: %s", e)
+        logger.error("orchestrator_error", "Orchestrator Error", error=e)
         error_text = str(e)
         normalized_error = error_text.lower()
         if (
@@ -383,11 +390,10 @@ async def chat_endpoint(request: ChatRequest):
 
         if API_CHAT_LOG_ENABLED:
             conversation_logger.error(
-                "API_CHAT_ERROR user=%s conversation_id=%s agent=%s error=%s",
-                get_current_user().storage_key,
-                request.conversation_id,
-                request.agent,
-                serialize_chat_payload(error_text),
+                "chat_error",
+                f"API_CHAT_ERROR user={get_current_user().storage_key} conversation_id={request.conversation_id}",
+                {"user_id": get_current_user().storage_key, "conversation_id": request.conversation_id, "agent_id": request.agent_id, "error": error_text},
+                error=Exception(error_text) if not isinstance(error_text, Exception) else error_text
             )
 
         return ChatResponse(
@@ -615,7 +621,7 @@ async def get_llm_status():
                     if health.response_time_ms is not None:
                         status["providers"][provider_name]["responseTime"] = int(health.response_time_ms)
             except Exception as e:
-                logger.error(f"Error checking provider health: {e}")
+                logger.error("health_check_error", "Error checking provider health", error=e)
 
         # Probe configured Ollama endpoint when health map is unavailable.
         if not status["providers"]["ollama"]["healthy"]:
@@ -634,7 +640,7 @@ async def get_llm_status():
         return status
         
     except Exception as e:
-        logger.error(f"Error getting LLM status: {e}")
+        logger.error("llm_status_error", "Error getting LLM status", error=e)
         return {
             "current_provider": None,
             "configured_provider": None,
@@ -775,7 +781,7 @@ async def get_config():
             "provider_preference": config_storage.get_provider_preference()
         }
     except Exception as e:
-        logger.error(f"Error getting configuration: {e}")
+        logger.error("config_get_error", "Error getting configuration", error=e)
         raise HTTPException(status_code=500, detail=f"Failed to get configuration: {str(e)}") from e
 
 @app.post("/api/config")
@@ -806,7 +812,7 @@ async def update_config(request: ConfigUpdateRequest):
             "message": "Configuration updated successfully"
         }
     except Exception as e:
-        logger.error(f"Error updating configuration: {e}")
+        logger.error("config_update_error", "Error updating configuration", error=e)
         raise HTTPException(status_code=500, detail=f"Failed to update configuration: {str(e)}") from e
 
 # Global workflow instance
@@ -819,7 +825,7 @@ async def get_workflow():
     if _workflow is None:
         _workflow = AgentGraphWorkflow()
         _graph = _workflow.get_compiled_graph()
-        logger.info("Successfully created LangGraph workflow")
+        logger.info("create_workflow", "Successfully created LangGraph workflow")
     return _workflow
 
 async def get_graph():
@@ -843,7 +849,7 @@ def get_graph_for_dev():
     
     # Return cached graph if available
     if _dev_graph_cache is not None:
-        logger.debug("Returning cached graph for LangGraph dev")
+        logger.debug("cached_graph", "Returning cached graph for LangGraph dev")
         return _dev_graph_cache
     
     try:
@@ -853,7 +859,7 @@ def get_graph_for_dev():
         
         # If no agents, try to initialize them
         if not agents:
-            logger.info("No agents found, initializing agent ecosystem for LangGraph dev")
+            logger.info("init_agents_langgraph", "No agents found, initializing agent ecosystem for LangGraph dev")
             
             # Create a new event loop if none exists (for LangGraph dev context)
             try:
@@ -868,7 +874,7 @@ def get_graph_for_dev():
             # Run initialization in the event loop
             if loop.is_running():
                 # If loop is already running, we need to use a different approach
-                logger.warning("Event loop already running, attempting direct agent creation")
+                logger.warning("event_loop_running", "Event loop already running, attempting direct agent creation")
                 try:
                     # Try to create agents directly without async
                     from app.agents.enhanced_orchestrator import EnhancedOrchestratorAgent as OrchestratorAgent
@@ -886,12 +892,12 @@ def get_graph_for_dev():
                         try:
                             agent = agent_class()
                             registry.register_agent(agent)
-                            logger.info(f"Direct registered agent: {agent.agent_id}")
+                            logger.info("register_agent_direct", f"Direct registered agent: {agent.agent_id}", {"agent_id": agent.agent_id})
                         except Exception as e:
-                            logger.warning(f"Failed to create {agent_type}: {e}")
+                            logger.warning("agent_creation_failed", f"Failed to create {agent_type}", {"agent_type": str(agent_type)}, error=e)
                             
                 except Exception as e:
-                    logger.warning(f"Direct agent creation failed: {e}")
+                    logger.warning("direct_creation_failed", "Direct agent creation failed", error=e)
             else:
                 # Run async initialization
                 loop.run_until_complete(factory.initialize_agent_ecosystem())
@@ -900,16 +906,16 @@ def get_graph_for_dev():
             agents = registry.get_all_agents()
         
         if agents:
-            logger.info(f"Creating graph with {len(agents)} agents for LangGraph dev")
+            logger.info("create_graph", f"Creating graph with {len(agents)} agents for LangGraph dev", {"agent_count": len(agents)})
             workflow = AgentGraphWorkflow()
             compiled_graph = workflow.get_compiled_graph()
-            logger.info("Successfully created full agent ecosystem graph for LangGraph dev")
+            logger.info("graph_created", "Successfully created full agent ecosystem graph for LangGraph dev")
             
             # Cache the graph for future requests
             _dev_graph_cache = compiled_graph
             return compiled_graph
         else:
-            logger.warning("Still no agents found after initialization attempt, creating placeholder graph")
+            logger.warning("no_agents_placeholder", "Still no agents found after initialization attempt, creating placeholder graph")
             # Fallback: create a simple placeholder graph
             simple_graph = StateGraph(dict)
             simple_graph.add_node("placeholder", lambda x: {"response": "Agents not yet loaded"})

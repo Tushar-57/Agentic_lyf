@@ -25,13 +25,13 @@ from ..models.knowledge import (
 )
 from ..llm.service import get_llm_service
 from ..llm.base import EmbeddingRequest
-from ..utils.logging import get_embedding_category_logger
+from ..utils.structured_logging import get_logger, LogComponent, timed
 from .vector_store import get_vector_store
 from .knowledge_db_store import get_knowledge_db_store
 from .preferences_db_store import get_preference_db_store
 
-logger = logging.getLogger(__name__)
-embedding_logger = get_embedding_category_logger("app.embedding.knowledge")
+logger = get_logger(__name__, LogComponent.KNOWLEDGE)
+embedding_logger = get_logger("app.embedding.knowledge", LogComponent.EMBEDDING)
 
 
 EMBEDDING_CACHE_KEY_FIELD = "_embedding_cache_key"
