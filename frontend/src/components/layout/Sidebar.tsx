@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { 
   Brain, 
@@ -39,95 +39,96 @@ interface SidebarProps {
   onMobileClose?: () => void
 }
 
-const agents = [
+// Static data defined outside component to prevent recreation
+const AGENTS_DATA = [
   {
     id: 'orchestrator',
-    name: 'Orchestrator',
+    name: 'Coach',
     icon: Brain,
-    description: 'Main coordination agent',
+    description: 'Routes requests to the right specialist for you',
     color: 'from-teal-600 to-cyan-500',
     status: 'active'
   },
   {
     id: 'productivity',
-    name: 'Productivity',
+    name: 'Goals',
     icon: Zap,
-    description: 'Task and goal management',
+    description: 'Tracks tasks and helps you hit your targets',
     color: 'from-amber-500 to-orange-500',
     status: 'active'
   },
   {
     id: 'health',
-    name: 'Health',
+    name: 'Wellness',
     icon: Heart,
-    description: 'Wellness and habits',
+    description: 'Supports your physical and mental wellbeing',
     color: 'from-rose-500 to-red-500',
     status: 'active'
   },
   {
     id: 'finance',
-    name: 'Finance',
+    name: 'Money',
     icon: DollarSign,
-    description: 'Budget and expenses',
+    description: 'Manages budgets and spending insights',
     color: 'from-emerald-500 to-green-500',
     status: 'active'
   },
   {
     id: 'scheduling',
-    name: 'Scheduling',
+    name: 'Calendar',
     icon: Calendar,
-    description: 'Calendar management',
+    description: 'Handles your schedule and appointments',
     color: 'from-sky-500 to-blue-500',
     status: 'active'
   },
   {
     id: 'journal',
-    name: 'Journal',
+    name: 'Reflection',
     icon: BookOpen,
-    description: 'Reflection and insights',
+    description: 'Captures your thoughts and growth moments',
     color: 'from-slate-600 to-slate-500',
     status: 'active'
   }
-]
+] as const
 
-const navigationItems = [
+const NAVIGATION_DATA = [
   {
     id: 'chat',
-    name: 'Chat',
+    name: 'Talk',
     icon: MessageSquare,
     path: '/chat'
   },
   {
     id: 'onboarding',
-    name: 'Onboarding',
+    name: 'Getting Started',
     icon: Sparkles,
     path: '/onboarding'
   },
   {
     id: 'knowledge',
-    name: 'Knowledge Base',
+    name: 'My Memory',
     icon: Database,
     path: '/knowledge'
   },
   {
     id: 'analytics',
-    name: 'Analytics',
+    name: 'Insights',
     icon: BarChart3,
     path: '/analytics'
   },
   {
     id: 'notifications',
-    name: 'AI Notifications',
+    name: 'Alerts',
     icon: BellRing,
     path: '/notifications'
   },
   {
     id: 'profile',
-    name: 'Profile',
+    name: 'About Me',
     icon: User,
     path: '/profile'
   }
-]
+] as const
 
 export const Sidebar: React.FC<SidebarProps> = ({
   className,
@@ -145,6 +146,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const [hoveredAgent, setHoveredAgent] = useState<string | null>(null)
   const isCollapsed = isMobile ? false : collapsed
+
+  // Memoize static arrays to prevent unnecessary re-renders
+  const agents = useMemo(() => AGENTS_DATA, [])
+  const navigationItems = useMemo(() => NAVIGATION_DATA, [])
 
   return (
     <motion.div
@@ -174,8 +179,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <Brain className="w-4 h-4 text-white" />
                 </div>
                 <div>
-                  <h1 className="text-sm font-semibold">Agentic Workspace</h1>
-                  <p className="text-[11px] text-muted-foreground">Mission Control</p>
+                  <h1 className="text-sm font-semibold">AlterEgo</h1>
+                  <p className="text-[11px] text-muted-foreground">Your AI Partner</p>
                 </div>
               </motion.div>
             )}
@@ -231,7 +236,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 }
               }}
               className={cn(
-                "h-10 w-full justify-start rounded-xl text-sm",
+                "w-full justify-start rounded-xl text-sm",
+                // Mobile touch target: 44px minimum (h-11 = 44px)
+                isMobile ? "h-11" : "h-10",
                 isCollapsed && "justify-center px-0",
                 currentView === item.id
                   ? "bg-gradient-to-r from-teal-700 via-cyan-600 to-amber-500 text-white shadow-md"
@@ -267,7 +274,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               exit={{ opacity: 0 }}
               className="mb-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground"
             >
-              AI Agents
+              Your Coaches
             </motion.h2>
           )}
         </AnimatePresence>
@@ -286,10 +293,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
               >
                 <Card
                   className={cn(
-                    "cursor-pointer border border-border/70 bg-white/70 p-3 shadow-sm transition-all duration-200 dark:bg-slate-900/60",
-                    isActive && "border-teal-500/70 bg-teal-50/70 shadow-md dark:bg-teal-950/30",
+                    "cursor-pointer border border-border/70 bg-card/70 shadow-sm transition-all duration-200",
+                    // Mobile touch target: 44px minimum padding
+                    isMobile ? "p-3.5" : "p-3",
+                    isActive && "border-primary/70 bg-primary/10 shadow-md",
                     !isActive && "hover:-translate-y-0.5 hover:bg-accent/40",
-                    isCollapsed && "p-2"
+                    isCollapsed && (isMobile ? "p-3" : "p-2")
                   )}
                   onClick={() => {
                     onAgentChange?.(agent.id)
@@ -327,7 +336,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                             </h3>
                             <div className={cn(
                               "w-2 h-2 rounded-full",
-                              agent.status === 'active' ? "bg-emerald-500" : "bg-gray-400"
+                              agent.status === 'active' ? "bg-emerald-500 dark:bg-emerald-400" : "bg-muted-foreground/50"
                             )} />
                           </div>
                           <p className="truncate text-xs text-muted-foreground">
@@ -354,7 +363,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             variant="ghost"
             size="icon"
             onClick={onToggleTheme}
-            className="h-9 w-9 rounded-xl border border-border/70 bg-white/80 dark:bg-slate-900/70"
+            className="h-9 w-9 rounded-xl border border-border/70 bg-card/80"
           >
             {isDarkMode ? (
               <Sun className="w-4 h-4" />
@@ -369,7 +378,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-9 w-9 rounded-xl border border-border/70 bg-white/80 dark:bg-slate-900/70"
+                  className="h-9 w-9 rounded-xl border border-border/70 bg-card/80"
                   onClick={() => {
                     // This will be handled by the parent component
                     const event = new CustomEvent('openSettings')

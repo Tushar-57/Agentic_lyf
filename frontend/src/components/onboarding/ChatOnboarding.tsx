@@ -104,9 +104,9 @@ const ChatOnboarding: React.FC<ChatOnboardingProps> = ({ onComplete }) => {
 
   const handleIntroductionSelect = async () => {
     setCurrentStep('role');
-    await addMessage("Let's start onboarding!", 'user');
+    await addMessage("Let's get started!", 'user');
     await simulateTyping();
-    await addMessage("Let's begin by selecting your role.", 'assistant', 300);
+    await addMessage("First, tell me about your role.", 'assistant', 300);
     setPreviousStep('intro');
   };
 
@@ -122,7 +122,7 @@ const ChatOnboarding: React.FC<ChatOnboardingProps> = ({ onComplete }) => {
     );
     await simulateTyping();
     await addMessage(
-      "Great choice! Let's personalize your experience by selecting your priorities.",
+      "Great choice. What matters most to you?",
       'assistant',
       300
     );
@@ -145,7 +145,7 @@ const ChatOnboarding: React.FC<ChatOnboardingProps> = ({ onComplete }) => {
     );
     await simulateTyping();
     await addMessage(
-      "Thanks for sharing! Let's identify which goals you'd like to achieve.",
+      "Now let's set some goals.",
       'assistant',
       300
     );
@@ -174,7 +174,7 @@ const ChatOnboarding: React.FC<ChatOnboardingProps> = ({ onComplete }) => {
     );
     await simulateTyping();
     await addMessage(
-      "Awesome goals! Let's set up your planner to achieve them.",
+      "Good goals. Let's plan how to reach them.",
       'assistant',
       300
     );
@@ -204,7 +204,7 @@ const ChatOnboarding: React.FC<ChatOnboardingProps> = ({ onComplete }) => {
     );
     await simulateTyping();
     await addMessage(
-      "Great! Now, let's meet your AI Alter Ego!",
+      "Now, meet your AI coach.",
       'assistant',
       300
     );
@@ -255,12 +255,12 @@ const ChatOnboarding: React.FC<ChatOnboardingProps> = ({ onComplete }) => {
 
       const result = await response.json();
       console.log('Onboarding data submitted successfully:', result);
-      toast.success('Profile created successfully!');
+      toast.success('Your profile is ready.');
       setIsLoading(true);
 
     } catch (error) {
       console.error('Error submitting onboarding data:', error);
-      toast.error('Failed to save profile. Please try again.');
+      toast.error("Couldn't save your profile. Try again?");
       return;
     }
 

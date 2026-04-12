@@ -117,15 +117,15 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       })
 
       if (response.ok) {
-        toast.success('Configuration saved', {
-          description: `${configType.toUpperCase()} settings saved successfully`
+        toast.success('Settings saved successfully', {
+          description: `${configType === 'openai' ? 'OpenAI' : 'Local AI'} is ready`
         })
       }
     } catch (error) {
       console.error('Failed to save configuration:', error)
-      toast.error('Failed to save configuration', {
-        description: 'Please try again'
-      })
+      toast.error("Couldn't save settings", {
+          description: 'Check your connection and try again'
+        })
     }
   }
 
@@ -138,8 +138,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     
     // Check if switching to OpenAI without API key
     if (provider === 'openai' && !hasFreshOpenAIKey && !canUseStoredOpenAIKey) {
-      toast.error('OpenAI API key required', {
-        description: 'Please enter your OpenAI API key first'
+      toast.error('Add your OpenAI key first', {
+        description: 'You need an API key to use OpenAI'
       })
       setIsTestingCurrentProvider(false)
       return
@@ -179,8 +179,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     
     if (response.ok && result.success) {
       onProviderChange(provider)
-      toast.success(`Switched to ${provider.toUpperCase()} provider`, {
-        description: result.message || `Now using ${provider === 'openai' ? 'OpenAI GPT models' : 'Local Ollama models'}`
+      toast.success(`Now using ${provider === 'openai' ? 'OpenAI' : 'Local AI'}`, {
+        description: result.message || `${provider === 'openai' ? 'Connected to OpenAI' : 'Running locally for privacy'}`
       })
       
       // Update local provider status
@@ -193,14 +193,14 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       }))
     } else {
       // Show the error message from backend
-      toast.error(`Failed to switch to ${provider.toUpperCase()}`, {
-        description: result.message || `Could not initialize ${provider} provider`
+      toast.error(`Couldn't switch to ${provider === 'openai' ? 'OpenAI' : 'Local AI'}`, {
+        description: result.message || 'Check your settings and try again'
       })
     }
   } catch (error) {
     console.error('Provider switch error:', error)
-    toast.error(`Failed to switch to ${provider.toUpperCase()}`, {
-      description: 'Backend connection not available'
+    toast.error(`Couldn't switch to ${provider === 'openai' ? 'OpenAI' : 'Local AI'}`, {
+      description: 'Connection not available'
     })
   } finally {
     setIsTestingCurrentProvider(false)
@@ -251,8 +251,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     const result = await response.json()
     
     if (result.healthy) {
-      toast.success(`${provider.toUpperCase()} connection successful`, {
-        description: `Response time: ${result.responseTime}ms`
+      toast.success(`Connected to ${provider === 'openai' ? 'OpenAI' : 'Local AI'}`, {
+        description: `Ready in ${result.responseTime}ms`
       })
       
       // Update local provider status
@@ -265,8 +265,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         }
       }))
     } else {
-      toast.error(`${provider.toUpperCase()} connection failed`, {
-        description: result.error
+      toast.error(`Couldn't connect to ${provider === 'openai' ? 'OpenAI' : 'Local AI'}`, {
+        description: result.error || 'Check your settings'
       })
       
       // Update local provider status
@@ -280,8 +280,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       }))
     }
   } catch (error) {
-    toast.error('Connection test failed', {
-      description: 'Please check your configuration'
+    toast.error('Connection failed', {
+      description: 'Check your settings'
     })
     
     // Update local provider status to show disconnected
@@ -326,8 +326,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   <Settings className="w-4 h-4 text-white" />
                 </div>
                 <div>
-                  <h2 className="font-semibold">Settings</h2>
-                  <p className="text-sm text-muted-foreground">Configure your AI providers</p>
+                  <h2 className="font-semibold">AI Settings</h2>
+                  <p className="text-sm text-muted-foreground">Choose your AI brain</p>
                 </div>
               </div>
               <Button variant="ghost" size="icon" onClick={onClose}>
@@ -342,10 +342,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <Brain className="w-5 h-5" />
-                    LLM Provider
+                    AI Service
                   </CardTitle>
                   <CardDescription>
-                    Choose between OpenAI's cloud models or local Ollama models
+                    Choose cloud AI (OpenAI) or local AI (Ollama)
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -365,7 +365,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                         </div>
                         <div>
                           <h3 className="font-medium">OpenAI</h3>
-                          <p className="text-sm text-muted-foreground">GPT-4, GPT-3.5 Turbo</p>
+                          <p className="text-sm text-muted-foreground">Cloud AI with advanced capabilities</p>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
@@ -458,8 +458,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                           <Brain className="w-5 h-5 text-white" />
                         </div>
                         <div>
-                          <h3 className="font-medium">Ollama</h3>
-                          <p className="text-sm text-muted-foreground">Local LLaMA, Mistral models</p>
+                          <h3 className="font-medium">Local AI</h3>
+                          <p className="text-sm text-muted-foreground">Private AI running on your device</p>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
@@ -483,7 +483,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                       >
                         <div className="space-y-3">
                           <Input
-                            placeholder="Ollama endpoint URL"
+                            placeholder="Local AI address"
                             value={ollamaEndpoint}
                             onChange={(e) => setOllamaEndpoint(e.target.value)}
                             icon={<Brain className="w-4 h-4" />}
@@ -522,7 +522,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <Wifi className="w-5 h-5" />
-                    Connection Status
+                    Connection
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
@@ -533,7 +533,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                           "w-2 h-2 rounded-full",
                           localProviderStatus.openai.healthy ? "bg-green-500" : "bg-red-500"
                         )} />
-                        <span className="text-sm font-medium">OpenAI</span>
+                        <span className="text-sm font-medium">OpenAI Cloud</span>
                       </div>
                       <span className="text-xs text-muted-foreground">
                         {localProviderStatus.openai.healthy ? 'Connected' : 'Disconnected'}
@@ -546,7 +546,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                           "w-2 h-2 rounded-full",
                           localProviderStatus.ollama.healthy ? "bg-green-500" : "bg-red-500"
                         )} />
-                        <span className="text-sm font-medium">Ollama</span>
+                        <span className="text-sm font-medium">Local AI</span>
                       </div>
                       <span className="text-xs text-muted-foreground">
                         {localProviderStatus.ollama.healthy ? 'Connected' : 'Disconnected'}
@@ -559,21 +559,22 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
               {/* Quick Actions */}
               <Card>
                 <CardHeader>
-                  <CardTitle>Quick Actions</CardTitle>
+                  <CardTitle>Actions</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-2">
                   <Button 
                     variant="outline" 
-                    className="w-full justify-start"
-                    onClick={() => testConnection(currentProvider)}
+                    size="sm" 
+                    onClick={() => saveConfiguration(currentProvider)}
                     disabled={isTestingCurrentProvider}
+                    className="w-full justify-start"
                   >
                     {isTestingCurrentProvider ? (
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                     ) : (
                       <Wifi className="w-4 h-4 mr-2" />
                     )}
-                    Test Current Provider
+                    Test Connection
                   </Button>
                   
                   <Button 
@@ -591,7 +592,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                     }}
                   >
                     <CheckCircle className="w-4 h-4 mr-2" />
-                    Save Configuration
+                    Save Settings
                   </Button>
                 </CardContent>
               </Card>

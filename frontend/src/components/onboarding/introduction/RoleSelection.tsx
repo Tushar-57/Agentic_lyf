@@ -13,28 +13,28 @@ const RoleSelection: React.FC<RoleSelectionProps> = ({ onSelect }) => {
       id: 'student',
       title: 'Student',
       icon: <GraduationCap className="w-8 h-8" />,
-      description: 'Focus on academic goals and learning efficiency',
+      description: 'Ace your studies and learn smarter',
       color: 'from-blue-500 to-indigo-600'
     },
     {
       id: 'professional',
       title: 'Professional',
       icon: <Briefcase className="w-8 h-8" />,
-      description: 'Enhance work performance and career growth',
+      description: 'Advance your career and thrive at work',
       color: 'from-purple-500 to-pink-600'
     },
     {
       id: 'freelancer',
       title: 'Freelancer',
       icon: <Users className="w-8 h-8" />,
-      description: 'Balance projects and personal development',
+      description: 'Juggle clients while growing your skills',
       color: 'from-emerald-500 to-teal-600'
     },
     {
       id: 'other',
       title: 'Other',
       icon: <Sparkles className="w-8 h-8" />,
-      description: 'Custom path for your unique journey',
+      description: 'Create your own path forward',
       color: 'from-amber-500 to-orange-600'
     }
   ];
@@ -47,11 +47,11 @@ const RoleSelection: React.FC<RoleSelectionProps> = ({ onSelect }) => {
           animate={{ opacity: 1, y: 0 }}
           className="text-center mb-12"
         >
-          <h2 className="text-3xl font-bold text-gray-900 mb-4">
-            What best describes your current focus?
+          <h2 className="text-3xl font-bold text-foreground mb-4">
+            What's your main focus right now?
           </h2>
-          <p className="text-gray-600 max-w-2xl mx-auto">
-            This will help us tailor your experience and provide the most relevant guidance for your journey.
+          <p className="text-muted-foreground max-w-2xl mx-auto">
+            This shapes how I coach you.
           </p>
         </motion.div>
 
@@ -63,7 +63,7 @@ const RoleSelection: React.FC<RoleSelectionProps> = ({ onSelect }) => {
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: index * 0.1 }}
               onClick={() => onSelect(role.id as UserRole)}
-              className="group relative overflow-hidden rounded-2xl bg-white p-8 shadow-lg
+              className="group relative overflow-hidden rounded-2xl bg-card p-8 shadow-lg border border-border
                 hover:shadow-xl transition-shadow duration-300"
             >
               <div className="relative z-10">
@@ -72,11 +72,11 @@ const RoleSelection: React.FC<RoleSelectionProps> = ({ onSelect }) => {
                   {role.icon}
                 </div>
                 
-                <h3 className="text-2xl font-bold text-gray-900 mb-3">
+                <h3 className="text-2xl font-bold text-foreground mb-3">
                   {role.title}
                 </h3>
                 
-                <p className="text-gray-600">
+                <p className="text-muted-foreground">
                   {role.description}
                 </p>
               </div>
