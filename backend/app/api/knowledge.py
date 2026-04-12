@@ -690,7 +690,15 @@ def _is_structured_morning_checkup_html(value: str) -> bool:
         return False
 
     normalized = value.lower()
+    # Relaxed validation: accept HTML with basic checkup structure
+    # Require at least some structural elements but be flexible on exact class names
     required_tokens = [
+        "morning",
+        "schedule",
+        "focus",
+    ]
+    # Also accept the old strict format for backward compatibility
+    strict_tokens = [
         "daily-checkup",
         "dc-header",
         "dc-metrics",
@@ -700,7 +708,9 @@ def _is_structured_morning_checkup_html(value: str) -> bool:
         "dc-journal",
         "dc-block",
     ]
-    return all(token in normalized for token in required_tokens)
+    has_strict = all(token in normalized for token in strict_tokens)
+    has_relaxed = all(token in normalized for token in required_tokens)
+    return has_strict or has_relaxed
 
 
 def _is_structured_evening_checkup_html(value: str) -> bool:
@@ -709,7 +719,14 @@ def _is_structured_evening_checkup_html(value: str) -> bool:
         return False
 
     normalized = value.lower()
+    # Relaxed validation: accept HTML with basic checkup structure
     required_tokens = [
+        "evening",
+        "review",
+        "reflect",
+    ]
+    # Also accept the old strict format for backward compatibility
+    strict_tokens = [
         "daily-checkup",
         "evening-checkup",
         "dc-header",
@@ -720,7 +737,9 @@ def _is_structured_evening_checkup_html(value: str) -> bool:
         "dc-journal",
         "dc-block",
     ]
-    return all(token in normalized for token in required_tokens)
+    has_strict = all(token in normalized for token in strict_tokens)
+    has_relaxed = all(token in normalized for token in required_tokens)
+    return has_strict or has_relaxed
 
 
 def _parse_hhmm_to_minutes(raw_value: str, default_minutes: int) -> int:
@@ -787,11 +806,12 @@ def _build_morning_schedule_blocks(
     start_minutes, end_minutes = _parse_work_hours_range(work_hours)
     check_in_minutes = _parse_hhmm_to_minutes(check_in_time, start_minutes)
     schedule_end_minutes = _parse_hhmm_to_minutes(schedule_end_time, end_minutes)
-    runtime_anchor_minutes = (
-        _parse_hhmm_to_minutes(run_anchor_time, check_in_minutes)
-        if isinstance(run_anchor_time, str) and run_anchor_time.strip()
-        else check_in_minutes
-    )
+    # Use current runtime time if provided, otherwise use check-in time
+    if isinstance(run_anchor_time, str) and run_anchor_time.strip():
+        runtime_anchor_minutes = _parse_hhmm_to_minutes(run_anchor_time, check_in_minutes)
+    else:
+        # Fallback: use work_hours start if no runtime anchor provided
+        runtime_anchor_minutes = start_minutes
 
     if schedule_end_minutes <= start_minutes:
         schedule_end_minutes = min(24 * 60, start_minutes + 12 * 60)
@@ -799,11 +819,11 @@ def _build_morning_schedule_blocks(
     if schedule_end_minutes - start_minutes < 120:
         schedule_end_minutes = min(24 * 60, start_minutes + 120)
 
-    # If a user runs morning checkup late, start from "now" instead of preferred check-in.
-    if runtime_anchor_minutes > check_in_minutes:
-        check_in_minutes = runtime_anchor_minutes
+    # ALWAYS use runtime anchor (current time) as the starting point for schedule
+    # This ensures schedule starts from when user actually runs the checkup
+    effective_start_minutes = max(runtime_anchor_minutes, start_minutes)
 
-    cursor = max(start_minutes, min(schedule_end_minutes - 15, check_in_minutes))
+    cursor = max(start_minutes, min(schedule_end_minutes - 15, effective_start_minutes))
     end_minutes = max(cursor + 15, schedule_end_minutes)
 
     schedule_blocks: List[Dict[str, Any]] = []
@@ -2645,9 +2665,11 @@ async def run_morning_checkup(request: DailyCheckupRequest):
         tracked_estimated_minutes = _safe_float(time_metrics.get("totalEstimatedMinutes"), default=0.0)
         deep_work_coverage_ratio = _safe_float(time_metrics.get("deepWorkCoverageRatio"), default=0.0)
 
+        # Use actual runtime anchor if available, otherwise show check-in preference
+        display_anchor_time = run_anchor_time if run_anchor_time else check_in_time
         fallback_lines = [
             f"Primary focus: {focus_target}",
-            f"Anchor check-in time: {check_in_time}",
+            f"Anchor check-in time: {display_anchor_time}",
             f"Schedule horizon (to evening check): {evening_check_time}",
             f"Suggested work window baseline: {work_hours}",
             f"Last 7-day average logged work: {_format_minutes(avg_daily_minutes)}",
@@ -2740,7 +2762,13 @@ async def run_morning_checkup(request: DailyCheckupRequest):
             f"Yesterday's time sessions: {time_entry_details}\n"
             f"Today existing entries: {len(today_entries)}\n"
             f"Schedule seed blocks: {schedule_seed or 'none'}\n"
-            "Use the schedule seed block times exactly as provided; do not invent or shift block start/end times. "
+            f"CRITICAL TIME INSTRUCTION: Start schedule from Runtime anchor time: {run_anchor_time or check_in_time}, NOT from schedule seed. "
+            "Generate 4-7 timeline blocks starting from the runtime anchor time, filling forward until evening check. "
+            "Each block should have explicit start and end times (e.g., '3:30 PM - 4:30 PM'). "
+            "DO NOT copy schedule seed times literally - use them only as inspiration for block types/purposes. "
+            "MANDATORY: You MUST generate ALL 4-7 timeline blocks completely. Do NOT use comments like '<!-- Add more blocks -->'. "
+            "Every block must be fully specified with time, title, and reason. "
+            "Think deeply about the schedule, then output the COMPLETE HTML with all sections fully rendered. "
             "DEEP REASONING INSTRUCTIONS - Analyze the following before creating schedule:\n"
             "1. QUALITY ANALYSIS: Review what was actually accomplished (not just hours logged). "
             "   - What specific tasks were completed?\n"
@@ -2774,7 +2802,7 @@ async def run_morning_checkup(request: DailyCheckupRequest):
 
         llm_message = await _generate_checkup_message(
             llm_prompt,
-            max_tokens=720,
+            max_tokens=2000,
             style_directive=style_directive,
             force_html=True,
         )
@@ -3143,7 +3171,7 @@ async def run_evening_checkup(request: DailyCheckupRequest):
 
         llm_message = await _generate_checkup_message(
             llm_prompt,
-            max_tokens=760,
+            max_tokens=2000,
             style_directive=style_directive,
             force_html=True,
         )
