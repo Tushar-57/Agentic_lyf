@@ -202,6 +202,8 @@ class BaseAgent(ABC):
             
         except Exception as e:
             logger.error(f"Error processing input in agent {self.agent_id}: {e}")
+            # Production error tracking - captures exception context for monitoring
+            self._track_error("process_input", e, {"input_length": len(str(user_input))})
             state["status"] = AgentStatus.ERROR
             return state
     
@@ -222,6 +224,8 @@ class BaseAgent(ABC):
             
         except Exception as e:
             logger.error(f"Error executing task in agent {self.agent_id}: {e}")
+            # Production error tracking - captures exception context for monitoring
+            self._track_error("execute_task", e, {"task_type": state.get("task_type", "unknown")})
             state["status"] = AgentStatus.ERROR
             state["agent_response"] = f"Error executing task: {str(e)}"
             return state
@@ -296,6 +300,26 @@ class BaseAgent(ABC):
             logger.error(f"Error determining handoff in agent {self.agent_id}: {e}")
             return "execute"
     
+    def _track_error(self, operation: str, error: Exception, context: Dict[str, Any] = None) -> None:
+        """Track errors for production monitoring and observability.
+
+        This method captures error context for integration with monitoring tools like Sentry.
+        Override in subclasses to add custom error tracking (e.g., Sentry, Datadog, etc.).
+        """
+        error_context = {
+            "agent_id": self.agent_id,
+            "agent_type": self.agent_type.value,
+            "operation": operation,
+            "error_type": type(error).__name__,
+            "error_message": str(error),
+            "timestamp": datetime.utcnow().isoformat(),
+            **(context or {})
+        }
+        # Log structured error for production monitoring integration
+        # In production, integrate with Sentry, Datadog, or similar:
+        # import sentry_sdk; sentry_sdk.capture_exception(error, extras=error_context)
+        logger.error(f"Agent error tracked: {error_context}")
+
     @abstractmethod
     async def execute(self, state: AgentState) -> str:
         """Execute the agent's main logic. Must be implemented by subclasses."""

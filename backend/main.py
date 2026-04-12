@@ -191,9 +191,11 @@ def build_cors_config(origins: List[str], origin_regex: Optional[str]) -> tuple[
     merged_regex = "|".join(regex_parts) if regex_parts else None
     return deduped_exact_origins, merged_regex
 
+# Production-safe CORS defaults - only production origins in default
+# Development origins must be explicitly set via CORS_ALLOWED_ORIGINS env var
 cors_allowed_origins = parse_csv_env(
     "CORS_ALLOWED_ORIGINS",
-    "http://localhost:3000,http://localhost:5173,http://localhost:8088,https://agenticlyf.vercel.app"
+    "https://agenticlyf.vercel.app"
 )
 raw_cors_allowed_origin_regex = os.getenv(
     "CORS_ALLOWED_ORIGIN_REGEX",
