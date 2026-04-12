@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, Suspense, lazy } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Database, Settings, BarChart3, Eye, Box, UserPlus } from 'lucide-react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -7,8 +7,22 @@ import { KnowledgeBaseViewer } from './KnowledgeBaseViewer'
 import { PreferencesEditor } from './PreferencesEditor'
 import { AnalyticsDashboard } from './AnalyticsDashboard'
 import { ManualPreferenceAdder } from './ManualPreferenceAdder'
-import { Advanced3DVisualization } from './Advanced3DVisualization'
+import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
+
+// Lazy load 3D visualization to prevent Three.js from loading eagerly
+const Advanced3DVisualization = lazy(() => import('./Advanced3DVisualization'))
+
+// Loading fallback for 3D visualization
+const VisualizationFallback = () => (
+  <div className="flex h-[500px] items-center justify-center rounded-2xl border border-border/70 bg-muted/50">
+    <div className="flex flex-col items-center gap-3">
+      <Skeleton className="h-12 w-12 rounded-full" />
+      <Skeleton className="h-4 w-32" />
+      <p className="text-sm text-muted-foreground">Loading 3D visualization...</p>
+    </div>
+  </div>
+)
 
 interface KnowledgeManagementProps {
   className?: string
@@ -44,30 +58,30 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
   }
 
   return (
-    <div className={cn("flex h-full min-h-0 flex-col rounded-[28px] border border-border/70 bg-white/70 p-3 pt-4 shadow-[0_24px_70px_-52px_rgba(15,23,42,0.7)] backdrop-blur-xl dark:bg-slate-950/50 sm:p-4 sm:pt-5", className)}>
-      <div className="mb-4 rounded-2xl border border-border/70 bg-gradient-to-r from-teal-50/80 via-cyan-50/70 to-amber-50/70 p-4 dark:from-teal-950/35 dark:via-slate-900/60 dark:to-amber-950/30">
-        <div className="section-kicker mb-2">Knowledge Center</div>
-        <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100 sm:text-2xl">Memory, Signals, and Semantic Maps</h2>
-        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-          Manage profile memory, inspect knowledge quality, and explore embedding relationships from one focused workspace.
+    <div className={cn("flex h-full min-h-0 flex-col rounded-[28px] border border-border/70 bg-card/70 p-3 pt-4 shadow-[0_24px_70px_-52px_rgba(15,23,42,0.7)] backdrop-blur-xl sm:p-4 sm:pt-5", className)}>
+      <div className="mb-4 rounded-2xl border border-border/70 bg-gradient-to-r from-primary/10 via-accent/10 to-background p-4">
+        <div className="section-kicker mb-2">Your Memory</div>
+        <h2 className="text-xl font-semibold text-foreground sm:text-2xl">Your Personal Knowledge Base</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          See what I know about you, explore how your memories connect, and manage your personal insights.
         </p>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex min-h-0 flex-1 flex-col">
-        <TabsList className="no-scrollbar sticky top-0 z-10 flex w-full justify-start gap-1 overflow-x-auto rounded-2xl border border-border/70 bg-white/80 p-1 backdrop-blur dark:bg-slate-900/70">
+        <TabsList className="no-scrollbar sticky top-0 z-10 flex w-full justify-start gap-1 overflow-x-auto rounded-2xl border border-border/70 bg-muted/80 p-1 backdrop-blur">
           <TabsTrigger value="viewer" className="gap-2 shrink-0">
             <Eye className="w-4 h-4" />
-            <span className="hidden sm:inline">Knowledge Base</span>
-            <span className="sm:hidden">Base</span>
+            <span className="hidden sm:inline">My Memory</span>
+            <span className="sm:hidden">Memory</span>
           </TabsTrigger>
           <TabsTrigger value="analytics" className="gap-2 shrink-0">
             <BarChart3 className="w-4 h-4" />
-            Analytics
+            Insights
           </TabsTrigger>
           <TabsTrigger value="visualization" className="gap-2 shrink-0">
             <Box className="w-4 h-4" />
-            <span className="hidden sm:inline">Visualization</span>
-            <span className="sm:hidden">3D View</span>
+            <span className="hidden sm:inline">Explore</span>
+            <span className="sm:hidden">Explore</span>
           </TabsTrigger>
           <TabsTrigger value="settings" className="gap-2 shrink-0">
             <Settings className="w-4 h-4" />
@@ -108,27 +122,27 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
               className="space-y-6"
             >
               <div className="rounded-2xl border border-border/70 bg-card/70 p-5">
-                <h2 className="mb-2 text-2xl font-bold">Knowledge Landscape</h2>
+                <h2 className="mb-2 text-2xl font-bold text-foreground">Your Knowledge Map</h2>
                 <p className="mb-0 text-muted-foreground">
-                  Explore your knowledge base in an interactive graph where each node is a memory and links indicate semantic closeness.
+                  See how your thoughts, goals, and memories connect.
                 </p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="rounded-2xl border border-border/70 bg-white/75 p-4 shadow-sm dark:bg-slate-900/60">
-                  <h3 className="text-sm font-semibold mb-1">Semantic Mode</h3>
+                <div className="rounded-2xl border border-border/70 bg-card/75 p-4 shadow-sm">
+                  <h3 className="text-sm font-semibold mb-1 text-foreground">Semantic Mode</h3>
                   <p className="text-sm text-muted-foreground">
                     Uses backend embedding coordinates when they are available and distinct.
                   </p>
                 </div>
-                <div className="rounded-2xl border border-border/70 bg-white/75 p-4 shadow-sm dark:bg-slate-900/60">
-                  <h3 className="text-sm font-semibold mb-1">Fallback Mode</h3>
+                <div className="rounded-2xl border border-border/70 bg-card/75 p-4 shadow-sm">
+                  <h3 className="text-sm font-semibold mb-1 text-foreground">Fallback Mode</h3>
                   <p className="text-sm text-muted-foreground">
                     If coordinates are not ready, nodes are shown in a stable category-based layout so the map stays usable.
                   </p>
                 </div>
-                <div className="rounded-2xl border border-border/70 bg-white/75 p-4 shadow-sm dark:bg-slate-900/60">
-                  <h3 className="text-sm font-semibold mb-1">Exploration Tools</h3>
+                <div className="rounded-2xl border border-border/70 bg-card/75 p-4 shadow-sm">
+                  <h3 className="text-sm font-semibold mb-1 text-foreground">Exploration Tools</h3>
                   <p className="text-sm text-muted-foreground">
                     Search, filter, and compare connections in Graph and List modes with node detail drill-down.
                   </p>
@@ -149,7 +163,7 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
                 variant="gradient"
               >
                 <Box className="w-5 h-5" />
-                Open Immersive Knowledge Landscape
+                Open Your Knowledge Map
               </Button>
               <p className="text-xs text-muted-foreground">
                 On mobile, the landscape opens in a fullscreen overlay with dedicated controls.
@@ -165,15 +179,15 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
               className="space-y-6"
             >
               <div className="rounded-2xl border border-border/70 bg-card/70 p-5">
-                <h2 className="mb-2 text-2xl font-bold">Knowledge Base Settings</h2>
+                <h2 className="mb-2 text-2xl font-bold">Memory Settings</h2>
                 <p className="mb-0 text-muted-foreground">
-                  Configure how your AI agents learn and store information about your preferences.
+                  Control how I learn about you.
                 </p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-4">
-                  <h3 className="text-lg font-semibold">Data Management</h3>
+                  <h3 className="text-lg font-semibold">Your Data</h3>
                   <div className="space-y-2">
                     <button
                       onClick={handleEditPreferences}
@@ -184,7 +198,7 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
                         <div>
                           <p className="font-medium">Edit Preferences</p>
                           <p className="text-sm text-muted-foreground">
-                            Modify your personal preferences and settings
+                            Update what I know about you
                           </p>
                         </div>
                       </div>
@@ -197,9 +211,9 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
                       <div className="flex items-center gap-3">
                         <UserPlus className="w-5 h-5 text-primary" />
                         <div>
-                          <p className="font-medium">Add Custom Preference</p>
+                          <p className="font-medium">Tell Me Something New</p>
                           <p className="text-sm text-muted-foreground">
-                            Manually add new preferences and settings
+                            Add details about your goals and habits
                           </p>
                         </div>
                       </div>
@@ -211,7 +225,7 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
                         <div>
                           <p className="font-medium">Export Data</p>
                           <p className="text-sm text-muted-foreground">
-                            Download your knowledge base and preferences
+                            Download your data
                           </p>
                         </div>
                       </div>
@@ -223,7 +237,7 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
                         <div>
                           <p className="font-medium">Import Data</p>
                           <p className="text-sm text-muted-foreground">
-                            Import knowledge base from a backup file
+                            Restore from backup
                           </p>
                         </div>
                       </div>
@@ -232,7 +246,7 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
                 </div>
 
                 <div className="space-y-4">
-                  <h3 className="text-lg font-semibold">Privacy & Security</h3>
+                  <h3 className="text-lg font-semibold">Privacy</h3>
                   <div className="space-y-2">
                     <button className="w-full rounded-2xl border border-border/70 bg-white/75 p-4 text-left shadow-sm transition-colors hover:bg-accent/40 dark:bg-slate-900/60">
                       <div className="flex items-center gap-3">
@@ -240,7 +254,7 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
                         <div>
                           <p className="font-medium">Clear All Data</p>
                           <p className="text-sm text-muted-foreground">
-                            Remove all stored preferences and interactions
+                            Delete everything I know about you
                           </p>
                         </div>
                       </div>
@@ -250,9 +264,9 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
                       <div className="flex items-center gap-3">
                         <Database className="w-5 h-5 text-primary" />
                         <div>
-                          <p className="font-medium">Data Retention</p>
+                          <p className="font-medium">Storage Settings</p>
                           <p className="text-sm text-muted-foreground">
-                            Configure how long data is stored
+                            Choose how long I keep your data
                           </p>
                         </div>
                       </div>
@@ -284,10 +298,12 @@ export const KnowledgeManagement: React.FC<KnowledgeManagementProps> = ({
         )}
         
         {isEmbeddingsVisualizationOpen && (
-          <Advanced3DVisualization
-            isOpen={isEmbeddingsVisualizationOpen}
-            onClose={() => setIsEmbeddingsVisualizationOpen(false)}
-          />
+          <Suspense fallback={<VisualizationFallback />}>
+            <Advanced3DVisualization
+              isOpen={isEmbeddingsVisualizationOpen}
+              onClose={() => setIsEmbeddingsVisualizationOpen(false)}
+            />
+          </Suspense>
         )}
       </AnimatePresence>
     </div>

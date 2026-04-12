@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import {
   BarChart,
@@ -173,148 +173,36 @@ type CheckupSectionKey = 'context' | 'planning' | 'focus' | 'execution' | 'notes
 
 const DAILY_CHECKUP_MODAL_HINT_KEY = 'agentic-daily-checkup-modal-hint'
 
-const PREMIUM_CHECKUP_HTML_CLASSNAMES = [
-  'text-sm leading-relaxed text-foreground',
-  '[&_.daily-checkup]:space-y-4',
-  '[&_.dc-header]:rounded-2xl',
-  '[&_.dc-header]:border',
-  '[&_.dc-header]:border-slate-200/80',
-  '[&_.dc-header]:bg-gradient-to-br',
-  '[&_.dc-header]:from-slate-50/95',
-  '[&_.dc-header]:via-cyan-50/70',
-  '[&_.dc-header]:to-white',
-  '[&_.dc-header]:p-4',
-  'dark:[&_.dc-header]:border-slate-700/70',
-  'dark:[&_.dc-header]:from-slate-900/80',
-  'dark:[&_.dc-header]:via-cyan-950/40',
-  'dark:[&_.dc-header]:to-slate-900/90',
-  '[&_.dc-badge-row]:mb-2',
-  '[&_.dc-badge-row]:flex',
-  '[&_.dc-badge-row]:items-center',
-  '[&_.dc-badge-row]:justify-between',
-  '[&_.dc-kicker]:inline-flex',
-  '[&_.dc-kicker]:rounded-full',
-  '[&_.dc-kicker]:bg-cyan-100',
-  '[&_.dc-kicker]:px-2.5',
-  '[&_.dc-kicker]:py-1',
-  '[&_.dc-kicker]:text-[10px]',
-  '[&_.dc-kicker]:font-semibold',
-  '[&_.dc-kicker]:uppercase',
-  '[&_.dc-kicker]:tracking-[0.12em]',
-  '[&_.dc-kicker]:text-cyan-700',
-  'dark:[&_.dc-kicker]:bg-cyan-900/50',
-  'dark:[&_.dc-kicker]:text-cyan-100',
-  '[&_.dc-date]:text-xs',
-  '[&_.dc-date]:font-medium',
-  '[&_.dc-date]:text-slate-500',
-  'dark:[&_.dc-date]:text-slate-300',
-  '[&_.dc-focus]:text-base',
-  '[&_.dc-focus]:font-semibold',
-  '[&_.dc-focus]:tracking-tight',
-  '[&_.dc-subtitle]:mt-1',
-  '[&_.dc-subtitle]:text-xs',
-  '[&_.dc-subtitle]:text-slate-600',
-  'dark:[&_.dc-subtitle]:text-slate-300',
-  '[&_.dc-metrics]:grid',
-  '[&_.dc-metrics]:grid-cols-1',
-  '[&_.dc-metrics]:gap-2',
-  'sm:[&_.dc-metrics]:grid-cols-3',
-  '[&_.dc-metric]:rounded-xl',
-  '[&_.dc-metric]:border',
-  '[&_.dc-metric]:border-slate-200/80',
-  '[&_.dc-metric]:bg-slate-50/80',
-  '[&_.dc-metric]:px-3',
-  '[&_.dc-metric]:py-2.5',
-  'dark:[&_.dc-metric]:border-slate-700/70',
-  'dark:[&_.dc-metric]:bg-slate-800/60',
-  '[&_.dc-metric-label]:text-[11px]',
-  '[&_.dc-metric-label]:font-medium',
-  '[&_.dc-metric-label]:uppercase',
-  '[&_.dc-metric-label]:tracking-wide',
-  '[&_.dc-metric-label]:text-slate-500',
-  'dark:[&_.dc-metric-label]:text-slate-300',
-  '[&_.dc-metric-value]:mt-1',
-  '[&_.dc-metric-value]:text-lg',
-  '[&_.dc-metric-value]:font-semibold',
-  '[&_.dc-metric-value]:text-slate-900',
-  'dark:[&_.dc-metric-value]:text-slate-100',
-  '[&_.dc-panel]:rounded-2xl',
-  '[&_.dc-panel]:border',
-  '[&_.dc-panel]:border-slate-200/70',
-  '[&_.dc-panel]:bg-white/80',
-  '[&_.dc-panel]:p-4',
-  'dark:[&_.dc-panel]:border-slate-700/70',
-  'dark:[&_.dc-panel]:bg-slate-900/60',
-  '[&_.dc-panel-title]:text-xs',
-  '[&_.dc-panel-title]:font-semibold',
-  '[&_.dc-panel-title]:uppercase',
-  '[&_.dc-panel-title]:tracking-[0.12em]',
-  '[&_.dc-panel-title]:text-slate-600',
-  'dark:[&_.dc-panel-title]:text-slate-200',
-  '[&_.dc-panel-subtitle]:mt-1',
-  '[&_.dc-panel-subtitle]:text-xs',
-  '[&_.dc-panel-subtitle]:text-slate-500',
-  'dark:[&_.dc-panel-subtitle]:text-slate-300',
-  '[&_.dc-timeline]:mt-3',
-  '[&_.dc-timeline]:space-y-2.5',
-  '[&_.dc-block]:list-none',
-  '[&_.dc-block]:rounded-xl',
-  '[&_.dc-block]:border',
-  '[&_.dc-block]:p-3',
-  '[&_.dc-block]:shadow-sm',
-  '[&_.dc-block--high]:border-rose-200',
-  '[&_.dc-block--high]:bg-rose-50/80',
-  '[&_.dc-block--medium]:border-amber-200',
-  '[&_.dc-block--medium]:bg-amber-50/80',
-  '[&_.dc-block--low]:border-emerald-200',
-  '[&_.dc-block--low]:bg-emerald-50/80',
-  'dark:[&_.dc-block--high]:border-rose-800/70',
-  'dark:[&_.dc-block--high]:bg-rose-950/30',
-  'dark:[&_.dc-block--medium]:border-amber-800/70',
-  'dark:[&_.dc-block--medium]:bg-amber-950/30',
-  'dark:[&_.dc-block--low]:border-emerald-800/70',
-  'dark:[&_.dc-block--low]:bg-emerald-950/30',
-  '[&_.dc-time-wrap]:mb-1.5',
-  '[&_.dc-time-wrap]:flex',
-  '[&_.dc-time-wrap]:items-center',
-  '[&_.dc-time-wrap]:justify-between',
-  '[&_.dc-time]:text-[11px]',
-  '[&_.dc-time]:font-semibold',
-  '[&_.dc-time]:tracking-wide',
-  '[&_.dc-time]:text-slate-700',
-  'dark:[&_.dc-time]:text-slate-100',
-  '[&_.dc-priority]:text-[10px]',
-  '[&_.dc-priority]:font-semibold',
-  '[&_.dc-priority]:uppercase',
-  '[&_.dc-priority]:tracking-[0.12em]',
-  '[&_.dc-priority]:text-slate-500',
-  'dark:[&_.dc-priority]:text-slate-300',
-  '[&_.dc-block-title]:text-sm',
-  '[&_.dc-block-title]:font-semibold',
-  '[&_.dc-block-title]:text-slate-900',
-  'dark:[&_.dc-block-title]:text-slate-100',
-  '[&_.dc-block-reason]:mt-1',
-  '[&_.dc-block-reason]:text-xs',
-  '[&_.dc-block-reason]:leading-relaxed',
-  '[&_.dc-block-reason]:text-slate-600',
-  'dark:[&_.dc-block-reason]:text-slate-300',
-  '[&_.dc-notes]:mt-3',
-  '[&_.dc-notes]:space-y-1.5',
-  '[&_.dc-notes]:pl-4',
-  '[&_.dc-notes>li]:list-disc',
-  '[&_.dc-notes>li]:text-xs',
-  '[&_.dc-notes>li]:leading-relaxed',
-  '[&_.dc-journal]:bg-gradient-to-br',
-  '[&_.dc-journal]:from-slate-50/90',
-  '[&_.dc-journal]:to-cyan-50/70',
-  'dark:[&_.dc-journal]:from-slate-900/80',
-  'dark:[&_.dc-journal]:to-cyan-950/40',
-  '[&_.dc-journal-q]:mt-2',
-  '[&_.dc-journal-q]:text-xs',
-  '[&_.dc-journal-q]:leading-relaxed',
-  '[&_.dc-journal-q]:text-slate-700',
-  'dark:[&_.dc-journal-q]:text-slate-200',
-].join(' ')
+// Daily checkup card style variants using theme tokens
+const dailyCheckupCardVariants = {
+  card: 'rounded-2xl border border-border/70 bg-card/80 shadow-sm',
+  header: 'rounded-t-2xl border border-border/80 bg-gradient-to-br from-muted/95 via-primary/5 to-background p-4',
+  badgeRow: 'mb-2 flex items-center justify-between',
+  kicker: 'inline-flex rounded-full bg-primary/20 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-primary',
+  date: 'text-xs font-medium text-muted-foreground',
+  focus: 'text-base font-semibold tracking-tight text-foreground',
+  subtitle: 'mt-1 text-xs text-muted-foreground',
+  metrics: 'grid grid-cols-1 gap-2 sm:grid-cols-3',
+  metric: 'rounded-xl border border-border/80 bg-muted/80 px-3 py-2.5',
+  metricLabel: 'text-[11px] font-medium uppercase tracking-wide text-muted-foreground',
+  metricValue: 'mt-1 text-lg font-semibold text-foreground',
+  panel: 'rounded-2xl border border-border/70 bg-card/80 p-4',
+  panelTitle: 'text-xs font-semibold uppercase tracking-[0.12em] text-foreground',
+  panelSubtitle: 'mt-1 text-xs text-muted-foreground',
+  timeline: 'mt-3 space-y-2.5',
+  block: 'list-none rounded-xl border p-3 shadow-sm',
+  blockHigh: 'border-destructive/30 bg-destructive/10',
+  blockMedium: 'border-amber-500/30 bg-amber-500/10',
+  blockLow: 'border-emerald-500/30 bg-emerald-500/10',
+  timeWrap: 'mb-1.5 flex items-center justify-between',
+  time: 'text-[11px] font-semibold tracking-wide text-foreground',
+  priority: 'text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground',
+  blockTitle: 'text-sm font-semibold text-foreground',
+  blockReason: 'mt-1 text-xs leading-relaxed text-muted-foreground',
+  notes: 'mt-3 space-y-1.5 pl-4 [&>li]:list-disc [&>li]:text-xs [&>li]:leading-relaxed',
+  journal: 'bg-gradient-to-br from-muted/90 to-primary/5',
+  journalQ: 'mt-2 text-xs leading-relaxed text-foreground',
+}
 
 const createInitialCheckupForm = (): CheckupFormState => ({
   topPriority: '',
@@ -739,6 +627,48 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   const [isNotificationsLoading, setIsNotificationsLoading] = useState(false)
   const [isNotificationRefreshRunning, setIsNotificationRefreshRunning] = useState(false)
 
+  // AbortControllers for canceling pending requests
+  const abortControllersRef = useRef<Map<string, AbortController>>(new Map())
+
+  const cancelPendingRequests = useCallback(() => {
+    abortControllersRef.current.forEach((controller) => controller.abort())
+    abortControllersRef.current.clear()
+  }, [])
+
+  const fetchWithCancellation = useCallback(async (
+    key: string,
+    url: string,
+    options?: RequestInit
+  ): Promise<Response | null> => {
+    // Cancel any existing request with same key
+    const existing = abortControllersRef.current.get(key)
+    if (existing) {
+      existing.abort()
+    }
+
+    const controller = new AbortController()
+    abortControllersRef.current.set(key, controller)
+
+    try {
+      const response = await fetch(url, { ...options, signal: controller.signal })
+      abortControllersRef.current.delete(key)
+      return response
+    } catch (error) {
+      abortControllersRef.current.delete(key)
+      if (error instanceof Error && error.name === 'AbortError') {
+        return null
+      }
+      throw error
+    }
+  }, [])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      cancelPendingRequests()
+    }
+  }, [cancelPendingRequests])
+
   useEffect(() => {
     loadAnalyticsData()
     loadLatestCheckups()
@@ -963,8 +893,9 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         const latestMorning = parseStoredCheckup({ metadata: latestPayload?.morning })
         const latestEvening = parseStoredCheckup({ metadata: latestPayload?.evening })
 
+        // Null-check before applying to prevent downstream crashes
         if (latestMorning || latestEvening) {
-          applyResolvedCheckups(latestMorning, latestEvening)
+          applyResolvedCheckups(latestMorning ?? null, latestEvening ?? null)
           return
         }
       }
@@ -1372,15 +1303,21 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     setEveningForm((previous) => updater(previous))
   }
 
+  // Use refs to track if forms have been initialized to prevent infinite loops
+  const morningFormInitializedRef = useRef(false)
+  const eveningFormInitializedRef = useRef(false)
+
   useEffect(() => {
     if (!analyticsData) {
       return
     }
 
     setMorningForm((previous) => {
-      if (previous.topPriority || previous.focusTaskOne || previous.additionalNote) {
+      // Guard: only initialize once and only if fields are empty
+      if (morningFormInitializedRef.current || previous.topPriority || previous.focusTaskOne || previous.additionalNote) {
         return previous
       }
+      morningFormInitializedRef.current = true
 
       return {
         ...previous,
@@ -1392,9 +1329,11 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     })
 
     setEveningForm((previous) => {
-      if (previous.focusTaskOne || previous.additionalNote) {
+      // Guard: only initialize once and only if fields are empty
+      if (eveningFormInitializedRef.current || previous.focusTaskOne || previous.additionalNote) {
         return previous
       }
+      eveningFormInitializedRef.current = true
 
       return {
         ...previous,
@@ -1690,8 +1629,8 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
             <div className={cn(
               'flex h-9 w-9 items-center justify-center rounded-full border',
               morningCompletedToday
-                ? 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
-                : 'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300',
+                ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/20 dark:text-emerald-300'
+                : 'border-amber-500/50 bg-amber-500/10 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/20 dark:text-amber-300',
             )}>
               {morningCompletedToday ? <CheckCircle2 className="h-4 w-4" /> : <Sunrise className="h-4 w-4" />}
             </div>
@@ -1699,15 +1638,15 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
             <div className={cn(
               'flex h-9 w-9 items-center justify-center rounded-full border',
               eveningCompletedToday
-                ? 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
+                ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/20 dark:text-emerald-300'
                 : canRunEveningCheckup
-                  ? 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300'
-                  : 'border-slate-300 bg-slate-100 text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400',
+                  ? 'border-indigo-500/50 bg-indigo-500/10 text-indigo-700 dark:border-indigo-500/30 dark:bg-indigo-500/20 dark:text-indigo-300'
+                  : 'border-muted bg-muted text-muted-foreground',
             )}>
               {eveningCompletedToday ? <CheckCircle2 className="h-4 w-4" /> : canRunEveningCheckup ? <MoonStar className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
             </div>
             <div className="h-px bg-gradient-to-r from-indigo-300/70 to-emerald-300/70 dark:from-indigo-700/60 dark:to-emerald-700/60" />
-            <div className="flex h-9 w-9 items-center justify-center rounded-full border border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
+            <div className="flex h-9 w-9 items-center justify-center rounded-full border border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/20 dark:text-emerald-300">
               <Flag className="h-4 w-4" />
             </div>
           </div>
@@ -1723,8 +1662,8 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
             className={cn(
               'rounded-2xl border p-4 transition-shadow',
               morningCompletedToday
-                ? 'border-emerald-200/70 bg-white/80 dark:border-emerald-900/50 dark:bg-slate-900/70'
-                : 'border-amber-200/80 bg-amber-50/45 shadow-[0_0_0_1px_rgba(251,191,36,0.2)] dark:border-amber-900/60 dark:bg-amber-950/20',
+                ? 'border-emerald-500/30 bg-emerald-500/5'
+                : 'border-amber-500/30 bg-amber-500/5 shadow-[0_0_0_1px_rgba(251,191,36,0.15)]',
             )}
           >
             <div className="mb-3 flex items-start justify-between gap-3">
@@ -1747,7 +1686,7 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
             </Button>
           </div>
 
-          <div className="rounded-2xl border border-indigo-200/75 bg-white/80 p-4 dark:border-indigo-900/60 dark:bg-slate-900/70">
+          <div className="rounded-2xl border border-indigo-500/30 bg-indigo-500/5 p-4">
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
                 <p className="text-sm font-semibold">Evening Goal Progression</p>
@@ -1777,14 +1716,14 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
         </div>
 
         {checkupError && (
-          <div className="mt-4 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200">
+          <div className="mt-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {checkupError}
           </div>
         )}
       </Card>
 
       {isCheckupModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/60 p-2 pt-[calc(1rem+env(safe-area-inset-top))] backdrop-blur-sm sm:items-center sm:p-4">
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-background/80 p-2 pt-[calc(1rem+env(safe-area-inset-top))] backdrop-blur-sm sm:items-center sm:p-4">
           <div className="flex h-[100dvh] w-[min(1100px,96vw)] flex-col overflow-hidden rounded-xl border border-border/70 bg-background shadow-2xl sm:h-[88vh] sm:rounded-2xl">
             <div className="flex items-start justify-between gap-4 border-b border-border/70 px-5 py-4">
               <div>
