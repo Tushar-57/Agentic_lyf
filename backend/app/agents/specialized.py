@@ -66,7 +66,7 @@ class HealthAgent(BaseAgent):
             context = await self.knowledge_base.get_contextual_knowledge_for_agent(
                 user_input=user_input,
                 agent_type="health",
-                max_results=10
+                max_results=40
             )
             
             logger.info(f"Retrieved context with keys: {list(context.keys())}")
@@ -283,22 +283,38 @@ class ProductivityAgent(BaseAgent):
             
             logger.info(f"ProductivityAgent processing: {user_input} with preferences: {bool(user_preferences)}")
             
-            # Get contextual knowledge from knowledge base
+            # Extract coach_profile from orchestrator context for AI Persona alignment
+            coach_profile = context.get("coach_profile") if isinstance(context, dict) else None
+            if coach_profile:
+                logger.info(f"[PERSONA_DEBUG] Using coach profile: {coach_profile.get('name', 'Unknown')} - {coach_profile.get('style', 'Unknown')}")
+            
+            # Check if orchestrator already provided time entries in context
+            orchestrator_time_entries = context.get("general_recent_time_entries", []) if isinstance(context, dict) else []
+            if orchestrator_time_entries:
+                logger.info(f"[PRODUCTIVITY_DEBUG] Using {len(orchestrator_time_entries)} time entries from orchestrator context")
+            
+            # Get contextual knowledge from knowledge base (orchestrator may have already fetched)
             contextual_knowledge = await self.knowledge_base.get_contextual_knowledge_for_agent(
                 user_input=user_input,
                 agent_type="productivity",
-                max_results=10
+                max_results=40
             )
             
-            # Determine productivity task type and pass user_preferences
+            # Merge orchestrator's time entries if knowledge base didn't find any
+            if orchestrator_time_entries and not contextual_knowledge.get("recent_time_entries"):
+                logger.info("[PRODUCTIVITY_DEBUG] Merging orchestrator time entries into contextual knowledge")
+                contextual_knowledge["recent_time_entries"] = orchestrator_time_entries
+                contextual_knowledge["time_entries_source"] = "orchestrator_context"
+            
+            # Determine productivity task type and pass user_preferences and coach_profile
             if any(keyword in user_input.lower() for keyword in ["task", "todo", "organize", "project"]):
-                response = await self._handle_task_management(user_input, contextual_knowledge, user_preferences)
+                response = await self._handle_task_management(user_input, contextual_knowledge, user_preferences, coach_profile)
             elif any(keyword in user_input.lower() for keyword in ["goal", "objective", "target", "achieve", "problem", "leetcode"]):
-                response = await self._handle_goal_setting(user_input, contextual_knowledge, user_preferences)
+                response = await self._handle_goal_setting(user_input, contextual_knowledge, user_preferences, coach_profile)
             elif any(keyword in user_input.lower() for keyword in ["time", "schedule", "productivity", "focus"]):
-                response = await self._handle_time_management(user_input, contextual_knowledge, user_preferences)
+                response = await self._handle_time_management(user_input, contextual_knowledge, user_preferences, coach_profile)
             else:
-                response = await self._handle_general_productivity(user_input, contextual_knowledge, user_preferences)
+                response = await self._handle_general_productivity(user_input, contextual_knowledge, user_preferences, coach_profile)
             
             # Intelligently record interaction if valuable
             recorder = get_interaction_recorder()
@@ -314,10 +330,10 @@ class ProductivityAgent(BaseAgent):
             logger.error(f"ProductivityAgent execution failed: {e}")
             return {"response": "I'm having trouble with productivity assistance right now. Please try again later.", "status": "error"}
     
-    async def _handle_task_management(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
-        """Handle task management requests with personalized context."""
+    async def _handle_task_management(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None, coach_profile: Dict[str, Any] = None) -> str:
+        """Handle task management requests with personalized context and AI Persona alignment."""
         try:
-            # Use enhanced prompts for better responses
+            # Use enhanced prompts for better responses with AI Persona alignment
             try:
                 from .enhanced_prompts import EnhancedPromptLibrary
                 system_prompt = EnhancedPromptLibrary.DEEP_AGENT_PROMPTS.get(
@@ -325,12 +341,13 @@ class ProductivityAgent(BaseAgent):
                     EnhancedPromptLibrary.DEEP_AGENT_PROMPTS[AgentType.GENERAL]
                 )
             except ImportError:
-                # Fallback to regular prompts
+                # Fallback to regular prompts with coach_profile for persona alignment
                 from .prompts import PromptLibrary
                 system_prompt = PromptLibrary.build_context_aware_prompt(
                     agent_type=AgentType.PRODUCTIVITY,
                     user_preferences=user_preferences or {},
-                    current_context={"task_type": "task_management"}
+                    current_context={"task_type": "task_management"},
+                    coach_profile=coach_profile
                 )
             
             task_context = self._build_productivity_context(context, "tasks")
@@ -369,8 +386,8 @@ Use emojis and format nicely with actionable task management advice.
             logger.error(f"Task management failed: {e}")
             return "📋 I'd be happy to help you manage your tasks! What specific tasks would you like to organize?"
     
-    async def _handle_goal_setting(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
-        """Handle goal setting and tracking requests with personalized context."""
+    async def _handle_goal_setting(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None, coach_profile: Dict[str, Any] = None) -> str:
+        """Handle goal setting and tracking requests with personalized context and AI Persona alignment."""
         try:
             from .prompts import PromptLibrary
             from .leetcode_tools import LeetcodeTools
@@ -410,8 +427,8 @@ Use emojis and format nicely with actionable task management advice.
                         milestone = leetcode_data.get("milestone", "Day 1")
                         goal_title = leetcode_data.get("goal", "Leetcode")
                         
-                        # Get mentor style for personality
-                        mentor_style = user_preferences.get("mentor", {}).get("style", "Direct")
+                        # Use coach_profile persona style for personality (or fallback to preferences)
+                        mentor_style = coach_profile.get("style", "Direct") if coach_profile else user_preferences.get("mentor", {}).get("style", "Direct")
                         
                         # Format response directly with actual problems (no LLM call needed!)
                         if mentor_style == "Sarcastic Poet":
@@ -538,18 +555,19 @@ Use emojis and format nicely with practical time management advice.
             logger.error(f"Time management failed: {e}")
             return "⏰ I'd be happy to help optimize your time! What specific time management areas would you like to improve?"
     
-    async def _handle_general_productivity(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
-        """Handle general productivity queries with personalized context."""
+    async def _handle_general_productivity(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None, coach_profile: Dict[str, Any] = None) -> str:
+        """Handle general productivity queries with personalized context and AI Persona alignment."""
         try:
             from .prompts import PromptLibrary
             
             productivity_context = self._build_productivity_context(context, "general")
             
-            # Build context-aware system prompt
+            # Build context-aware system prompt with AI Persona alignment
             system_prompt = PromptLibrary.build_context_aware_prompt(
                 agent_type=AgentType.PRODUCTIVITY,
                 user_preferences=user_preferences or {},
-                current_context={"task_type": "general_productivity"}
+                current_context={"task_type": "general_productivity"},
+                coach_profile=coach_profile
             )
             
             llm_service = await get_llm_service()
@@ -580,6 +598,28 @@ Use emojis and format nicely with clear, actionable information.
             logger.error(f"General productivity failed: {e}")
             return "🚀 I'm here to boost your productivity! What specific area would you like help with?"
     
+    def _format_friendly_duration(self, minutes: float) -> str:
+        """Format minutes into a friendly human-readable string.
+        
+        Examples:
+            45 -> "45 minutes"
+            90 -> "1 hour 30 minutes"
+            272 -> "4 hours 32 minutes"
+        """
+        if not minutes or minutes <= 0:
+            return "0 minutes"
+        
+        total_minutes = int(round(minutes))
+        hours = total_minutes // 60
+        mins = total_minutes % 60
+        
+        if hours == 0:
+            return f"{mins} minute{'s' if mins != 1 else ''}"
+        elif mins == 0:
+            return f"{hours} hour{'s' if hours != 1 else ''}"
+        else:
+            return f"{hours} hour{'s' if hours != 1 else ''} {mins} minute{'s' if mins != 1 else ''}"
+
     def _build_productivity_context(self, context: Dict[str, Any], productivity_type: str) -> str:
         """Build productivity context from available knowledge."""
         context_parts = []
@@ -591,6 +631,20 @@ Use emojis and format nicely with clear, actionable information.
                 productivity_prefs = {k: v for k, v in prefs.items() if any(term in k.lower() for term in ["work", "task", "goal", "time", "productivity", "schedule"])}
                 if productivity_prefs:
                     context_parts.append(f"Productivity preferences: {productivity_prefs}")
+        
+        # Add recent time entries - CRITICAL for personalized responses
+        if "recent_time_entries" in context and context["recent_time_entries"]:
+            time_entries = context["recent_time_entries"]
+            if time_entries:
+                entry_count = len(time_entries)
+                total_minutes = sum(entry.get("duration_minutes", 0) for entry in time_entries)
+                friendly_total = self._format_friendly_duration(total_minutes)
+                entry_summary = f"Tracked {entry_count} sessions, {friendly_total} total. "
+                entry_details = " | ".join([
+                    f"{entry.get('task_name', 'Unknown')}: {self._format_friendly_duration(entry.get('duration_minutes', 0))}"
+                    for entry in time_entries[:3]
+                ])
+                context_parts.append(f"Today's time entries: {entry_summary}{entry_details}")
         
         # Add context summary
         if "context_summary" in context and context["context_summary"]:
@@ -652,7 +706,7 @@ class FinanceAgent(BaseAgent):
             contextual_knowledge = await self.knowledge_base.get_contextual_knowledge_for_agent(
                 user_input=user_input,
                 agent_type="finance",
-                max_results=10
+                max_results=51
             )
             
             # Determine finance task type
@@ -1077,7 +1131,7 @@ class SchedulingAgent(BaseAgent):
             contextual_knowledge = await self.knowledge_base.get_contextual_knowledge_for_agent(
                 user_input=user_input,
                 agent_type="scheduling",
-                max_results=10
+                max_results=51
             )
             
             # Determine scheduling task type
@@ -1347,7 +1401,7 @@ class JournalAgent(BaseAgent):
             contextual_knowledge = await self.knowledge_base.get_contextual_knowledge_for_agent(
                 user_input=user_input,
                 agent_type="journal",
-                max_results=10
+                max_results=51
             )
             
             # Determine journaling task type
@@ -1421,7 +1475,7 @@ Provide:
             
         except Exception as e:
             logger.error(f"Daily journaling failed: {e}")
-            return "📝 I'd be happy to guide your journaling practice! What would you like to reflect on today?"
+            return " I'd be happy to guide your journaling practice! What would you like to reflect on today?"
     
     async def _handle_goal_tracking(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
         """Handle goal tracking and milestone celebration with personalization."""
@@ -1432,7 +1486,7 @@ Provide:
             
             llm_service = await get_llm_service()
             if not llm_service:
-                return "🎯 I'd love to help you track your goals! What goals are you working on?"
+                return " I'd love to help you track your goals! What goals are you working on?"
             
             # Build context-aware system prompt
             system_prompt = PromptLibrary.build_context_aware_prompt(
@@ -1663,7 +1717,7 @@ Provide relevant journaling guidance, prompts, and support based on their questi
             context = await self.knowledge_base.get_contextual_knowledge_for_agent(
                 user_input=user_input,
                 agent_type="productivity",
-                max_results=10
+                max_results=69
             )
             
             # Determine specific productivity action needed

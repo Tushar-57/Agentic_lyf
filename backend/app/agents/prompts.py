@@ -40,7 +40,7 @@ class PromptLibrary:
 
 Always be helpful, clear, and transparent about your decision-making process. If you're unsure about which agent to involve, ask the user for clarification.""",
 
-        AgentType.PRODUCTIVITY: """You are the Productivity Agent, specialized in helping users optimize their work and personal productivity. Your expertise includes:
+        AgentType.PRODUCTIVITY: """You are the Productivity Agent, specialized in helping users optimize your work and personal productivity. Your expertise includes:
 
 1. **Task Management**: Help users create, organize, and prioritize tasks effectively
 2. **Goal Setting**: Assist with setting SMART goals and breaking them down into actionable steps
@@ -48,9 +48,19 @@ Always be helpful, clear, and transparent about your decision-making process. If
 4. **Productivity Analytics**: Analyze patterns and suggest optimizations
 5. **Workflow Optimization**: Recommend tools and techniques to improve efficiency
 
-You have access to the user's task data through Google Sheets integration. Always ask for permission before making changes to their data. Focus on practical, actionable advice that fits the user's lifestyle and preferences.
+CRITICAL INSTRUCTIONS:
+- You WILL receive the user's tracked time entries and activity data in your context. You MUST reference this data in your response.
+- When asked about daily performance ("how did I do today"), analyze their actual tracked time entries and provide specific insights about:
+  * What tasks they worked on and for how long
+  * Their productivity patterns
+  * Specific gaps or opportunities you noticed
+  * Concrete next actions based on their actual work
+- NEVER say "No tracked sessions available" if time entry data is provided in context
+- If no time entries exist for the requested period, explicitly state that and suggest tracking their work
+- Always tie recommendations to their actual data, not generic advice
+- You have access to the user's task data through Google Sheets integration. Always ask for permission before making changes to their data.
 
-Be encouraging and supportive while maintaining a focus on results and continuous improvement.""",
+Focus on practical, actionable advice that fits the user's lifestyle and preferences. Be encouraging and supportive while maintaining a focus on results and continuous improvement.""",
 
         AgentType.HEALTH: """You are the Health Agent, dedicated to supporting the user's physical and mental wellness. Your areas of focus include:
 
@@ -191,36 +201,50 @@ Maintain a friendly, professional demeanor while being adaptable to various type
                                   agent_type: AgentType,
                                   user_preferences: Optional[Dict[str, Any]] = None,
                                   recent_interactions: Optional[list] = None,
-                                  current_context: Optional[Dict[str, Any]] = None) -> str:
-        """Build a context-aware prompt for an agent."""
+                                  current_context: Optional[Dict[str, Any]] = None,
+                                  coach_profile: Optional[Dict[str, Any]] = None) -> str:
+        """Build a context-aware prompt for an agent with AI Persona alignment."""
         base_prompt = cls.get_system_prompt(agent_type)
         
         context_additions = []
+        
+        # Add AI Persona alignment FIRST (highest priority for response style)
+        if coach_profile:
+            persona_name = coach_profile.get("name", "Coach")
+            persona_style = coach_profile.get("style", "Direct")
+            persona_directive = coach_profile.get("directive", "Be clear, practical, and action-focused.")
+            
+            context_additions.append(f"\n**AI Persona Alignment:**")
+            context_additions.append(f"You are '{persona_name}' - the user's personal AI coach.")
+            context_additions.append(f"Your communication style: {persona_style}")
+            context_additions.append(f"Your directive: {persona_directive}")
+            context_additions.append(f"CRITICAL: Every response must embody this persona. Do not default to generic AI assistant tone.")
         
         # Add user preferences context with onboarding data
         if user_preferences:
             general = user_preferences.get("general", {})
             
-            # Add communication style from onboarding
-            mentor = general.get("mentor", {})
-            if mentor:
-                communication_style = mentor.get("style", "Direct")
-                mentor_name = mentor.get("name", "AI Assistant")
-                context_additions.append(f"\n**Communication Style:** {communication_style}")
-                context_additions.append(f"Your persona is '{mentor_name}'. Embody this style consistently.")
-                
-                # Add style-specific instructions
-                style_instructions = {
-                    "Sarcastic Poet": "Use witty sarcasm, poetic language, and clever wordplay while being helpful. Balance entertainment with practical advice.",
-                    "Direct": "Be clear, concise, and to the point. No fluff.",
-                    "Friendly": "Be warm, encouraging, and conversational. Use a supportive tone.",
-                    "Encouraging": "Be positive, motivating, and uplifting. Focus on progress and achievements.",
-                    "Nurturing": "Be gentle, caring, and patient. Provide emotional support.",
-                    "Patient": "Be calm, understanding, and never rush. Take time to explain thoroughly.",
-                    "Challenging": "Push the user to grow. Ask tough questions and set high standards."
-                }
-                if communication_style in style_instructions:
-                    context_additions.append(f"**Style Guide:** {style_instructions[communication_style]}")
+            # Add communication style from onboarding (fallback if no coach_profile)
+            if not coach_profile:
+                mentor = general.get("mentor", {})
+                if mentor:
+                    communication_style = mentor.get("style", "Direct")
+                    mentor_name = mentor.get("name", "AI Assistant")
+                    context_additions.append(f"\n**Communication Style:** {communication_style}")
+                    context_additions.append(f"Your persona is '{mentor_name}'. Embody this style consistently.")
+                    
+                    # Add style-specific instructions
+                    style_instructions = {
+                        "Sarcastic Poet": "Use witty sarcasm, poetic language, and clever wordplay while being helpful. Balance entertainment with practical advice.",
+                        "Direct": "Be clear, concise, and to the point. No fluff.",
+                        "Friendly": "Be warm, encouraging, and conversational. Use a supportive tone.",
+                        "Encouraging": "Be positive, motivating, and uplifting. Focus on progress and achievements.",
+                        "Nurturing": "Be gentle, caring, and patient. Provide emotional support.",
+                        "Patient": "Be calm, understanding, and never rush. Take time to explain thoroughly.",
+                        "Challenging": "Push the user to grow. Ask tough questions and set high standards."
+                    }
+                    if communication_style in style_instructions:
+                        context_additions.append(f"**Style Guide:** {style_instructions[communication_style]}")
             
             # Add user role and priorities from onboarding
             if general.get("role"):
@@ -261,7 +285,7 @@ Maintain a friendly, professional demeanor while being adaptable to various type
                 context_additions.append(f"- {key}: {value}")
         
         if context_additions:
-            context_additions.append("\n**IMPORTANT:** Use ALL the above context to provide personalized, relevant assistance. Reference the user's goals, priorities, and role when appropriate. Maintain the specified communication style consistently.")
+            context_additions.append("\n**IMPORTANT:** Use ALL the above context to provide personalized, relevant assistance. Reference the user's goals, priorities, and role when appropriate. Most importantly, MAINTAIN YOUR AI PERSONA consistently throughout the response.")
             return base_prompt + "\n" + "\n".join(context_additions)
         
         return base_prompt
@@ -507,11 +531,13 @@ def get_delegation_prompt(target_agent: AgentType,
 def get_agent_prompt(agent_type: AgentType, 
                     user_preferences: Optional[Dict[str, Any]] = None,
                     recent_interactions: Optional[list] = None,
-                    current_context: Optional[Dict[str, Any]] = None) -> str:
-    """Get a complete prompt for an agent with context."""
+                    current_context: Optional[Dict[str, Any]] = None,
+                    coach_profile: Optional[Dict[str, Any]] = None) -> str:
+    """Get a complete prompt for an agent with context and AI Persona alignment."""
     return PromptLibrary.build_context_aware_prompt(
         agent_type=agent_type,
         user_preferences=user_preferences,
         recent_interactions=recent_interactions,
-        current_context=current_context
+        current_context=current_context,
+        coach_profile=coach_profile
     )
