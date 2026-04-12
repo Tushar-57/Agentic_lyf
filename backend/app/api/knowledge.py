@@ -24,6 +24,11 @@ from app.services.knowledge_base import get_knowledge_base_service
 from app.services.knowledge_base import reset_knowledge_base_service
 from app.services.checkup_store import DailyCheckupRecord, get_daily_checkup_store
 from app.services.ai_notifications_store import AINotificationRecord, get_ai_notification_store
+from app.services.enhanced_notifications import (
+    generate_personalized_notifications,
+    notifications_to_api_response,
+    get_enhanced_notification_engine,
+)
 from app.auth.user_context import get_current_user
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
@@ -70,6 +75,17 @@ class InteractionHistoryRequest(BaseModel):
 class NotificationAcknowledgeRequest(BaseModel):
     """Request payload for acknowledging/unacknowledging notifications."""
     acknowledged: bool = True
+
+
+class ContextSnapshotRequest(BaseModel):
+    """Request model for enhanced AI notifications with full context."""
+    deadline_tasks: Optional[Dict[str, Any]] = Field(default=None, description="Deadline task metrics")
+    focus_tasks: Optional[List[Dict[str, Any]]] = Field(default=None, description="Current focus tasks")
+    habit_metrics: Optional[Dict[str, Any]] = Field(default=None, description="Habit tracking metrics")
+    time_metrics: Optional[Dict[str, Any]] = Field(default=None, description="Time tracking metrics")
+    upcoming_deadlines: Optional[List[Dict[str, Any]]] = Field(default=None, description="Upcoming deadline items")
+    top_goals: Optional[List[str]] = Field(default=None, description="User's top goals")
+    timezone: Optional[str] = Field(default=None, description="User's timezone")
 
 
 class AINotificationResponse(BaseModel):
@@ -627,14 +643,26 @@ def _safe_int(raw_value: Any, default: int = 0) -> int:
 
 
 def _parse_requested_date(date_token: Optional[str], timezone_name: Optional[str] = None) -> date:
-    """Parse YYYY-MM-DD dates from API payloads."""
+    """Parse YYYY-MM-DD dates from API payloads with bounds validation."""
     if not date_token:
         return datetime.now(_resolve_timezone(timezone_name)).date()
 
     try:
-        return date.fromisoformat(date_token)
+        parsed_date = date.fromisoformat(date_token)
     except ValueError as parse_error:
         raise HTTPException(status_code=400, detail="Invalid date format. Expected YYYY-MM-DD") from parse_error
+
+    # Validate date bounds (prevent year 1000 or year 9999)
+    today = datetime.now(_resolve_timezone(timezone_name)).date()
+    max_future = today.replace(year=today.year + 1)  # Max 1 year in future
+    max_past = today.replace(year=today.year - 5)    # Max 5 years in past
+
+    if parsed_date > max_future:
+        raise HTTPException(status_code=400, detail=f"Date too far in future. Maximum allowed: {max_future.isoformat()}")
+    if parsed_date < max_past:
+        raise HTTPException(status_code=400, detail=f"Date too far in past. Minimum allowed: {max_past.isoformat()}")
+
+    return parsed_date
 
 
 def _format_minutes(total_minutes: float) -> str:
@@ -681,7 +709,9 @@ def _strip_html_tags(value: str) -> str:
 def _looks_like_html(value: str) -> bool:
     if not value:
         return False
-    return bool(re.search(r"</?[a-zA-Z][^>]*>", value))
+    # Require proper HTML tag structure: <tag> or </tag> with mandatory closing >
+    # Pattern: optional /, then tag name, then any attributes, then mandatory >
+    return bool(re.search(r"</?[a-zA-Z][a-zA-Z0-9]*(?:\s[^>]*)?>", value))
 
 
 def _is_structured_morning_checkup_html(value: str) -> bool:
@@ -1197,7 +1227,7 @@ async def _generate_checkup_message(
         from app.llm.base import CompletionRequest, ChatMessage
 
         llm_service = llm_service_module._llm_service
-        if not llm_service or not llm_service._initialized:
+        if not llm_service or not llm_service.is_initialized():
             return None
 
         if force_html:
@@ -2094,9 +2124,11 @@ async def _sync_missing_db_checkup_insights(kb_service) -> Dict[str, int]:
             continue
 
         title_prefix = "Morning Checkup" if checkup_type == "morning" else "Evening Checkup"
-        # Add sync_event_key for deterministic ID (prevents duplicates on re-sync)
+        # Add sync_event_key in context for deterministic ID (prevents duplicates on re-sync)
         checkup_sync_key = f"checkup:{checkup_type}:{checkup_date.isoformat()}"
-        payload["sync_event_key"] = checkup_sync_key
+        if "context" not in payload or not isinstance(payload["context"], dict):
+            payload["context"] = {}
+        payload["context"]["sync_event_key"] = checkup_sync_key
         try:
             await kb_service.create_entry(
                 entry_type=KnowledgeEntryType.INSIGHT,
@@ -2506,6 +2538,161 @@ async def list_ai_notifications(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list AI notifications: {str(e)}")
+
+
+@router.post("/notifications/enhanced")
+async def generate_enhanced_notifications(
+    request: ContextSnapshotRequest,
+    limit: int = Query(10, ge=1, le=20, description="Maximum notifications to return"),
+    use_llm: bool = Query(True, description="Use LLM for rich content generation"),
+):
+    """
+    Generate personalized, context-aware AI notifications with rich HTML output.
+    
+    This endpoint uses the enhanced notification engine that:
+    - Analyzes user's complete context (tasks, time entries, habits, goals)
+    - Generates personalized insights based on patterns
+    - Produces rich HTML content with actionable recommendations
+    - Prioritizes notifications by urgency and impact
+    """
+    try:
+        # Build context snapshot from request
+        context_snapshot = {
+            "deadlineTasks": request.deadline_tasks,
+            "focusTasks": request.focus_tasks,
+            "habitMetrics": request.habit_metrics,
+            "timeMetrics": request.time_metrics,
+            "upcomingDeadlines": request.upcoming_deadlines,
+            "topGoals": request.top_goals,
+            "timezone": request.timezone,
+        }
+        
+        # Remove None values
+        context_snapshot = {k: v for k, v in context_snapshot.items() if v is not None}
+        
+        # Generate personalized notifications
+        notifications = await generate_personalized_notifications(
+            context_snapshot=context_snapshot if context_snapshot else None,
+            limit=limit,
+            use_llm=use_llm
+        )
+        
+        # Try to persist if store is available
+        notification_store = get_ai_notification_store()
+        persistence_enabled = notification_store is not None
+        
+        if notification_store and notifications:
+            request_user = get_current_user()
+            active_keys = []
+            upserted_count = 0
+            
+            for notification in notifications:
+                record = notification_store.upsert_notification(
+                    user_id=request_user.storage_key,
+                    notification_key=notification.notification_key,
+                    kind=notification.kind,
+                    severity=notification.severity,
+                    title=notification.title,
+                    summary=notification.summary,
+                    details=notification.details_html,
+                    score=notification.score,
+                    payload={
+                        "insights": notification.insights,
+                        "recommended_actions": notification.recommended_actions,
+                        "triggering_metrics": notification.triggering_metrics,
+                        "tags": notification.tags,
+                        "priority_score": notification.priority_score,
+                    },
+                    origin="enhanced_notifications_v2",
+                )
+                if record:
+                    active_keys.append(notification.notification_key)
+                    upserted_count += 1
+            
+            # Mark stale notifications as resolved
+            resolved_count = notification_store.mark_stale_notifications_resolved(
+                user_id=request_user.storage_key,
+                active_keys=active_keys,
+                origin="enhanced_notifications_v2",
+            )
+        
+        # Convert to API response
+        response = notifications_to_api_response(notifications, persistence_enabled)
+        
+        if notification_store and notifications:
+            response["upserted"] = upserted_count
+            response["resolved"] = resolved_count
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Enhanced notification generation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to generate enhanced notifications: {str(e)}")
+
+
+@router.post("/notifications/enhanced/refresh")
+async def refresh_enhanced_notifications(
+    limit: int = Query(10, ge=1, le=20, description="Maximum notifications to return"),
+    use_llm: bool = Query(True, description="Use LLM for rich content generation"),
+):
+    """
+    Refresh enhanced notifications using only stored data (no external context).
+    Useful for background refresh or when frontend context is not available.
+    """
+    try:
+        notifications = await generate_personalized_notifications(
+            context_snapshot=None,  # Use only stored data
+            limit=limit,
+            use_llm=use_llm
+        )
+        
+        notification_store = get_ai_notification_store()
+        persistence_enabled = notification_store is not None
+        
+        if notification_store and notifications:
+            request_user = get_current_user()
+            active_keys = []
+            upserted_count = 0
+            
+            for notification in notifications:
+                record = notification_store.upsert_notification(
+                    user_id=request_user.storage_key,
+                    notification_key=notification.notification_key,
+                    kind=notification.kind,
+                    severity=notification.severity,
+                    title=notification.title,
+                    summary=notification.summary,
+                    details=notification.details_html,
+                    score=notification.score,
+                    payload={
+                        "insights": notification.insights,
+                        "recommended_actions": notification.recommended_actions,
+                        "triggering_metrics": notification.triggering_metrics,
+                        "tags": notification.tags,
+                        "priority_score": notification.priority_score,
+                    },
+                    origin="enhanced_notifications_v2",
+                )
+                if record:
+                    active_keys.append(notification.notification_key)
+                    upserted_count += 1
+            
+            resolved_count = notification_store.mark_stale_notifications_resolved(
+                user_id=request_user.storage_key,
+                active_keys=active_keys,
+                origin="enhanced_notifications_v2",
+            )
+        
+        response = notifications_to_api_response(notifications, persistence_enabled)
+        if notification_store and notifications:
+            response["upserted"] = upserted_count
+            response["resolved"] = resolved_count
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Enhanced notification refresh failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to refresh enhanced notifications: {str(e)}")
 
 
 @router.patch("/notifications/{notification_id}/ack", response_model=AINotificationResponse)
@@ -3335,28 +3522,48 @@ async def save_onboarding_data(data: OnboardingData):
         preference_profile = data.preference_profile or data.preferenceProfile or {}
         if not isinstance(preference_profile, dict):
             preference_profile = {}
-        
-        # First, delete existing onboarding entries in bulk to avoid repeated index rebuilds.
-        all_entries = await kb_service.get_all_entries()
-        user_pref_entries = [e for e in all_entries if e.entry_type == KnowledgeEntryType.USER_PREFERENCE]
 
-        if user_pref_entries:
-            try:
-                await kb_service.delete_entries([entry.entry_id for entry in user_pref_entries])
-            except Exception as e:
-                logger.warning("Failed to bulk delete onboarding entries: %s", e)
-        
+        # Helper to compute content hash for change detection
+        def _compute_content_hash(*parts: str) -> str:
+            import hashlib
+            content = "|".join(parts)
+            return hashlib.sha256(content.encode()).hexdigest()[:16]
+
+        # Helper to check if entry needs update by comparing content hash
+        def _entry_content_matches(entry, content_hash: str) -> bool:
+            if not entry or not entry.metadata:
+                return False
+            existing_hash = entry.metadata.get("content_hash") if isinstance(entry.metadata, dict) else None
+            return existing_hash == content_hash
+
+        # Get existing entries to check for changes (avoid unnecessary embedding regeneration)
+        all_entries = await kb_service.get_all_entries()
+        existing_by_sync_key: dict[str, Any] = {}
+        for e in all_entries:
+            if e.entry_type != KnowledgeEntryType.USER_PREFERENCE:
+                continue
+            ctx = e.metadata.get("context") if isinstance(e.metadata, dict) else None
+            sync_key = ctx.get("sync_event_key") if isinstance(ctx, dict) else None
+            if sync_key:
+                existing_by_sync_key[sync_key] = e
+
+        # Track entries to keep vs create/update
+        processed_entry_ids: set[str] = set()
+
         # Generate deterministic sync key for profile (prevents duplicates on re-sync)
         profile_sync_key = f"onboarding:profile:{data.role}"
-        
-        # Now save new user profile
-        profile_entry = await kb_service.create_entry(
-            entry_type=KnowledgeEntryType.USER_PREFERENCE,
-            entry_sub_type=KnowledgeEntrySubType.USER_PROFILE,
-            category="user_profile",
-            title="User Profile",
-            content=f"Role: {data.role}\nPreferences: {', '.join(data.preferences)}\nMentor: {data.mentor.get('name', 'AI Assistant')}",
-            metadata={
+        profile_content = f"Role: {data.role}\nPreferences: {', '.join(data.preferences)}\nMentor: {data.mentor.get('name', 'AI Assistant')}"
+        profile_content_hash = _compute_content_hash(profile_content, str(data.mentor), str(preference_profile))
+
+        existing_profile = existing_by_sync_key.get(profile_sync_key)
+        if existing_profile and _entry_content_matches(existing_profile, profile_content_hash):
+            # No change, keep existing
+            profile_entry = existing_profile
+            processed_entry_ids.add(existing_profile.entry_id)
+            logger.info(f"Skipping unchanged profile entry: {existing_profile.entry_id}")
+        else:
+            # Create or update profile entry
+            profile_metadata = {
                 "role": data.role,
                 "preferences": data.preferences,
                 "mentor": data.mentor,
@@ -3365,49 +3572,141 @@ async def save_onboarding_data(data: OnboardingData):
                 "domain_preferences": domain_preferences,
                 "preference_profile": preference_profile,
                 "onboarding_completed": True,
+                "content_hash": profile_content_hash,
                 "context": {"sync_event_key": profile_sync_key}
-            },
-            tags=["profile", "onboarding", data.role.lower()]
-        )
-        
+            }
+            if existing_profile:
+                profile_entry = await kb_service.update_entry(
+                    existing_profile.entry_id,
+                    title="User Profile",
+                    content=profile_content,
+                    metadata=profile_metadata,
+                    tags=["profile", "onboarding", data.role.lower()]
+                )
+                processed_entry_ids.add(existing_profile.entry_id)
+                logger.info(f"Updated profile entry: {existing_profile.entry_id}")
+            else:
+                profile_entry = await kb_service.create_entry(
+                    entry_type=KnowledgeEntryType.USER_PREFERENCE,
+                    entry_sub_type=KnowledgeEntrySubType.USER_PROFILE,
+                    category="user_profile",
+                    title="User Profile",
+                    content=profile_content,
+                    metadata=profile_metadata,
+                    tags=["profile", "onboarding", data.role.lower()]
+                )
+                processed_entry_ids.add(profile_entry.entry_id)
+
         # Save each goal with deterministic sync key
         goal_entries = []
         for goal in data.goals:
             goal_id = goal.get('id') or goal.get('title', 'untitled').lower().replace(' ', '_')
             goal_sync_key = f"onboarding:goal:{goal_id}"
-            goal_entry = await kb_service.create_entry(
-                entry_type=KnowledgeEntryType.USER_PREFERENCE,
-                entry_sub_type=KnowledgeEntrySubType.GOAL,
-                category="goals",
-                title=goal.get('title', 'Untitled Goal'),
-                content=f"{goal.get('title', 'Untitled Goal')}: {goal.get('description', '')}",
-                metadata={
-                    "priority": goal.get('priority', 'Medium'),
-                    "category": goal.get('category', data.role),
-                    "milestones": goal.get('milestones', []),
-                    "smart_criteria": goal.get('smartCriteria', {}),
-                    "context": {"sync_event_key": goal_sync_key}
-                },
-                tags=["goal", data.role.lower(), goal.get('priority', 'medium').lower()]
-            )
-            goal_entries.append(goal_entry)
-        
+            goal_title = goal.get('title', 'Untitled Goal')
+            goal_content = f"{goal_title}: {goal.get('description', '')}"
+            goal_content_hash = _compute_content_hash(goal_title, str(goal.get('description', '')), str(goal.get('milestones', [])), str(goal.get('smartCriteria', {})))
+
+            existing_goal = existing_by_sync_key.get(goal_sync_key)
+            goal_metadata = {
+                "priority": goal.get('priority', 'Medium'),
+                "category": goal.get('category', data.role),
+                "milestones": goal.get('milestones', []),
+                "smart_criteria": goal.get('smartCriteria', {}),
+                "content_hash": goal_content_hash,
+                "context": {"sync_event_key": goal_sync_key}
+            }
+
+            if existing_goal and _entry_content_matches(existing_goal, goal_content_hash):
+                # No change, keep existing
+                goal_entries.append(existing_goal)
+                processed_entry_ids.add(existing_goal.entry_id)
+                logger.info(f"Skipping unchanged goal entry: {existing_goal.entry_id}")
+            elif existing_goal:
+                # Update existing goal
+                updated_goal = await kb_service.update_entry(
+                    existing_goal.entry_id,
+                    title=goal_title,
+                    content=goal_content,
+                    metadata=goal_metadata,
+                    tags=["goal", data.role.lower(), goal.get('priority', 'medium').lower()]
+                )
+                if updated_goal:
+                    goal_entries.append(updated_goal)
+                else:
+                    goal_entries.append(existing_goal)
+                processed_entry_ids.add(existing_goal.entry_id)
+                logger.info(f"Updated goal entry: {existing_goal.entry_id}")
+            else:
+                # Create new goal entry
+                goal_entry = await kb_service.create_entry(
+                    entry_type=KnowledgeEntryType.USER_PREFERENCE,
+                    entry_sub_type=KnowledgeEntrySubType.GOAL,
+                    category="goals",
+                    title=goal_title,
+                    content=goal_content,
+                    metadata=goal_metadata,
+                    tags=["goal", data.role.lower(), goal.get('priority', 'medium').lower()]
+                )
+                goal_entries.append(goal_entry)
+                processed_entry_ids.add(goal_entry.entry_id)
+
         # Save planner configuration with deterministic sync key
         planner_sync_key = f"onboarding:planner:{data.role}"
-        planner_entry = await kb_service.create_entry(
-            entry_type=KnowledgeEntryType.USER_PREFERENCE,
-            entry_sub_type=KnowledgeEntrySubType.SCHEDULE,
-            category="planner",
-            title="Planner Configuration",
-            content=f"Work Hours: {data.planner.get('availability', {}).get('workHours', {}).get('start', '09:00')} - {data.planner.get('availability', {}).get('workHours', {}).get('end', '17:00')}\nTimezone: {data.planner.get('availability', {}).get('timezone', 'UTC')}",
-            metadata={
-                "availability": data.planner.get('availability', {}),
-                "notifications": data.planner.get('notifications', {}),
-                "integrations": data.planner.get('integrations', {}),
-                "context": {"sync_event_key": planner_sync_key}
-            },
-            tags=["planner", "schedule", "configuration"]
-        )
+        planner_content = f"Work Hours: {data.planner.get('availability', {}).get('workHours', {}).get('start', '09:00')} - {data.planner.get('availability', {}).get('workHours', {}).get('end', '17:00')}\nTimezone: {data.planner.get('availability', {}).get('timezone', 'UTC')}"
+        planner_content_hash = _compute_content_hash(str(data.planner.get('availability', {})), str(data.planner.get('notifications', {})), str(data.planner.get('integrations', {})))
+
+        existing_planner = existing_by_sync_key.get(planner_sync_key)
+        planner_metadata = {
+            "availability": data.planner.get('availability', {}),
+            "notifications": data.planner.get('notifications', {}),
+            "integrations": data.planner.get('integrations', {}),
+            "content_hash": planner_content_hash,
+            "context": {"sync_event_key": planner_sync_key}
+        }
+
+        if existing_planner and _entry_content_matches(existing_planner, planner_content_hash):
+            # No change, keep existing
+            planner_entry = existing_planner
+            processed_entry_ids.add(existing_planner.entry_id)
+            logger.info(f"Skipping unchanged planner entry: {existing_planner.entry_id}")
+        elif existing_planner:
+            # Update existing planner
+            planner_entry = await kb_service.update_entry(
+                existing_planner.entry_id,
+                title="Planner Configuration",
+                content=planner_content,
+                metadata=planner_metadata,
+                tags=["planner", "schedule", "configuration"]
+            )
+            processed_entry_ids.add(existing_planner.entry_id)
+            logger.info(f"Updated planner entry: {existing_planner.entry_id}")
+        else:
+            # Create new planner entry
+            planner_entry = await kb_service.create_entry(
+                entry_type=KnowledgeEntryType.USER_PREFERENCE,
+                entry_sub_type=KnowledgeEntrySubType.SCHEDULE,
+                category="planner",
+                title="Planner Configuration",
+                content=planner_content,
+                metadata=planner_metadata,
+                tags=["planner", "schedule", "configuration"]
+            )
+            processed_entry_ids.add(planner_entry.entry_id)
+
+        # Clean up orphaned entries (entries that are no longer in the new data)
+        orphaned_entries = [
+            e for e in all_entries
+            if e.entry_type == KnowledgeEntryType.USER_PREFERENCE
+            and e.entry_id not in processed_entry_ids
+            and isinstance(e.metadata, dict)
+            and e.metadata.get("context", {}).get("sync_event_key", "").startswith("onboarding:")
+        ]
+        if orphaned_entries:
+            try:
+                await kb_service.delete_entries([e.entry_id for e in orphaned_entries])
+                logger.info(f"Deleted {len(orphaned_entries)} orphaned onboarding entries")
+            except Exception as e:
+                logger.warning("Failed to delete orphaned entries: %s", e)
 
         preferences_synced = False
         try:

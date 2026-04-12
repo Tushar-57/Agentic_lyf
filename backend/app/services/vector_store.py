@@ -6,8 +6,12 @@ import os
 import pickle
 import logging
 from typing import List, Dict, Any, Optional, Tuple
+from collections import OrderedDict
 import numpy as np
 from datetime import datetime
+
+# Maximum entries in FAISS index to prevent unbounded memory growth
+MAX_VECTOR_STORE_ENTRIES = 5000
 
 try:
     import faiss
@@ -51,7 +55,10 @@ class VectorStore:
         self.entry_metadata: Dict[int, KnowledgeEntry] = {}
         self.id_to_faiss_id: Dict[str, int] = {}
         self.next_faiss_id = 0
-        
+        # Track insertion order for LRU eviction (faiss_id -> insertion_order)
+        self._insertion_order: OrderedDict[int, int] = OrderedDict()
+        self._insertion_counter = 0
+
         # Load existing index if available
         self._load_index()
     
@@ -101,8 +108,42 @@ class VectorStore:
             logger.error(f"Failed to save vector store: {e}")
             raise
     
+    def _evict_oldest_entries_if_needed(self) -> None:
+        """Evict oldest entries if at capacity to prevent unbounded growth."""
+        while self.index.ntotal >= MAX_VECTOR_STORE_ENTRIES and self._insertion_order:
+            # Get oldest entry (first in OrderedDict)
+            oldest_faiss_id, _ = self._insertion_order.popitem(last=False)
+            # Remove from index (FAISS doesn't support single deletion, rebuild without it)
+            self._rebuild_without_entry(oldest_faiss_id)
+            logger.debug(f"Evicted oldest entry {oldest_faiss_id} to maintain size limit")
+
+    def _rebuild_without_entry(self, exclude_faiss_id: int) -> None:
+        """Rebuild index excluding a specific faiss_id."""
+        entries_to_keep = []
+        for fid, entry in self.entry_metadata.items():
+            if fid != exclude_faiss_id:
+                embedding = self.get_embedding(entry.entry_id)
+                if embedding:
+                    entries_to_keep.append((entry, embedding))
+
+        # Clear old metadata references
+        entry_id_to_remove = None
+        for eid, fid in list(self.id_to_faiss_id.items()):
+            if fid == exclude_faiss_id:
+                entry_id_to_remove = eid
+                break
+        if entry_id_to_remove:
+            del self.id_to_faiss_id[entry_id_to_remove]
+        del self.entry_metadata[exclude_faiss_id]
+
+        # Rebuild index
+        self._rebuild_from_entries(entries_to_keep, persist=False)
+
     def _insert_entry_without_persist(self, entry: KnowledgeEntry, embedding: List[float]) -> None:
         """Insert a single entry into FAISS/index metadata without persisting to disk."""
+        # Enforce size limit before adding
+        self._evict_oldest_entries_if_needed()
+
         embedding_array = np.array([embedding], dtype=np.float32)
         faiss.normalize_L2(embedding_array)
 
@@ -111,6 +152,8 @@ class VectorStore:
 
         self.entry_metadata[faiss_id] = entry
         self.id_to_faiss_id[entry.entry_id] = faiss_id
+        self._insertion_order[faiss_id] = self._insertion_counter
+        self._insertion_counter += 1
         self.next_faiss_id += 1
         entry.embedding = embedding
 
@@ -124,6 +167,9 @@ class VectorStore:
         self.entry_metadata = {}
         self.id_to_faiss_id = {}
         self.next_faiss_id = 0
+        # Reset insertion tracking
+        self._insertion_order = OrderedDict()
+        self._insertion_counter = 0
 
         for entry, embedding in entries_with_embeddings:
             if not embedding:

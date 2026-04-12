@@ -7,6 +7,9 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+# Valid user_id pattern: alphanumeric, hyphens, underscores, dots, max 64 chars
+VALID_USER_ID_PATTERN = re.compile(r'^[a-zA-Z0-9._-]{1,64}$')
+
 import numpy as np
 
 from ..models.knowledge import KnowledgeEntry, KnowledgeSearchResult

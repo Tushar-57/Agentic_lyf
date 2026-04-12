@@ -5,10 +5,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from threading import Lock
 from typing import Any, Dict, List, Optional, Sequence, Set
+
+# Valid user_id pattern: alphanumeric, hyphens, underscores, dots, max 64 chars
+VALID_USER_ID_PATTERN = re.compile(r'^[a-zA-Z0-9._-]{1,64}$')
 
 from sqlalchemy import DateTime, Float, Integer, String, Text, UniqueConstraint, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
@@ -101,6 +105,10 @@ class AINotificationStore:
     @staticmethod
     def _normalize_user_id(user_id: Optional[str]) -> str:
         normalized = str(user_id or "single_user").strip()
+        # Validate user_id to prevent injection attacks
+        if normalized and not VALID_USER_ID_PATTERN.match(normalized):
+            logger.warning(f"Invalid user_id format rejected: {repr(normalized[:100])}")
+            raise ValueError(f"Invalid user_id format. Must match pattern: {VALID_USER_ID_PATTERN.pattern}")
         return normalized or "single_user"
 
     @staticmethod

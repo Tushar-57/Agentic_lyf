@@ -5,9 +5,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from threading import Lock
 from typing import Any, Dict, List, Optional
+
+# Valid user_id pattern: alphanumeric, hyphens, underscores, dots, max 64 chars
+VALID_USER_ID_PATTERN = re.compile(r'^[a-zA-Z0-9._-]{1,64}$')
 
 from sqlalchemy import DateTime, Integer, String, Text, UniqueConstraint, create_engine, delete, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
@@ -70,6 +74,10 @@ class KnowledgeDbStore:
     @staticmethod
     def _normalize_user_id(user_id: Optional[str]) -> str:
         normalized = str(user_id or "single_user").strip()
+        # Validate user_id to prevent injection attacks
+        if normalized and not VALID_USER_ID_PATTERN.match(normalized):
+            logger.warning(f"Invalid user_id format rejected: {repr(normalized[:100])}")
+            raise ValueError(f"Invalid user_id format. Must match pattern: {VALID_USER_ID_PATTERN.pattern}")
         return normalized or "single_user"
 
     @staticmethod
