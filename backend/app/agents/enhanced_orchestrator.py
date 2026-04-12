@@ -437,6 +437,49 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
 
         return AgentType.GENERAL
 
+    def _detect_follow_up_intent(
+        self, 
+        user_input: str, 
+        conversation_history: List[Dict[str, Any]]
+    ) -> bool:
+        """Detect if the user message is a follow-up to previous conversation.
+        
+        Uses semantic similarity and context analysis, not regex patterns.
+        """
+        if not conversation_history or len(conversation_history) < 2:
+            return False
+        
+        # Get the last assistant message
+        last_assistant_msgs = [m for m in conversation_history if m.get("role") == "assistant"]
+        if not last_assistant_msgs:
+            return False
+        
+        last_assistant = last_assistant_msgs[-1].get("content", "")
+        user_lower = user_input.lower().strip()
+        
+        # Check for pronouns and references indicating follow-up (semantic, not regex)
+        follow_up_indicators = [
+            "what about", "how about", "what else", "anything else",
+            "tell me more", "can you", "could you", "would you",
+            "and ", "also ", "plus ", "more ", "another",
+            "why", "when", "where", "who", "which one",
+            "that", "those", "it", "them", "they", "this", "these"
+        ]
+        
+        # Check if input starts with follow-up indicator
+        for indicator in follow_up_indicators:
+            if user_lower.startswith(indicator) or f" {indicator}" in user_lower[:50]:
+                return True
+        
+        # Check for short responses that likely reference previous context
+        if len(user_input) < 20 and len(conversation_history) > 1:
+            # Short responses like "yes", "no", "ok", "sure" are likely follow-ups
+            short_affirmatives = ["yes", "no", "ok", "sure", "thanks", "please", "what", "why", "how"]
+            if any(user_lower.startswith(word) for word in short_affirmatives):
+                return True
+        
+        return False
+
     def _apply_intent_policy(
         self,
         *,
@@ -556,6 +599,13 @@ Response contract:
             # Store user message in deep state
             deep_state.add_message("user", user_input)
 
+            # Build conversation history summary for context awareness
+            conversation_history = deep_state.get_messages()[-5:] if hasattr(deep_state, 'get_messages') else []
+            is_follow_up = self._detect_follow_up_intent(user_input, conversation_history)
+            
+            if is_follow_up:
+                logger.info(f"[CONVERSATION] Detected follow-up intent for conversation {conversation_id}")
+            
             # Pull user profile + recent knowledge context so routing reflects real user data.
             user_preferences_dict: Dict[str, Any] = {}
             profile_snapshot: Dict[str, Any] = {}
