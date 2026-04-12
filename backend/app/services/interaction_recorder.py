@@ -219,7 +219,7 @@ class InteractionRecorder:
             )
             
             if not should_consider:
-                self.logger.debug("Interaction filtered out - not creating pending approval for %s", agent_type)
+                self.logger.debug("interaction_filtered_out", f"Interaction filtered out - not creating pending approval for {agent_type}")
                 return None
             
             resolved_sources = knowledge_sources or self._extract_context_sources(context)
@@ -235,11 +235,11 @@ class InteractionRecorder:
             
             async with self._pending_lock:
                 self.pending_interactions.append(pending)
-            self.logger.info("Created pending interaction %s for user approval (%s)", pending.id, agent_type)
+            self.logger.info("pending_created", f"Created pending interaction {pending.id} for user approval ({agent_type})")
             return pending.id
             
         except Exception as e:
-            self.logger.error("Error creating pending interaction: %s", str(e))
+            self.logger.error("pending_create_error", "Error creating pending interaction", {"error": str(e)})
             return None
     
     async def approve_interaction(self, interaction_id: str) -> bool:
@@ -258,7 +258,7 @@ class InteractionRecorder:
                     break
             
             if not pending:
-                self.logger.warning("Pending interaction not found: %s", interaction_id)
+                self.logger.warning("pending_not_found", f"Pending interaction not found: {interaction_id}")
                 return False
             
             approved_as_insight = self._should_promote_to_insight(pending)
@@ -276,17 +276,14 @@ class InteractionRecorder:
             async with self._pending_lock:
                 self.pending_interactions.remove(pending)
             self.logger.info(
-                "USER APPROVED and recorded interaction %s (%s) entry_id=%s category=%s insight=%s",
-                interaction_id,
-                pending.agent_type,
-                getattr(saved_entry, "entry_id", None),
-                getattr(saved_entry, "category", None),
-                approved_as_insight,
+                "interaction_approved",
+                f"USER APPROVED and recorded interaction {interaction_id} ({pending.agent_type})",
+                {"entry_id": getattr(saved_entry, "entry_id", None), "category": getattr(saved_entry, "category", None), "insight": approved_as_insight}
             )
             return True
             
         except Exception as e:
-            self.logger.error("Error approving interaction: %s", str(e))
+            self.logger.error("interaction_approve_error", "Error approving interaction", {"error": str(e)})
             return False
     
     async def reject_interaction(self, interaction_id: str) -> bool:
@@ -302,14 +299,14 @@ class InteractionRecorder:
                 for interaction in self.pending_interactions:
                     if interaction.id == interaction_id:
                         self.pending_interactions.remove(interaction)
-                        self.logger.info("USER REJECTED interaction %s (%s)", interaction_id, interaction.agent_type)
+                        self.logger.info("interaction_rejected", f"USER REJECTED interaction {interaction_id} ({interaction.agent_type})")
                         return True
 
-            self.logger.warning("Pending interaction not found for rejection: %s", interaction_id)
+            self.logger.warning("pending_reject_not_found", f"Pending interaction not found for rejection: {interaction_id}")
             return False
 
         except Exception as e:
-            self.logger.error("Error rejecting interaction: %s", str(e))
+            self.logger.error("interaction_reject_error", "Error rejecting interaction", {"error": str(e)})
             return False
     
     async def get_pending_interactions(self) -> List[Dict[str, Any]]:
@@ -317,8 +314,7 @@ class InteractionRecorder:
         async with self._pending_lock:
             pending_count = len(self.pending_interactions)
             pending_list = list(self.pending_interactions)  # Copy under lock
-        self.logger.info("Getting pending interactions - count: %d, instance id: %s",
-                        pending_count, id(self))
+        self.logger.info("get_pending_interactions", f"Getting pending interactions - count: {pending_count}")
         return [
             {
                 "id": pending.id,
@@ -340,7 +336,7 @@ class InteractionRecorder:
         This method now only works with explicit user approval.
         """
         if not user_approved:
-            self.logger.info("Use create_pending_interaction() for new approval workflow")
+            self.logger.info("record_if_valuable_deprecated", "Use create_pending_interaction() for new approval workflow")
             return False
         
         return await self._record_approved_interaction(user_input, agent_response, agent_type, context)
@@ -361,14 +357,14 @@ class InteractionRecorder:
                     context=context or {}
                 )
                 
-                self.logger.info("Recorded USER-APPROVED interaction for %s", agent_type)
+                self.logger.info("interaction_recorded", f"Recorded USER-APPROVED interaction for {agent_type}")
                 return True
             else:
-                self.logger.debug("Filtered out trivial interaction for %s", agent_type)
+                self.logger.debug("interaction_filtered_trivial", f"Filtered out trivial interaction for {agent_type}")
                 return False
                 
         except Exception as e:
-            self.logger.error("Error recording approved interaction: %s", str(e))
+            self.logger.error("interaction_record_error", "Error recording approved interaction", {"error": str(e)})
             return False
     
     async def should_record_interaction(self, user_input: str, agent_response: str, 
@@ -401,7 +397,7 @@ class InteractionRecorder:
             return False
             
         except Exception as e:
-            self.logger.error("Error analyzing interaction value: %s", str(e))
+            self.logger.error("interaction_analyze_error", "Error analyzing interaction value", {"error": str(e)})
             # On error, default to considering it recordable
             return True
     
@@ -462,7 +458,7 @@ class InteractionRecorder:
             return "yes" in response.lower()
             
         except Exception as e:
-            self.logger.error("Error in LLM analysis: %s", str(e))
+            self.logger.error("llm_analysis_error", "Error in LLM analysis", {"error": str(e)})
             return False
     
     def get_recording_stats(self) -> Dict[str, Any]:
@@ -471,8 +467,7 @@ class InteractionRecorder:
             pending_count = len(self.pending_interactions)
             agents_with_pending = len(set(p.agent_type for p in self.pending_interactions))
             
-            self.logger.info("Recording stats - pending count: %d, agents: %d, instance id: %s", 
-                            pending_count, agents_with_pending, id(self))
+            self.logger.info("recording_stats", f"Recording stats - pending count: {pending_count}, agents: {agents_with_pending}")
             
             return {
                 "pending_interactions": pending_count,
@@ -480,7 +475,7 @@ class InteractionRecorder:
                 "agents_with_pending": agents_with_pending
             }
         except Exception as e:
-            self.logger.error("Error getting recording stats: %s", str(e))
+            self.logger.error("recording_stats_error", "Error getting recording stats", {"error": str(e)})
             return {"error": "Failed to get stats"}
 
 # Per-user recorder instances
@@ -497,11 +492,14 @@ def get_interaction_recorder(knowledge_base_service=None, llm_service=None, user
     resolved_kb_service = knowledge_base_service or get_knowledge_base_service(resolved_user_id)
 
     logger.info(
-        "Getting interaction recorder for user=%s current instance=%s kb_service=%s llm_service=%s",
-        resolved_user_id,
-        id(recorder) if recorder else None,
-        resolved_kb_service is not None,
-        llm_service is not None,
+        "get_interaction_recorder",
+        f"Getting interaction recorder for user={resolved_user_id}",
+        {
+            "user_id": resolved_user_id,
+            "current_instance": id(recorder) if recorder else None,
+            "has_kb_service": resolved_kb_service is not None,
+            "has_llm_service": llm_service is not None,
+        }
     )
 
     if recorder is None:
@@ -512,18 +510,14 @@ def get_interaction_recorder(knowledge_base_service=None, llm_service=None, user
 
             recorder = InteractionRecorder(resolved_kb_service, llm_svc)
             _recorders_by_user[resolved_user_id] = recorder
-            logger.info("Created new interaction recorder instance for user=%s id=%s", resolved_user_id, id(recorder))
+            logger.info("recorder_created", f"Created new interaction recorder instance for user={resolved_user_id}", {"recorder_id": id(recorder)})
         except Exception as e:
-            logger.error("Failed to initialize interaction recorder for user=%s: %s", resolved_user_id, str(e))
+            logger.error("recorder_init_error", f"Failed to initialize interaction recorder for user={resolved_user_id}", {"error": str(e)})
             return None
     else:
         # Keep existing pending approvals, but refresh dependencies after KB force-reset.
         if recorder.knowledge_base is not resolved_kb_service:
-            logger.info(
-                "Rebinding interaction recorder knowledge base for user=%s recorder=%s",
-                resolved_user_id,
-                id(recorder),
-            )
+            logger.info("recorder_rebind", f"Rebinding interaction recorder knowledge base for user={resolved_user_id}", {"recorder_id": id(recorder)})
             recorder.knowledge_base = resolved_kb_service
 
         if llm_service is not None and recorder.llm_service is not llm_service:

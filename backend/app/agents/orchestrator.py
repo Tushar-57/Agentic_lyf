@@ -127,7 +127,7 @@ class OrchestratorAgent(BaseAgent):
     
     async def execute(self, state: AgentState):
         """Execute the orchestrator's main logic. Returns dict to merge into state for LangGraph workflow."""
-        logger.debug("Orchestrator.execute START state=%s", state)
+        logger.debug("orchestrator_execute_start", f"Orchestrator.execute START state={state}")
         try:
             # Handle various input types from LangGraph
             if isinstance(state, str):

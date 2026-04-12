@@ -548,7 +548,7 @@ class EnhancedNotificationEngine:
             return self._parse_llm_response(candidate, context, content)
             
         except Exception as e:
-            logger.warning(f"LLM notification generation failed for {candidate.key}: {e}")
+            logger.warning("llm_notification_gen_failed", f"LLM notification generation failed for {candidate.key}", metadata={"error": str(e)})
             return self._generate_fallback_notification(candidate, context)
     
     def _build_llm_prompt(
@@ -702,7 +702,7 @@ Output must be valid JSON. Use emojis appropriately. HTML should be semantic and
             )
             
         except Exception as e:
-            logger.warning(f"Failed to parse LLM response for {candidate.key}: {e}")
+            logger.warning("llm_parse_failed", f"Failed to parse LLM response for {candidate.key}", metadata={"error": str(e)})
             # Preserve candidate metadata in fallback to maintain priority/severity context
             fallback = self._generate_fallback_notification(candidate, context)
             fallback.priority_score = candidate.priority_score
@@ -1278,7 +1278,7 @@ Output must be valid JSON. Use emojis appropriately. HTML should be semantic and
                         dt = datetime.fromisoformat(context[key].replace('Z', '+00:00'))
                         return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
                 except (ValueError, TypeError) as e:
-                    logger.debug(f"Failed to parse datetime from context key {key}: {e}")
+                    logger.debug("datetime_parse_failed", f"Failed to parse datetime from context key {key}", metadata={"error": str(e)})
                     continue
         
         return entry.created_at if entry.created_at else fallback

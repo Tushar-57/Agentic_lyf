@@ -927,7 +927,7 @@ def get_graph_for_dev():
             return _dev_graph_cache
             
     except Exception as e:
-        logger.warning(f"Error creating graph for dev: {e}")
+        logger.warning("graph_create_dev_error", f"Error creating graph for dev: {e}", metadata={"error": str(e)})
         # Fallback: create a simple placeholder graph
         simple_graph = StateGraph(dict)
         simple_graph.add_node("error_placeholder", lambda x: {"response": f"Graph creation error: {str(e)}"})

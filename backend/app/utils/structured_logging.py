@@ -421,7 +421,7 @@ def timed(operation: str, component: Optional[LogComponent] = None):
                 return result
             except Exception as e:
                 duration = (time.time() - start) * 1000
-                logger.error(operation, f"{operation} failed", {"error_type": type(e).__name__}, error=e, duration_ms=duration)
+                logger.error(operation, f"{operation} failed", {"error_type": type(e).__name__, "duration_ms": duration}, error=e)
                 raise
 
         @wraps(func)
@@ -434,7 +434,7 @@ def timed(operation: str, component: Optional[LogComponent] = None):
                 return result
             except Exception as e:
                 duration = (time.time() - start) * 1000
-                logger.error(operation, f"{operation} failed", {"error_type": type(e).__name__}, error=e, duration_ms=duration)
+                logger.error(operation, f"{operation} failed", {"error_type": type(e).__name__, "duration_ms": duration}, error=e)
                 raise
 
         return async_wrapper if hasattr(func, "__code__") and func.__code__.co_flags & 0x80 else sync_wrapper

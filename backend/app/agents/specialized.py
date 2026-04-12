@@ -61,7 +61,7 @@ class HealthAgent(BaseAgent):
                 user_input = str(state) if state else ""
                 user_preferences = {}
                 
-            logger.info(f"HealthAgent executing request: {user_input} with preferences: {bool(user_preferences)}")
+            logger.info("health_agent_execute", f"HealthAgent executing request: {user_input[:50]}...", {"has_preferences": bool(user_preferences)})
             
             # Get relevant context from knowledge base
             context = await self.knowledge_base.get_contextual_knowledge_for_agent(
@@ -70,18 +70,17 @@ class HealthAgent(BaseAgent):
                 max_results=40
             )
             
-            logger.info(f"Retrieved context with keys: {list(context.keys())}")
-            logger.info(f"Context details: {context}")
+            logger.info("context_retrieved", f"Retrieved context with keys: {list(context.keys())}", {"context_keys": list(context.keys())})
             
             # Check if this is a meal planning request
             if self._is_meal_planning_request(user_input):
-                logger.info("Processing as meal planning request")
+                logger.info("meal_planning_request", "Processing as meal planning request")
                 response = await self._handle_meal_planning(user_input, context, user_preferences)
             elif self._is_habit_tracking_request(user_input):
-                logger.info("Processing as habit tracking request")
+                logger.info("habit_tracking_request", "Processing as habit tracking request")
                 response = await self._handle_habit_tracking(user_input, context, user_preferences)
             else:
-                logger.info("Processing as general health query")
+                logger.info("general_health_query", "Processing as general health query")
                 response = await self._handle_general_health_query(user_input, context, user_preferences)
             
             # Intelligently record interaction if valuable
@@ -109,7 +108,7 @@ class HealthAgent(BaseAgent):
             }
             
         except Exception as e:
-            logger.error(f"Health agent execution failed: {e}")
+            logger.error("health_agent_execute_failed", "Health agent execution failed", metadata={"error": str(e)})
             return {
                 "response": "I apologize, but I encountered an issue while processing your health request. Please try again.",
                 "reasoning": {"error": str(e), "agent_type": "health"}
@@ -128,11 +127,11 @@ class HealthAgent(BaseAgent):
     async def _handle_meal_planning(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
         """Handle meal planning requests with personalized context."""
         try:
-            logger.info(f"Handling meal planning with context: {context}")
+            logger.info("meal_planning_context", "Handling meal planning request", {"context_keys": list(context.keys())})
             
             # Build context-aware prompt
             context_info = self._build_meal_planning_context(context)
-            logger.info(f"Built context info: {context_info}")
+            logger.info("meal_planning_context_built", "Built meal planning context info")
             
             meal_planning_prompt = f"""
             You are a health and nutrition expert helping with meal planning. Use the following context about the user:
@@ -158,11 +157,11 @@ class HealthAgent(BaseAgent):
             )
             
             response = await llm_service.chat_completion(request)
-            logger.info(f"Generated meal planning response: {response.content[:200]}...")
+            logger.info("meal_planning_response", f"Generated meal planning response", {"response": response.content[:100]})
             return response.content
             
         except Exception as e:
-            logger.error(f"Meal planning failed: {e}")
+            logger.error("meal_planning_failed", "Meal planning failed", {"error": str(e)})
             return "I'd be happy to help with meal planning! Could you tell me about your dietary preferences, any restrictions, and your health goals?"
 
     def _build_meal_planning_context(self, context: Dict[str, Any]) -> str:
@@ -228,7 +227,7 @@ class HealthAgent(BaseAgent):
             return response.content
             
         except Exception as e:
-            logger.error(f"General health query failed: {e}")
+            logger.error("general_health_query_failed", "General health query failed", metadata={"error": str(e)})
             return "I'm here to help with your health and wellness goals. How can I assist you today?"
 
 
@@ -282,17 +281,17 @@ class ProductivityAgent(BaseAgent):
                 context = {}
                 user_preferences = {}
             
-            logger.info(f"ProductivityAgent processing: {user_input} with preferences: {bool(user_preferences)}")
+            logger.info("productivity_agent_execute", f"ProductivityAgent processing: {user_input[:50]}...", {"has_preferences": bool(user_preferences)})
             
             # Extract coach_profile from orchestrator context for AI Persona alignment
             coach_profile = context.get("coach_profile") if isinstance(context, dict) else None
             if coach_profile:
-                logger.info(f"[PERSONA_DEBUG] Using coach profile: {coach_profile.get('name', 'Unknown')} - {coach_profile.get('style', 'Unknown')}")
+                logger.info("persona_debug", f"Using coach profile: {coach_profile.get('name', 'Unknown')}", {"style": coach_profile.get('style', 'Unknown')})
             
             # Check if orchestrator already provided time entries in context
             orchestrator_time_entries = context.get("general_recent_time_entries", []) if isinstance(context, dict) else []
             if orchestrator_time_entries:
-                logger.info(f"[PRODUCTIVITY_DEBUG] Using {len(orchestrator_time_entries)} time entries from orchestrator context")
+                logger.info("productivity_debug", f"Using {len(orchestrator_time_entries)} time entries from orchestrator context", {"time_entries_count": len(orchestrator_time_entries)})
             
             # Get contextual knowledge from knowledge base (orchestrator may have already fetched)
             contextual_knowledge = await self.knowledge_base.get_contextual_knowledge_for_agent(
@@ -303,7 +302,7 @@ class ProductivityAgent(BaseAgent):
             
             # Merge orchestrator's time entries if knowledge base didn't find any
             if orchestrator_time_entries and not contextual_knowledge.get("recent_time_entries"):
-                logger.info("[PRODUCTIVITY_DEBUG] Merging orchestrator time entries into contextual knowledge")
+                logger.info("productivity_debug", "Merging orchestrator time entries into contextual knowledge")
                 contextual_knowledge["recent_time_entries"] = orchestrator_time_entries
                 contextual_knowledge["time_entries_source"] = "orchestrator_context"
             
@@ -328,7 +327,7 @@ class ProductivityAgent(BaseAgent):
             return {"response": response, "status": "success"}
             
         except Exception as e:
-            logger.error(f"ProductivityAgent execution failed: {e}")
+            logger.error("productivity_agent_execute_failed", "ProductivityAgent execution failed", metadata={"error": str(e)})
             return {"response": "I'm having trouble with productivity assistance right now. Please try again later.", "status": "error"}
     
     async def _handle_task_management(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None, coach_profile: Dict[str, Any] = None) -> str:
@@ -384,7 +383,7 @@ Use emojis and format nicely with actionable task management advice.
             return response.content
             
         except Exception as e:
-            logger.error(f"Task management failed: {e}")
+            logger.error("task_management_failed", "Task management failed", metadata={"error": str(e)})
             return "📋 I'd be happy to help you manage your tasks! What specific tasks would you like to organize?"
     
     async def _handle_goal_setting(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None, coach_profile: Dict[str, Any] = None) -> str:
@@ -395,7 +394,7 @@ Use emojis and format nicely with actionable task management advice.
             from .leetcode_tools import LeetcodeTools as _LeetcodeTools
             LeetcodeTools = _LeetcodeTools
         except ImportError as e:
-            logger.warning(f"LeetcodeTools import failed: {e}")
+            logger.warning("leetcode_import_failed", "LeetcodeTools import failed", metadata={"error": str(e)})
 
         try:
             goal_context = self._build_productivity_context(context, "goals")
@@ -407,9 +406,7 @@ Use emojis and format nicely with actionable task management advice.
             # Check if this is a leetcode-specific request (problems, today's problems, etc.)
             is_leetcode_request = any(keyword in user_input.lower() for keyword in ["problem", "leetcode", "coding", "algorithm"])
             
-            logger.info(f"[LEETCODE DEBUG] is_leetcode_request: {is_leetcode_request}")
-            logger.info(f"[LEETCODE DEBUG] user_preferences type: {type(user_preferences)}")
-            logger.info(f"[LEETCODE DEBUG] user_preferences: {user_preferences}")
+            logger.info("leetcode_debug", "Leetcode debug info", {"is_leetcode_request": is_leetcode_request, "pref_type": str(type(user_preferences))})
             
             # If user has goals and is asking for problems/specific help
             has_goals = False
@@ -419,13 +416,13 @@ Use emojis and format nicely with actionable task management advice.
                 existing_goals = productivity_prefs.get("goals", [])
                 has_goals = len(existing_goals) > 0
                 
-                logger.info(f"[LEETCODE DEBUG] has_goals: {has_goals}, goals: {existing_goals}")
+                logger.info("leetcode_debug", f"Leetcode has_goals: {has_goals}", {"goals_count": len(existing_goals)})
                 
                 # If asking for problems, get specific leetcode problems (guard check for import success)
                 if is_leetcode_request and has_goals and LeetcodeTools is not None:
-                    logger.info(f"[LEETCODE DEBUG] Calling LeetcodeTools.get_todays_problems")
+                    logger.info("leetcode_debug", "Calling LeetcodeTools.get_todays_problems")
                     leetcode_data = LeetcodeTools.get_todays_problems(existing_goals, count=2)
-                    logger.info(f"[LEETCODE DEBUG] leetcode_data: {leetcode_data}")
+                    logger.info("leetcode_debug", "Leetcode data received", {"has_data": bool(leetcode_data), "has_error": bool(leetcode_data.get("error")) if leetcode_data else False})
                     
                     # If we successfully got problems, format and return them DIRECTLY
                     if leetcode_data and not leetcode_data.get("error"):
@@ -510,7 +507,7 @@ Use emojis and format nicely with structured goal-setting guidance.
             return response.content
             
         except Exception as e:
-            logger.error(f"Goal setting failed: {e}")
+            logger.error("goal_setting_failed", "Goal setting failed", metadata={"error": str(e)})
             return "🎯 I'd love to help you set and achieve your goals! What specific goals would you like to work on?"
     
     async def _handle_time_management(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
@@ -558,7 +555,7 @@ Use emojis and format nicely with practical time management advice.
             return response.content
             
         except Exception as e:
-            logger.error(f"Time management failed: {e}")
+            logger.error("time_management_failed", "Time management failed", metadata={"error": str(e)})
             return "⏰ I'd be happy to help optimize your time! What specific time management areas would you like to improve?"
     
     async def _handle_general_productivity(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None, coach_profile: Dict[str, Any] = None) -> str:
@@ -601,7 +598,7 @@ Use emojis and format nicely with clear, actionable information.
             return response.content
             
         except Exception as e:
-            logger.error(f"General productivity failed: {e}")
+            logger.error("general_productivity_failed", "General productivity failed", metadata={"error": str(e)})
             return "🚀 I'm here to boost your productivity! What specific area would you like help with?"
     
     def _format_friendly_duration(self, minutes: float) -> str:
@@ -706,7 +703,7 @@ class FinanceAgent(BaseAgent):
                 user_input = str(state) if state else ""
                 user_preferences = {}
             
-            logger.info(f"FinanceAgent processing: {user_input} with preferences: {bool(user_preferences)}")
+            logger.info("finance_agent_execute", f"FinanceAgent processing: {user_input[:50]}...", {"has_preferences": bool(user_preferences)})
             
             # Get contextual knowledge from knowledge base
             contextual_knowledge = await self.knowledge_base.get_contextual_knowledge_for_agent(
@@ -736,7 +733,7 @@ class FinanceAgent(BaseAgent):
             return {"response": response, "status": "success"}
             
         except Exception as e:
-            logger.error(f"FinanceAgent execution failed: {e}")
+            logger.error("finance_agent_execute_failed", "FinanceAgent execution failed", metadata={"error": str(e)})
             return {"response": "I'm having trouble with financial analysis right now. Please try again later.", "status": "error"}
     
     async def _handle_budget_planning(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
@@ -758,7 +755,7 @@ class FinanceAgent(BaseAgent):
                 any(char.isdigit() for char in budget_context)  # Must contain numbers
             )
             
-            logger.info(f"[FinanceAgent] Budget check - has_budget_data: {has_budget_data}, context: {budget_context[:200]}")
+            logger.info("finance_budget_check", f"Budget check - has_budget_data: {has_budget_data}", {"context_preview": budget_context[:100]})
             
             # If NO budget data exists, return a direct response WITHOUT calling LLM
             # This prevents hallucination entirely
@@ -826,7 +823,7 @@ DO NOT invent or hallucinate any budget numbers - only use the data provided abo
             return response.content
             
         except Exception as e:
-            logger.error(f"Budget planning failed: {e}")
+            logger.error("budget_planning_failed", "Budget planning failed", metadata={"error": str(e)})
             return "💰 I'd be happy to help you create a personalized budget! Could you share your monthly income and main expense categories so I can provide specific recommendations?"
     
     async def _handle_expense_tracking(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
@@ -847,7 +844,7 @@ DO NOT invent or hallucinate any budget numbers - only use the data provided abo
                 any(char.isdigit() for char in expense_context)
             )
             
-            logger.info(f"[FinanceAgent] Expense check - has_expense_data: {has_expense_data}, context: {expense_context[:200]}")
+            logger.info("finance_expense_check", f"Expense check - has_expense_data: {has_expense_data}", {"context_preview": expense_context[:100]})
             
             # If NO expense data, provide general guidance without hallucinating
             if not has_expense_data:
@@ -921,7 +918,7 @@ Provide:
             return response.content
             
         except Exception as e:
-            logger.error(f"Expense tracking failed: {e}")
+            logger.error("expense_tracking_failed", "Expense tracking failed", metadata={"error": str(e)})
             return "📊 I'd be happy to help you track your expenses effectively! What specific expense categories would you like to focus on?"
     
     async def _handle_financial_goals(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
@@ -942,7 +939,7 @@ Provide:
                 any(char.isdigit() for char in goals_context)
             )
             
-            logger.info(f"[FinanceAgent] Goals check - has_goals_data: {has_goals_data}, context: {goals_context[:200]}")
+            logger.info("finance_goals_check", f"Goals check - has_goals_data: {has_goals_data}", {"context_preview": goals_context[:100]})
             
             # If NO goals data, provide guidance without hallucinating
             if not has_goals_data:
@@ -1020,7 +1017,7 @@ Provide:
             return response.content
             
         except Exception as e:
-            logger.error(f"Financial goals failed: {e}")
+            logger.error("financial_goals_failed", "Financial goals failed", metadata={"error": str(e)})
             return "🎯 I'd be happy to help you set and achieve your financial goals! What specific financial objectives do you have in mind?"
     
     async def _handle_general_finance(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
@@ -1062,7 +1059,7 @@ Provide relevant financial advice, tips, and recommendations based on their ques
             return response.content
             
         except Exception as e:
-            logger.error(f"General finance failed: {e}")
+            logger.error("general_finance_failed", "General finance failed", metadata={"error": str(e)})
             return "💰 I'm here to help with your financial questions! What specific financial topic would you like assistance with?"
     
     def _build_finance_context(self, context: Dict[str, Any], finance_type: str) -> str:
@@ -1131,7 +1128,7 @@ class SchedulingAgent(BaseAgent):
                 user_input = str(state) if state else ""
                 user_preferences = {}
             
-            logger.info(f"SchedulingAgent processing: {user_input} with preferences: {bool(user_preferences)}")
+            logger.info("scheduling_agent_execute", f"SchedulingAgent processing: {user_input[:50]}...", {"has_preferences": bool(user_preferences)})
             
             # Get contextual knowledge from knowledge base
             contextual_knowledge = await self.knowledge_base.get_contextual_knowledge_for_agent(
@@ -1161,7 +1158,7 @@ class SchedulingAgent(BaseAgent):
             return {"response": response, "status": "success"}
             
         except Exception as e:
-            logger.error(f"SchedulingAgent execution failed: {e}")
+            logger.error("scheduling_agent_execute_failed", "SchedulingAgent execution failed", metadata={"error": str(e)})
             return {"response": "I'm having trouble with scheduling right now. Please try again later.", "status": "error"}
     
     async def _handle_scheduling(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
@@ -1208,7 +1205,7 @@ Provide:
             return response.content
             
         except Exception as e:
-            logger.error(f"Scheduling failed: {e}")
+            logger.error("scheduling_failed", "Scheduling failed", metadata={"error": str(e)})
             return "📅 I'd be happy to help you with scheduling! What specific appointment or event would you like to schedule?"
     
     async def _handle_time_optimization(self, user_input: str, context: Dict[str, Any]) -> str:
@@ -1247,7 +1244,7 @@ Provide:
             return response.content
             
         except Exception as e:
-            logger.error(f"Time optimization failed: {e}")
+            logger.error("time_optimization_failed", "Time optimization failed", metadata={"error": str(e)})
             return "⏰ I'd be happy to help you optimize your time! What specific areas of your schedule would you like to improve?"
     
     async def _handle_appointment_booking(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
@@ -1290,7 +1287,7 @@ Provide specific guidance on scheduling, availability checking, and confirmation
             return response.content
             
         except Exception as e:
-            logger.error(f"Appointment booking failed: {e}")
+            logger.error("appointment_booking_failed", "Appointment booking failed", metadata={"error": str(e)})
             return "📞 I'd be happy to help you book appointments! What type of appointment do you need to schedule?"
     
     async def _handle_general_scheduling(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
@@ -1332,7 +1329,7 @@ Provide relevant scheduling advice, tips, and recommendations based on their que
             return response.content
             
         except Exception as e:
-            logger.error(f"General scheduling failed: {e}")
+            logger.error("general_scheduling_failed", "General scheduling failed", metadata={"error": str(e)})
             return "📅 I'm here to help with your scheduling needs! What would you like assistance with?"
     
     def _build_schedule_context(self, context: Dict[str, Any], schedule_type: str) -> str:
@@ -1401,7 +1398,7 @@ class JournalAgent(BaseAgent):
                 user_input = str(state) if state else ""
                 user_preferences = {}
             
-            logger.info(f"JournalAgent processing: {user_input} with preferences: {bool(user_preferences)}")
+            logger.info("journal_agent_execute", f"JournalAgent processing: {user_input[:50]}...", {"has_preferences": bool(user_preferences)})
             
             # Get contextual knowledge from knowledge base
             contextual_knowledge = await self.knowledge_base.get_contextual_knowledge_for_agent(
@@ -1433,7 +1430,7 @@ class JournalAgent(BaseAgent):
             return {"response": response, "status": "success"}
             
         except Exception as e:
-            logger.error(f"JournalAgent execution failed: {e}")
+            logger.error("journal_agent_execute_failed", "JournalAgent execution failed", metadata={"error": str(e)})
             return {"response": "I'm having trouble with journaling assistance right now. Please try again later.", "status": "error"}
     
     async def _handle_daily_journaling(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
@@ -1480,7 +1477,7 @@ Provide:
             return response.content
             
         except Exception as e:
-            logger.error(f"Daily journaling failed: {e}")
+            logger.error("daily_journaling_failed", "Daily journaling failed", metadata={"error": str(e)})
             return " I'd be happy to guide your journaling practice! What would you like to reflect on today?"
     
     async def _handle_goal_tracking(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
@@ -1527,7 +1524,7 @@ Provide:
             return response.content
             
         except Exception as e:
-            logger.error(f"Goal tracking failed: {e}")
+            logger.error("goal_tracking_failed", "Goal tracking failed", metadata={"error": str(e)})
             return "🎯 I'd love to help you track your goals! What goals are you working on?"
     
     async def _handle_habit_tracking(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
@@ -1574,7 +1571,7 @@ Provide:
             return response.content
             
         except Exception as e:
-            logger.error(f"Habit tracking failed: {e}")
+            logger.error("habit_tracking_failed", "Habit tracking failed", metadata={"error": str(e)})
             return "🔄 I'd be happy to help with your habit tracking! What habits are you building?"
     
     async def _handle_emotional_wellness(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
@@ -1623,7 +1620,7 @@ Note: If serious mental health concerns are expressed, gently suggest profession
             return response.content
             
         except Exception as e:
-            logger.error(f"Emotional wellness failed: {e}")
+            logger.error("emotional_wellness_failed", "Emotional wellness failed", metadata={"error": str(e)})
             return "💙 I'm here to support your emotional wellness! How are you feeling today?"
     
     async def _handle_general_journaling(self, user_input: str, context: Dict[str, Any], user_preferences: Dict[str, Any] = None) -> str:
@@ -1665,7 +1662,7 @@ Provide relevant journaling guidance, prompts, and support based on their questi
             return response.content
             
         except Exception as e:
-            logger.error(f"General journaling failed: {e}")
+            logger.error("general_journaling_failed", "General journaling failed", metadata={"error": str(e)})
             return "📖 I'm here to support your journaling journey! What would you like to explore?"
     
     def _build_journal_context(self, context: Dict[str, Any], journal_type: str) -> str:
@@ -1758,7 +1755,7 @@ Provide relevant journaling guidance, prompts, and support based on their questi
             }
             
         except Exception as e:
-            logger.error(f"Productivity agent execution failed: {e}")
+            logger.error("productivity_agent_execute_failed", "Productivity agent execution failed", metadata={"error": str(e)})
             return {
                 "response": "I apologize, but I encountered an issue while processing your productivity request. Please try again.",
                 "reasoning": {"error": str(e), "agent_type": "productivity"}
@@ -1807,7 +1804,7 @@ Provide relevant journaling guidance, prompts, and support based on their questi
             return response.content
             
         except Exception as e:
-            logger.error(f"Task management failed: {e}")
+            logger.error("task_management_failed", "Task management failed", metadata={"error": str(e)})
             return "I'd be happy to help you organize your tasks! Could you tell me more about what you're working on and any specific challenges you're facing?"
 
     def _build_productivity_context(self, context: Dict[str, Any]) -> str:
@@ -1876,5 +1873,5 @@ Provide relevant journaling guidance, prompts, and support based on their questi
             return response.content
             
         except Exception as e:
-            logger.error(f"General productivity query failed: {e}")
+            logger.error("general_productivity_query_failed", "General productivity query failed", metadata={"error": str(e)})
             return "I'm here to help boost your productivity! What specific area would you like to improve?"

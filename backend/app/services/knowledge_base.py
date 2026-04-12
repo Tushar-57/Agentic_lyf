@@ -564,30 +564,22 @@ class KnowledgeBaseService:
 
         prepared_text = self._prepare_embedding_log_text(embedding_text)
         embedding_logger.info(
-            "EMBEDDING_INPUT action=%s user=%s entry_id=%s category=%s key=%s chars=%d chunks=%d text=%s",
-            action,
-            self.user_id,
-            entry_id or "pending",
-            category or "unknown",
-            embedding_key,
-            len(embedding_text),
-            len(chunks),
-            prepared_text,
+            "embedding_input",
+            f"EMBEDDING_INPUT action={action} user={self.user_id}",
+            {"action": action, "user_id": self.user_id, "entry_id": entry_id or "pending", 
+             "category": category or "unknown", "embedding_key": embedding_key,
+             "chars": len(embedding_text), "chunks": len(chunks), "text": prepared_text}
         )
 
         for index, chunk in enumerate(chunks, start=1):
             prepared_chunk = self._prepare_embedding_log_text(chunk)
             chunk_key = self._build_chunk_embedding_cache_key(chunk)
             embedding_logger.info(
-                "EMBEDDING_CHUNK action=%s user=%s entry_id=%s chunk=%d/%d key=%s chars=%d text=%s",
-                action,
-                self.user_id,
-                entry_id or "pending",
-                index,
-                len(chunks),
-                chunk_key,
-                len(chunk),
-                prepared_chunk,
+                "embedding_chunk",
+                f"EMBEDDING_CHUNK action={action} chunk={index}/{len(chunks)}",
+                {"action": action, "user_id": self.user_id, "entry_id": entry_id or "pending",
+                 "chunk": index, "total_chunks": len(chunks), "chunk_key": chunk_key,
+                 "chars": len(chunk), "text": prepared_chunk}
             )
 
     def _log_query_embedding_input(self, query_text: str, query_key: str) -> None:
@@ -596,11 +588,9 @@ class KnowledgeBaseService:
 
         prepared_text = self._prepare_embedding_log_text(query_text)
         embedding_logger.info(
-            "EMBEDDING_QUERY_INPUT user=%s key=%s chars=%d text=%s",
-            self.user_id,
-            query_key,
-            len(query_text),
-            prepared_text,
+            "embedding_query_input",
+            f"EMBEDDING_QUERY_INPUT user={self.user_id} key={query_key}",
+            {"user_id": self.user_id, "query_key": query_key, "chars": len(query_text), "text": prepared_text}
         )
 
     async def _generate_embedding(self, text: str) -> List[float]:
@@ -1335,7 +1325,7 @@ class KnowledgeBaseService:
                     self._cache_entry_embedding(entry)
                 self._embedding_cache_loaded = True
             except Exception as e:
-                logger.error(f"Failed to load embedding cache: {e}")
+                logger.error("load_embedding_cache", "Failed to load embedding cache", error=e)
                 # Don't set flag on error - allow retry on next call
                 raise
 
@@ -1505,10 +1495,10 @@ class KnowledgeBaseService:
             self._persist_entry_to_db(entry)
             self._invalidate_get_all_cache()
 
-            logger.info(f"Created knowledge entry: {entry_id}")
+            logger.info("create_entry", f"Created knowledge entry: {entry_id}")
             return entry
         except Exception as e:
-            logger.error(f"Failed to create knowledge entry: {e}")
+            logger.error("create_entry", "Failed to create knowledge entry", error=e)
             raise
     
     async def get_entry(self, entry_id: str) -> Optional[KnowledgeEntry]:
@@ -1529,7 +1519,7 @@ class KnowledgeBaseService:
 
             return self.vector_store.get_entry(entry_id)
         except Exception as e:
-            logger.error(f"Failed to get knowledge entry {entry_id}: {e}")
+            logger.error("get_entry", f"Failed to get knowledge entry {entry_id}", error=e)
             return None
     
     async def update_entry(self, 
@@ -1617,10 +1607,10 @@ class KnowledgeBaseService:
             self._persist_entry_to_db(updated_entry)
             self._invalidate_get_all_cache()
 
-            logger.info(f"Updated knowledge entry: {entry_id}")
+            logger.info("update_entry", f"Updated knowledge entry: {entry_id}")
             return updated_entry
         except Exception as e:
-            logger.error(f"Failed to update knowledge entry {entry_id}: {e}")
+            logger.error("update_entry", f"Failed to update knowledge entry {entry_id}", error=e)
             return None
     
     async def delete_entry(self, entry_id: str) -> bool:
@@ -1646,7 +1636,7 @@ class KnowledgeBaseService:
             self._invalidate_get_all_cache()
             return success
         except Exception as e:
-            logger.error(f"Failed to delete knowledge entry {entry_id}: {e}")
+            logger.error("delete_entry", f"Failed to delete knowledge entry {entry_id}", error=e)
             return False
 
     def _invalidate_get_all_cache(self) -> None:
@@ -1673,7 +1663,7 @@ class KnowledgeBaseService:
                 logger.info("Deleted %d knowledge entries in bulk", removed)
             return removed
         except Exception as e:
-            logger.error(f"Failed to bulk delete knowledge entries: {e}")
+            logger.error("delete_entries", "Failed to bulk delete knowledge entries", error=e)
             return 0
     
     async def search(self, query: KnowledgeQuery) -> List[KnowledgeSearchResult]:
@@ -1777,7 +1767,7 @@ class KnowledgeBaseService:
 
             return filtered_entries
         except Exception as e:
-            logger.error(f"Failed to get all entries: {e}")
+            logger.error("get_all_entries", "Failed to get all entries", error=e)
             return []
     
     async def get_user_preferences(self) -> UserPreferences:
@@ -1927,7 +1917,7 @@ class KnowledgeBaseService:
             self._persist_preferences_to_db_store(self._user_preferences)
             return self._user_preferences
         except Exception as e:
-            logger.error(f"Failed to get user preferences: {e}")
+            logger.error("get_user_preferences", "Failed to get user preferences", error=e)
             return UserPreferences(user_id=self.user_id)
 
     def _is_time_entry_entry(self, entry: KnowledgeEntry) -> bool:
@@ -2470,7 +2460,7 @@ class KnowledgeBaseService:
             self._user_preferences = preferences
             return await self._save_user_preferences()
         except Exception as e:
-            logger.error(f"Failed to update user preferences: {e}")
+            logger.error("update_user_preferences", "Failed to update user preferences", error=e)
             return False
     
     async def add_user_preference(self, category: str, key: str, value: Any, description: Optional[str] = None) -> bool:
@@ -2514,7 +2504,7 @@ class KnowledgeBaseService:
             
             return success
         except Exception as e:
-            logger.error(f"Failed to add user preference {category}.{key}: {e}")
+            logger.error("add_user_preference", f"Failed to add user preference {category}.{key}", error=e)
             return False
     
     async def remove_user_preference(self, category: str, key: str) -> bool:
@@ -2557,7 +2547,7 @@ class KnowledgeBaseService:
             
             return success
         except Exception as e:
-            logger.error(f"Failed to remove user preference {category}.{key}: {e}")
+            logger.error("remove_user_preference", f"Failed to remove user preference {category}.{key}", error=e)
             return False
     
     async def get_preference_categories(self) -> List[str]:
@@ -2577,7 +2567,7 @@ class KnowledgeBaseService:
             prefs_dict = current_prefs.model_dump()
             return [key for key, value in prefs_dict.items() if key != "user_id" and isinstance(value, dict)]
         except Exception as e:
-            logger.error(f"Failed to get preference categories: {e}")
+            logger.error("get_preference_categories", "Failed to get preference categories", error=e)
             return []
 
     def _is_legacy_system_preference_entry(self, entry: KnowledgeEntry) -> bool:
@@ -2755,7 +2745,7 @@ class KnowledgeBaseService:
             )
             return True
         except Exception as e:
-            logger.error(f"Failed to save user preferences: {e}")
+            logger.error("_save_user_preferences", "Failed to save user preferences", error=e)
             return False
     
     async def add_interaction_history(self, 
@@ -2851,7 +2841,7 @@ class KnowledgeBaseService:
                 tags=tags
             )
         except Exception as e:
-            logger.error(f"Failed to add interaction history: {e}")
+            logger.error("add_interaction_history", "Failed to add interaction history", error=e)
             raise
 
     async def extract_and_store_preferences(self, 
@@ -2976,7 +2966,7 @@ class KnowledgeBaseService:
                 return []
                 
         except Exception as e:
-            logger.error(f"Failed to extract preferences: {e}")
+            logger.error("extract_and_store_preferences", "Failed to extract preferences", error=e)
             return []
 
     def _merge_ranked_results(
@@ -3998,7 +3988,9 @@ class KnowledgeBaseService:
         except Exception as e:
             import traceback
             logger.error(
-                f"[CONTEXT_RETRIEVAL_FAILED] agent={agent_type} query={self._truncate_for_log(user_input, 100)} error={type(e).__name__}: {e}\n{traceback.format_exc()}"
+                "_retrieve_relevant_context_for_rag",
+                f"[CONTEXT_RETRIEVAL_FAILED] agent={agent_type} query={self._truncate_for_log(user_input, 100)} error={type(e).__name__}: {e}",
+                error=e
             )
             return {
                 "agent_preferences": {},
@@ -4107,7 +4099,7 @@ class KnowledgeBaseService:
             
             return await self.search(search_query)
         except Exception as e:
-            logger.error(f"Failed to get relevant context: {e}")
+            logger.error("get_relevant_context_for_rag", "Failed to get relevant context", error=e)
             return []
     
     async def get_stats(self) -> KnowledgeStats:
@@ -4156,7 +4148,7 @@ class KnowledgeBaseService:
                 embedding_model=embedding_model
             )
         except Exception as e:
-            logger.error(f"Failed to get knowledge base stats: {e}")
+            logger.error("get_stats", "Failed to get knowledge base stats", error=e)
             return KnowledgeStats(
                 total_entries=0,
                 entries_by_type={},
@@ -4184,7 +4176,7 @@ class KnowledgeBaseService:
             logger.info("Cleared all knowledge base entries")
             return True
         except Exception as e:
-            logger.error(f"Failed to clear knowledge base: {e}")
+            logger.error("clear_all", "Failed to clear knowledge base", error=e)
             return False
     
     async def get_embeddings_visualization_data(self) -> List[Dict[str, Any]]:
@@ -4338,7 +4330,7 @@ class KnowledgeBaseService:
             return embeddings_data
             
         except Exception as e:
-            logger.error(f"Failed to get embeddings visualization data: {e}")
+            logger.error("get_embeddings_visualization_data", "Failed to get embeddings visualization data", error=e)
             return []
     
     async def get_embedding_details(self, entry_id: str) -> Optional[Dict[str, Any]]:
@@ -4420,7 +4412,7 @@ class KnowledgeBaseService:
             return details
             
         except Exception as e:
-            logger.error(f"Failed to get embedding details for {entry_id}: {e}")
+            logger.error("get_embedding_details", f"Failed to get embedding details for {entry_id}", error=e)
             return None
 
     async def get_embedding_quality_report(self) -> Dict[str, Any]:
@@ -4547,7 +4539,7 @@ class KnowledgeBaseService:
                 "checked_at": datetime.utcnow().isoformat(),
             }
         except Exception as e:
-            logger.error("Failed to compute embedding quality report: %s", e)
+            logger.error("get_embedding_quality_report", "Failed to compute embedding quality report", error=e)
             return {
                 "checked_entries": 0,
                 "signal_embeddings": 0,
@@ -4620,7 +4612,7 @@ class KnowledgeBaseService:
                 "post_repair_quality": post_repair_quality,
             }
         except Exception as e:
-            logger.error("Failed to rebuild zero-signal embeddings: %s", e)
+            logger.error("repair_zero_signal_embeddings", "Failed to rebuild zero-signal embeddings", error=e)
             return {
                 "requested_limit": limit,
                 "total_candidates": 0,
