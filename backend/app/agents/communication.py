@@ -3,6 +3,7 @@ Agent communication protocol for inter-agent messaging and coordination.
 """
 
 import asyncio
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Any, Callable, Awaitable
 from datetime import datetime, timedelta
 from enum import Enum
