@@ -54,7 +54,7 @@ class PreferenceDbStore:
             _PreferencesBase.metadata.create_all(self._engine)
             self._available = True
         except Exception as exc:
-            logger.error("Failed to initialize preference DB store: %s", exc)
+            logger.error("init_failed", f"Failed to initialize preference DB store: {exc}", {"error": str(exc)})
 
     @property
     def is_available(self) -> bool:
@@ -70,7 +70,7 @@ class PreferenceDbStore:
         normalized = str(user_id or "single_user").strip()
         # Validate user_id to prevent injection attacks
         if normalized and not VALID_USER_ID_PATTERN.match(normalized):
-            logger.warning(f"Invalid user_id format rejected: {repr(normalized[:100])}")
+            logger.warning("invalid_user_id_format", f"Invalid user_id format rejected: {repr(normalized[:100])}", {"user_id": normalized[:100]})
             raise ValueError(f"Invalid user_id format. Must match pattern: {VALID_USER_ID_PATTERN.pattern}")
         return normalized or "single_user"
 
@@ -161,7 +161,7 @@ class PreferenceDbStore:
                 session.commit()
                 return True
         except Exception as exc:
-            logger.error("Failed to upsert user preferences for %s: %s", normalized_user, exc)
+            logger.error("upsert_preferences_failed", f"Failed to upsert user preferences for {normalized_user}: {exc}", {"user": normalized_user, "error": str(exc)})
             return False
 
     def load_preferences(self, user_id: str) -> Dict[str, Dict[str, Any]]:
@@ -186,7 +186,7 @@ class PreferenceDbStore:
 
                 return grouped
         except Exception as exc:
-            logger.error("Failed to load user preferences for %s: %s", normalized_user, exc)
+            logger.error("load_preferences_failed", f"Failed to load user preferences for {normalized_user}: {exc}", {"user": normalized_user, "error": str(exc)})
             return {}
 
     def list_categories(self, user_id: str) -> List[str]:
@@ -202,7 +202,7 @@ class PreferenceDbStore:
                 categories = sorted({self._normalize_category(row[0]) for row in rows if row and row[0]})
                 return categories
         except Exception as exc:
-            logger.error("Failed to list preference categories for %s: %s", normalized_user, exc)
+            logger.error("list_categories_failed", f"Failed to list preference categories for {normalized_user}: {exc}", {"user": normalized_user, "error": str(exc)})
             return []
 
     def count_preferences(self, user_id: str) -> int:
@@ -217,7 +217,7 @@ class PreferenceDbStore:
                 ).all()
                 return len(rows)
         except Exception as exc:
-            logger.error("Failed to count preferences for %s: %s", normalized_user, exc)
+            logger.error("count_preferences_failed", f"Failed to count preferences for {normalized_user}: {exc}", {"user": normalized_user, "error": str(exc)})
             return 0
 
 

@@ -673,13 +673,16 @@ class ProductivityAgent(BaseAgent):
         }
 
         logger.info(
-            "[RAG_TRACE][productivity][%s] input=%s context_counts=%s summary=%s prompt=%s response=%s",
-            stage,
-            self._truncate_text(user_input, 140),
-            context_counts,
-            self._truncate_text(str(context.get("context_summary", "")), 180),
-            self._truncate_text(prompt or "", 260),
-            self._truncate_text(response or "", 260),
+            "rag_trace",
+            f"[RAG_TRACE][productivity][{stage}] input={self._truncate_text(user_input, 140)} context_counts={context_counts}",
+            {
+                "stage": stage,
+                "input": self._truncate_text(user_input, 140),
+                "context_counts": context_counts,
+                "summary": self._truncate_text(str(context.get("context_summary", "")), 180),
+                "prompt": self._truncate_text(prompt or "", 260),
+                "response": self._truncate_text(response or "", 260),
+            },
         )
 
     def _truncate_text(self, value: str, limit: int = 200) -> str:

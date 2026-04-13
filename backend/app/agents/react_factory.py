@@ -191,7 +191,7 @@ Your goal is to provide excellent specialized assistance while maintaining clean
             }
             
         except Exception as e:
-            logger.error(f"Error executing ReAct agent {self.agent_id}: {str(e)}")
+            logger.error("react_agent_execution_failed", f"Error executing ReAct agent {self.agent_id}: {str(e)}", {"agent_id": self.agent_id, "error": str(e)})
             
             # Update error count
             state["agent_contexts"][self.agent_id]["error_count"] += 1

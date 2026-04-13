@@ -73,7 +73,7 @@ class DailyCheckupStore:
             _CheckupBase.metadata.create_all(self._engine)
             self._available = True
         except Exception as exc:
-            logger.error("Failed to initialize daily checkup DB store: %s", exc)
+            logger.error("init_failed", f"Failed to initialize daily checkup DB store: {exc}", {"error": str(exc)})
 
     @property
     def is_available(self) -> bool:
@@ -168,11 +168,9 @@ class DailyCheckupStore:
                 return True
         except Exception as exc:
             logger.error(
-                "Failed to upsert daily checkup user=%s type=%s date=%s: %s",
-                normalized_user,
-                normalized_type,
-                normalized_date,
-                exc,
+                "upsert_checkup_failed",
+                f"Failed to upsert daily checkup user={normalized_user} type={normalized_type} date={normalized_date}: {exc}",
+                {"user": normalized_user, "type": normalized_type, "date": normalized_date, "error": str(exc)},
             )
             return False
 
@@ -209,7 +207,7 @@ class DailyCheckupStore:
                         )
                     )
         except Exception as exc:
-            logger.error("Failed to list daily checkups for user=%s: %s", normalized_user, exc)
+            logger.error("list_checkups_failed", f"Failed to list daily checkups for user={normalized_user}: {exc}", {"user": normalized_user, "error": str(exc)})
 
         return records
 

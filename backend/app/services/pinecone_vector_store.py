@@ -215,12 +215,9 @@ class PineconeVectorStore:
         region = (os.getenv("PINECONE_REGION") or "us-east-1").strip()
 
         logger.info(
-            "Creating Pinecone index '%s' (metric=%s, dimension=%d, cloud=%s, region=%s)",
-            self.index_name,
-            self.metric,
-            self.dimension,
-            cloud,
-            region,
+            "creating_pinecone_index",
+            f"Creating Pinecone index '{self.index_name}' (metric={self.metric}, dimension={self.dimension}, cloud={cloud}, region={region})",
+            {"index_name": self.index_name, "metric": self.metric, "dimension": self.dimension, "cloud": cloud, "region": region},
         )
 
         self._client.create_index(

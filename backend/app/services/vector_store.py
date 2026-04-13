@@ -646,9 +646,9 @@ def _build_local_vector_store(index_path: str) -> Any:
         return VectorStore(index_path=index_path)
     except Exception as local_error:
         logger.warning(
-            "FAISS vector store unavailable at %s, using in-memory fallback: %s",
-            index_path,
-            local_error,
+            "faiss_unavailable_fallback",
+            f"FAISS vector store unavailable at {index_path}, using in-memory fallback: {local_error}",
+            {"index_path": index_path, "error": str(local_error)},
         )
         return InMemoryVectorStore(index_path=index_path)
 
@@ -680,23 +680,23 @@ def _build_vector_store_for_user(resolved_user_id: str) -> Any:
 
                     if seeded > 0:
                         logger.info(
-                            "Backfilled %d vectors from FAISS into Pinecone for user %s",
-                            seeded,
-                            resolved_user_id,
+                            "backfilled_faiss_to_pinecone",
+                            f"Backfilled {seeded} vectors from FAISS into Pinecone for user {resolved_user_id}",
+                            {"seeded": seeded, "user_id": resolved_user_id},
                         )
                 except Exception as backfill_error:
                     logger.warning(
-                        "Pinecone backfill from FAISS failed for user %s: %s",
-                        resolved_user_id,
-                        backfill_error,
+                        "pinecone_backfill_failed",
+                        f"Pinecone backfill from FAISS failed for user {resolved_user_id}: {backfill_error}",
+                        {"user_id": resolved_user_id, "error": str(backfill_error)},
                     )
 
             return pinecone_store
         except Exception as pinecone_error:
             logger.warning(
-                "Pinecone vector store unavailable for user %s, falling back to FAISS: %s",
-                resolved_user_id,
-                pinecone_error,
+                "pinecone_unavailable_fallback",
+                f"Pinecone vector store unavailable for user {resolved_user_id}, falling back to FAISS: {pinecone_error}",
+                {"user_id": resolved_user_id, "error": str(pinecone_error)},
             )
 
     return _build_local_vector_store(index_path)

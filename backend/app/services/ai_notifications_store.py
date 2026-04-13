@@ -87,7 +87,7 @@ class AINotificationStore:
             _NotificationBase.metadata.create_all(self._engine)
             self._available = True
         except Exception as exc:
-            logger.error("Failed to initialize AI notification DB store: %s", exc)
+            logger.error("init_failed", f"Failed to initialize AI notification DB store: {exc}", {"error": str(exc)})
 
     @property
     def is_available(self) -> bool:
@@ -107,7 +107,7 @@ class AINotificationStore:
         normalized = str(user_id or "single_user").strip()
         # Validate user_id to prevent injection attacks
         if normalized and not VALID_USER_ID_PATTERN.match(normalized):
-            logger.warning(f"Invalid user_id format rejected: {repr(normalized[:100])}")
+            logger.warning("invalid_user_id_format", f"Invalid user_id format rejected: {repr(normalized[:100])}", {"user_id": normalized[:100]})
             raise ValueError(f"Invalid user_id format. Must match pattern: {VALID_USER_ID_PATTERN.pattern}")
         return normalized or "single_user"
 
@@ -267,10 +267,9 @@ class AINotificationStore:
                 return self._row_to_record(row)
         except Exception as exc:
             logger.error(
-                "Failed to upsert AI notification user=%s key=%s: %s",
-                normalized_user,
-                normalized_key,
-                exc,
+                "upsert_notification_failed",
+                f"Failed to upsert AI notification user={normalized_user} key={normalized_key}: {exc}",
+                {"user": normalized_user, "key": normalized_key, "error": str(exc)},
             )
             return None
 
@@ -313,7 +312,7 @@ class AINotificationStore:
                 else:
                     session.rollback()
         except Exception as exc:
-            logger.error("Failed to resolve stale AI notifications for user=%s: %s", normalized_user, exc)
+            logger.error("resolve_stale_failed", f"Failed to resolve stale AI notifications for user={normalized_user}: {exc}", {"user": normalized_user, "error": str(exc)})
             return 0
 
         return resolved_count
@@ -352,7 +351,7 @@ class AINotificationStore:
                 )
                 return records[:safe_limit]
         except Exception as exc:
-            logger.error("Failed to list AI notifications for user=%s: %s", normalized_user, exc)
+            logger.error("list_notifications_failed", f"Failed to list AI notifications for user={normalized_user}: {exc}", {"user": normalized_user, "error": str(exc)})
             return []
 
     def set_acknowledged(
@@ -394,10 +393,9 @@ class AINotificationStore:
                 return self._row_to_record(row)
         except Exception as exc:
             logger.error(
-                "Failed to update AI notification acknowledgement user=%s id=%s: %s",
-                normalized_user,
-                notification_id,
-                exc,
+                "acknowledge_notification_failed",
+                f"Failed to update AI notification acknowledgement user={normalized_user} id={notification_id}: {exc}",
+                {"user": normalized_user, "notification_id": notification_id, "error": str(exc)},
             )
             return None
 

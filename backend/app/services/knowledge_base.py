@@ -3749,7 +3749,7 @@ class KnowledgeBaseService:
                         categories=[agent_type],
                         entry_types=context_entry_types,
                         limit=max_results,
-                        similarity_threshold=RAG_SEMANTIC_THRESHOLD,
+                        similarity_threshold=RAG_PRIMARY_SIMILARITY_THRESHOLD,
                     )
                 )
                 all_search_results.extend(variant_results)
@@ -4596,9 +4596,9 @@ class KnowledgeBaseService:
                             failed_entry_ids.append(entry.entry_id)
                 except Exception as repair_error:
                     logger.warning(
-                        "Failed to rebuild embedding for entry %s: %s",
-                        entry.entry_id,
-                        repair_error,
+                        "rebuild_embedding_failed",
+                        f"Failed to rebuild embedding for entry {entry.entry_id}: {repair_error}",
+                        {"entry_id": entry.entry_id, "error": str(repair_error)},
                     )
                     failed_count += 1
                     if len(failed_entry_ids) < 50:

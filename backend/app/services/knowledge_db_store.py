@@ -60,7 +60,7 @@ class KnowledgeDbStore:
             _KnowledgeBase.metadata.create_all(self._engine)
             self._available = True
         except Exception as exc:
-            logger.error("Failed to initialize knowledge DB store: %s", exc)
+            logger.error("init_failed", f"Failed to initialize knowledge DB store: {exc}", {"error": str(exc)})
 
     @property
     def is_available(self) -> bool:
@@ -76,7 +76,7 @@ class KnowledgeDbStore:
         normalized = str(user_id or "single_user").strip()
         # Validate user_id to prevent injection attacks
         if normalized and not VALID_USER_ID_PATTERN.match(normalized):
-            logger.warning(f"Invalid user_id format rejected: {repr(normalized[:100])}")
+            logger.warning("invalid_user_id_format", f"Invalid user_id format rejected: {repr(normalized[:100])}", {"user_id": normalized[:100]})
             raise ValueError(f"Invalid user_id format. Must match pattern: {VALID_USER_ID_PATTERN.pattern}")
         return normalized or "single_user"
 
@@ -186,7 +186,7 @@ class KnowledgeDbStore:
                 session.commit()
                 return True
         except Exception as exc:
-            logger.error("Failed to upsert knowledge entry %s: %s", entry.entry_id, exc)
+            logger.error("upsert_entry_failed", f"Failed to upsert knowledge entry {entry.entry_id}: {exc}", {"entry_id": entry.entry_id, "error": str(exc)})
             return False
 
     def get_entry(self, user_id: str, entry_id: str) -> Optional[KnowledgeEntry]:
@@ -207,7 +207,7 @@ class KnowledgeDbStore:
                     return None
                 return self._row_to_entry(row)
         except Exception as exc:
-            logger.error("Failed to fetch knowledge entry %s: %s", entry_id, exc)
+            logger.error("fetch_entry_failed", f"Failed to fetch knowledge entry {entry_id}: {exc}", {"entry_id": entry_id, "error": str(exc)})
             return None
 
     def list_entries(
@@ -236,7 +236,7 @@ class KnowledgeDbStore:
                 rows = session.execute(query).scalars().all()
                 return [self._row_to_entry(row) for row in rows]
         except Exception as exc:
-            logger.error("Failed to list knowledge entries for user %s: %s", normalized_user, exc)
+            logger.error("list_entries_failed", f"Failed to list knowledge entries for user {normalized_user}: {exc}", {"user": normalized_user, "error": str(exc)})
             return []
 
     def delete_entry(self, user_id: str, entry_id: str) -> bool:
@@ -260,7 +260,7 @@ class KnowledgeDbStore:
                 session.commit()
                 return True
         except Exception as exc:
-            logger.error("Failed to delete knowledge entry %s: %s", entry_id, exc)
+            logger.error("delete_entry_failed", f"Failed to delete knowledge entry {entry_id}: {exc}", {"entry_id": entry_id, "error": str(exc)})
             return False
 
     def delete_entries(self, user_id: str, entry_ids: List[str]) -> int:
@@ -283,7 +283,7 @@ class KnowledgeDbStore:
                 session.commit()
                 return int(result.rowcount or 0)
         except Exception as exc:
-            logger.error("Failed to bulk delete knowledge entries: %s", exc)
+            logger.error("bulk_delete_failed", f"Failed to bulk delete knowledge entries: {exc}", {"error": str(exc)})
             return 0
 
     def clear_user_entries(self, user_id: str) -> int:
@@ -299,7 +299,7 @@ class KnowledgeDbStore:
                 session.commit()
                 return int(result.rowcount or 0)
         except Exception as exc:
-            logger.error("Failed to clear knowledge entries for user %s: %s", normalized_user, exc)
+            logger.error("clear_entries_failed", f"Failed to clear knowledge entries for user {normalized_user}: {exc}", {"user": normalized_user, "error": str(exc)})
             return 0
 
     def count_user_entries(self, user_id: str) -> int:
@@ -314,7 +314,7 @@ class KnowledgeDbStore:
                 ).all()
                 return len(rows)
         except Exception as exc:
-            logger.error("Failed to count knowledge entries for user %s: %s", normalized_user, exc)
+            logger.error("count_entries_failed", f"Failed to count knowledge entries for user {normalized_user}: {exc}", {"user": normalized_user, "error": str(exc)})
             return 0
 
 
