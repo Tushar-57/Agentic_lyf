@@ -294,25 +294,34 @@ Now enhance the following response:"""
 
     async def run(self, state):
         log_steps = []
-        logger.info(json.dumps({
-            "timestamp": datetime.utcnow().isoformat(),
-            "step": "workflow_start",
-            "input_state": state,
-            "input_state_type": str(type(state))
-        }, indent=2))
+        logger.info(
+            "workflow_start",
+            json.dumps({
+                "timestamp": datetime.utcnow().isoformat(),
+                "step": "workflow_start",
+                "input_state": state,
+                "input_state_type": str(type(state))
+            }, indent=2)
+        )
         workflow = self.graph.compile()
-        logger.info(json.dumps({
-            "timestamp": datetime.utcnow().isoformat(),
-            "step": "workflow_compiled",
-            "nodes": list(workflow.nodes.keys())
-        }, indent=2))
+        logger.info(
+            "workflow_compiled",
+            json.dumps({
+                "timestamp": datetime.utcnow().isoformat(),
+                "step": "workflow_compiled",
+                "nodes": list(workflow.nodes.keys())
+            }, indent=2)
+        )
         result = await workflow.ainvoke(state)
-        logger.info(json.dumps({
-            "timestamp": datetime.utcnow().isoformat(),
-            "step": "workflow_complete",
-            "result": result,
-            "result_type": str(type(result))
-        }, indent=2))
+        logger.info(
+            "workflow_complete",
+            json.dumps({
+                "timestamp": datetime.utcnow().isoformat(),
+                "step": "workflow_complete",
+                "result": result,
+                "result_type": str(type(result))
+            }, indent=2)
+        )
         # Guarantee result is a dict
         if isinstance(result, tuple) and len(result) == 2:
             result = {"response": result[0], "reasoning": result[1]}
@@ -351,18 +360,24 @@ Now enhance the following response:"""
         # If it looks like the original state (no response produced), warn and return None
         if not response and isinstance(result, dict) and {"user_input", "conversation_id"}.issubset(set(result.keys())):
             logger.warning("workflow_returned_input_state", "Workflow returned original input-state (agents likely returned None or skipped processing).")
-            logger.info(json.dumps({
-                "timestamp": datetime.utcnow().isoformat(),
-                "step": "workflow_return",
-                "response": None,
-                "reasoning": reasoning
-            }, indent=2))
+            logger.info(
+                "workflow_return",
+                json.dumps({
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "step": "workflow_return",
+                    "response": None,
+                    "reasoning": reasoning
+                }, indent=2)
+            )
             return None, reasoning
 
-        logger.info(json.dumps({
-            "timestamp": datetime.utcnow().isoformat(),
-            "step": "workflow_return",
-            "response": response,
-            "reasoning": reasoning
-        }, indent=2))
+        logger.info(
+            "workflow_return",
+            json.dumps({
+                "timestamp": datetime.utcnow().isoformat(),
+                "step": "workflow_return",
+                "response": response,
+                "reasoning": reasoning
+            }, indent=2)
+        )
         return response, reasoning
