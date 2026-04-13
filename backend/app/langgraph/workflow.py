@@ -350,7 +350,7 @@ Now enhance the following response:"""
 
         # If it looks like the original state (no response produced), warn and return None
         if not response and isinstance(result, dict) and {"user_input", "conversation_id"}.issubset(set(result.keys())):
-            logger.warning("Workflow returned original input-state (agents likely returned None or skipped processing).")
+            logger.warning("workflow_returned_input_state", "Workflow returned original input-state (agents likely returned None or skipped processing).")
             logger.info(json.dumps({
                 "timestamp": datetime.utcnow().isoformat(),
                 "step": "workflow_return",
