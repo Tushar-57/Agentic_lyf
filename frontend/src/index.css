@@ -393,4 +393,13 @@
     border-radius: 20px 20px 0 0;
     opacity: 0.6;
   }
+
+  /* Wrapper for React component integration */
+  .daily-checkup-wrapper {
+    @apply w-full;
+  }
+
+  .daily-checkup-wrapper .daily-checkup {
+    @apply w-full;
+  }
 }

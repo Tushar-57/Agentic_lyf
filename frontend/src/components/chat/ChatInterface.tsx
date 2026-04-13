@@ -768,46 +768,57 @@ const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLas
         {/* Message Bubble */}
         <Card className={cn(
           "max-w-full overflow-hidden p-3 shadow-md transition-all duration-200",
-          isUser 
-            ? "ml-auto border-primary/30 bg-primary text-primary-foreground" 
+          isUser
+            ? "ml-auto border-primary/30 bg-primary text-primary-foreground"
             : "border-border/70 bg-card/85 hover:shadow-lg",
           message.isStreaming && "animate-pulse"
         )}>
           <div className="prose prose-sm max-w-none break-words overflow-x-hidden dark:prose-invert">
-            <ReactMarkdown 
-              remarkPlugins={[remarkGfm]}
-              components={{
-                p: ({ children }) => <p className="mb-2 break-words last:mb-0">{children}</p>,
-                code: ({ children, className }) => (
-                  <code className={cn(
-                    "break-all px-1.5 py-0.5 rounded text-xs font-mono bg-muted/80",
-                    className
-                  )}>
-                    {children}
-                  </code>
-                ),
-                pre: ({ children }) => (
-                  <pre className={cn(
-                    "max-w-full whitespace-pre-wrap break-words p-3 rounded-lg overflow-x-auto text-xs bg-muted/80"
-                  )}>
-                    {children}
-                  </pre>
-                ),
-              }}
-            >
-              {(() => {
-                const content = message.content
-                if (typeof content === 'string') {
-                  return content
-                } else if (content && typeof content === 'object') {
-                  console.warn('Message content is object, converting to string:', content)
-                  return JSON.stringify(content, null, 2)
-                } else {
-                  console.warn('Message content is unexpected type:', typeof content, content)
-                  return String(content || 'No content')
-                }
-              })()}
-            </ReactMarkdown>
+            {(() => {
+              const content = message.content
+              const contentStr = typeof content === 'string'
+                ? content
+                : content && typeof content === 'object'
+                  ? JSON.stringify(content, null, 2)
+                  : String(content || 'No content')
+
+              // Check if content contains daily checkup HTML - render as raw HTML
+              if (contentStr.includes('class="daily-checkup"') || contentStr.includes("class='daily-checkup'")) {
+                return (
+                  <div
+                    className="daily-checkup-wrapper"
+                    dangerouslySetInnerHTML={{ __html: contentStr }}
+                  />
+                )
+              }
+
+              // Regular markdown content
+              return (
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    p: ({ children }) => <p className="mb-2 break-words last:mb-0">{children}</p>,
+                    code: ({ children, className }) => (
+                      <code className={cn(
+                        "break-all px-1.5 py-0.5 rounded text-xs font-mono bg-muted/80",
+                        className
+                      )}>
+                        {children}
+                      </code>
+                    ),
+                    pre: ({ children }) => (
+                      <pre className={cn(
+                        "max-w-full whitespace-pre-wrap break-words p-3 rounded-lg overflow-x-auto text-xs bg-muted/80"
+                      )}>
+                        {children}
+                      </pre>
+                    ),
+                  }}
+                >
+                  {contentStr}
+                </ReactMarkdown>
+              )
+            })()}
           </div>
         </Card>
 
