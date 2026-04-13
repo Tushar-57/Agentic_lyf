@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Bot, User, Sparkles, Zap, Brain, Settings, Database, ChevronDown, ChevronUp, X } from 'lucide-react'
+import { Send, Bot, User, Sparkles, Zap, Brain, Settings, Database, ChevronDown, ChevronUp, X, Calendar, Clock, Target, Play, CheckCircle, AlertCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
@@ -8,6 +8,17 @@ import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+
+interface ActionableSuggestion {
+  id: string
+  title: string
+  description: string
+  actionType: 'schedule' | 'reminder' | 'workflow' | 'manual'
+  parameters: Record<string, any>
+  estimatedImpact: string
+  timeRequired?: number
+  workflowId?: string
+}
 
 interface Message {
   id: string
@@ -17,6 +28,20 @@ interface Message {
   agent?: string
   reasoning?: string | AgentThinking
   isStreaming?: boolean
+  actionableData?: {
+    summary?: string
+    insights?: string[]
+    suggestions?: ActionableSuggestion[]
+    workflowTriggered?: boolean
+    timeAnalysis?: {
+      windowLabel: string
+      totalMinutes: number
+      breakdown: Record<string, number>
+      percentages: Record<string, number>
+      focusScoreAvg: number
+      productivityScoreAvg: number
+    }
+  }
 }
 
 interface AgentThinking {
@@ -440,6 +465,179 @@ const AgentThinkingDisplay = React.memo(({ thinking }: { thinking: AgentThinking
 
 AgentThinkingDisplay.displayName = 'AgentThinkingDisplay'
 
+const ActionableSuggestions = React.memo(({ 
+  suggestions, 
+  onExecute 
+}: { 
+  suggestions: ActionableSuggestion[]
+  onExecute?: (suggestion: ActionableSuggestion) => void 
+}) => {
+  const [executing, setExecuting] = useState<string | null>(null)
+  const [executed, setExecuted] = useState<string[]>([])
+
+  const handleExecute = async (suggestion: ActionableSuggestion) => {
+    setExecuting(suggestion.id)
+    
+    try {
+      // Call API to execute the action
+      if (suggestion.actionType === 'schedule') {
+        const response = await fetch('/api/productivity/quick-schedule', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(suggestion.parameters)
+        })
+        if (response.ok) {
+          setExecuted(prev => [...prev, suggestion.id])
+        }
+      } else if (suggestion.actionType === 'workflow' && suggestion.workflowId) {
+        const response = await fetch('/api/productivity/execute-workflow', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            workflow_id: suggestion.workflowId,
+            context: suggestion.parameters
+          })
+        })
+        if (response.ok) {
+          const data = await response.json()
+          setExecuted(prev => [...prev, suggestion.id])
+          // Could show workflow execution status
+        }
+      }
+      
+      onExecute?.(suggestion)
+    } catch (error) {
+      console.error('Failed to execute suggestion:', error)
+    } finally {
+      setExecuting(null)
+    }
+  }
+
+  const getIcon = (actionType: string) => {
+    switch (actionType) {
+      case 'schedule': return Calendar
+      case 'reminder': return Clock
+      case 'workflow': return Play
+      default: return Target
+    }
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="mt-3 space-y-2"
+    >
+      <div className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
+        <Target className="w-4 h-4 text-teal-600 dark:text-teal-400" />
+        <span>Actionable Suggestions</span>
+      </div>
+      
+      {suggestions.map((suggestion, index) => {
+        const Icon = getIcon(suggestion.actionType)
+        const isExecuting = executing === suggestion.id
+        const isExecuted = executed.includes(suggestion.id)
+        
+        return (
+          <motion.div
+            key={suggestion.id}
+            initial={{ opacity: 0, x: -10 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: index * 0.1 }}
+            className={cn(
+              "rounded-lg border p-3 transition-all",
+              isExecuted 
+                ? "border-green-200 bg-green-50/80 dark:border-green-900 dark:bg-green-950/30" 
+                : "border-amber-200 bg-amber-50/80 dark:border-amber-900 dark:bg-amber-950/30 hover:border-amber-300 dark:hover:border-amber-700"
+            )}
+          >
+            <div className="flex items-start gap-3">
+              <div className={cn(
+                "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
+                isExecuted
+                  ? "bg-green-100 text-green-600 dark:bg-green-900 dark:text-green-300"
+                  : "bg-amber-100 text-amber-600 dark:bg-amber-900 dark:text-amber-300"
+              )}>
+                {isExecuted ? (
+                  <CheckCircle className="w-4 h-4" />
+                ) : (
+                  <Icon className="w-4 h-4" />
+                )}
+              </div>
+              
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <h4 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                    {suggestion.title}
+                  </h4>
+                  {suggestion.timeRequired && (
+                    <Badge variant="outline" className="text-xs">
+                      {suggestion.timeRequired}min
+                    </Badge>
+                  )}
+                </div>
+                
+                <p className="mt-1 text-xs text-slate-600 dark:text-slate-400">
+                  {suggestion.description}
+                </p>
+                
+                <div className="mt-2 flex items-center gap-2">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-400">
+                      <span className="font-medium">📈 Impact:</span>
+                      <span>{suggestion.estimatedImpact}</span>
+                    </div>
+                  </div>
+                  
+                  {!isExecuted && (
+                    <Button
+                      size="sm"
+                      variant={suggestion.actionType === 'workflow' ? "default" : "outline"}
+                      className={cn(
+                        "h-7 text-xs",
+                        suggestion.actionType === 'workflow' 
+                          ? "bg-teal-600 hover:bg-teal-700" 
+                          : "border-amber-300 hover:bg-amber-100 dark:border-amber-700 dark:hover:bg-amber-900"
+                      )}
+                      onClick={() => handleExecute(suggestion)}
+                      disabled={isExecuting}
+                    >
+                      {isExecuting ? (
+                        <>
+                          <div className="mr-1 h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                          Executing...
+                        </>
+                      ) : suggestion.actionType === 'workflow' ? (
+                        <>
+                          <Play className="mr-1 h-3 w-3" />
+                          Run Workflow
+                        </>
+                      ) : (
+                        <>
+                          <Calendar className="mr-1 h-3 w-3" />
+                          Schedule
+                        </>
+                      )}
+                    </Button>
+                  )}
+                  
+                  {isExecuted && (
+                    <span className="text-xs font-medium text-green-600 dark:text-green-400">
+                      ✓ Done
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )
+      })}
+    </motion.div>
+  )
+})
+
+ActionableSuggestions.displayName = 'ActionableSuggestions'
+
 const TypingIndicator = () => (
   <div className="flex items-center space-x-1 p-4">
     <div className="flex space-x-1">
@@ -821,6 +1019,13 @@ const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLas
             })()}
           </div>
         </Card>
+
+        {/* Actionable Suggestions */}
+        {message.actionableData?.suggestions && message.actionableData.suggestions.length > 0 && (
+          <ActionableSuggestions 
+            suggestions={message.actionableData.suggestions}
+          />
+        )}
 
         {/* Reasoning (if available) */}
         {message.reasoning && (
