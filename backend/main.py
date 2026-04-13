@@ -19,6 +19,7 @@ from app.langgraph.workflow import AgentGraphWorkflow
 from app.agents.registry import get_agent_registry
 from app.api.knowledge import router as knowledge_router
 from app.api.approval import router as approval_router
+from app.api.productivity_actions import router as productivity_router
 from app.agents.factory import initialize_agents, AgentFactory
 from app.agents.base import AgentType
 from app.llm.service import get_llm_service
@@ -237,6 +238,7 @@ app.add_middleware(
 # Include API routers
 app.include_router(knowledge_router)
 app.include_router(approval_router, prefix="/api/approval", tags=["approval"])
+app.include_router(productivity_router)
 
 
 class ChatRequest(BaseModel):
