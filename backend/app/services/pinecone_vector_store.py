@@ -122,12 +122,12 @@ class PineconeVectorStore:
 
             self.entry_metadata = hydrated
             logger.info(
-                "Loaded Pinecone metadata cache with %d entries for namespace %s",
-                len(self.entry_metadata),
-                self.namespace,
+                "metadata_cache_loaded",
+                f"Loaded Pinecone metadata cache with {len(self.entry_metadata)} entries for namespace {self.namespace}",
+                {"entry_count": len(self.entry_metadata), "namespace": self.namespace}
             )
         except Exception as exc:
-            logger.warning("Failed to load Pinecone metadata cache: %s", exc)
+            logger.warning("metadata_cache_load_failed", f"Failed to load Pinecone metadata cache: {exc}", {"error": str(exc)})
             self.entry_metadata = {}
 
     def _save_metadata(self) -> None:
@@ -141,7 +141,7 @@ class PineconeVectorStore:
             with open(self.metadata_path, "wb") as metadata_file:
                 pickle.dump(payload, metadata_file)
         except Exception as exc:
-            logger.error("Failed to save Pinecone metadata cache: %s", exc)
+            logger.error("metadata_cache_save_failed", f"Failed to save Pinecone metadata cache: {exc}", {"error": str(exc)})
             raise
 
     def persist_metadata_cache(self) -> None:
@@ -170,7 +170,7 @@ class PineconeVectorStore:
         try:
             listing = self._client.list_indexes()
         except Exception as exc:
-            logger.warning("Unable to list Pinecone indexes: %s", exc)
+            logger.warning("list_indexes_failed", f"Unable to list Pinecone indexes: {exc}", {"error": str(exc)})
             return []
 
         if hasattr(listing, "names") and callable(getattr(listing, "names")):
@@ -250,7 +250,7 @@ class PineconeVectorStore:
 
             return [float(value) for value in values]
         except Exception as exc:
-            logger.warning("Failed to fetch Pinecone vector %s: %s", entry_id, exc)
+            logger.warning("fetch_vector_failed", f"Failed to fetch Pinecone vector {entry_id}: {exc}", {"entry_id": entry_id, "error": str(exc)})
             return None
 
     def _load_entry_from_db(self, entry_id: str) -> Optional[KnowledgeEntry]:
@@ -272,7 +272,7 @@ class PineconeVectorStore:
             self.entry_metadata[entry.entry_id] = entry
             return entry
         except Exception as exc:
-            logger.warning("Failed to hydrate entry %s from DB: %s", entry_id, exc)
+            logger.warning("hydrate_entry_failed", f"Failed to hydrate entry {entry_id} from DB: {exc}", {"entry_id": entry_id, "error": str(exc)})
             return None
 
     def add_entry(self, entry: KnowledgeEntry, embedding: List[float], persist: bool = True) -> None:
@@ -316,7 +316,7 @@ class PineconeVectorStore:
 
             return True
         except Exception as exc:
-            logger.error("Failed to remove entry from Pinecone store: %s", exc)
+            logger.error("remove_entry_failed", f"Failed to remove entry from Pinecone store: {exc}", {"error": str(exc)})
             return False
 
     def remove_entries(self, entry_ids: List[str], persist: bool = True) -> int:
@@ -334,7 +334,7 @@ class PineconeVectorStore:
 
             return len(normalized_ids)
         except Exception as exc:
-            logger.error("Failed to remove entries from Pinecone store: %s", exc)
+            logger.error("remove_entries_failed", f"Failed to remove entries from Pinecone store: {exc}", {"error": str(exc)})
             return 0
 
     def search(
@@ -383,7 +383,7 @@ class PineconeVectorStore:
 
             return results
         except Exception as exc:
-            logger.error("Failed to search Pinecone vector store: %s", exc)
+            logger.error("search_failed", f"Failed to search Pinecone vector store: {exc}", {"error": str(exc)})
             return []
 
     def get_entry(self, entry_id: str) -> Optional[KnowledgeEntry]:
@@ -431,7 +431,7 @@ class PineconeVectorStore:
 
             return list(self.entry_metadata.values())
         except Exception as exc:
-            logger.warning("Failed to list entries from DB for Pinecone store: %s", exc)
+            logger.warning("list_entries_failed", f"Failed to list entries from DB for Pinecone store: {exc}", {"error": str(exc)})
             return []
 
     def get_stats(self) -> Dict[str, Any]:
@@ -444,7 +444,7 @@ class PineconeVectorStore:
             vector_count = self._extract_field(namespace_stats, "vector_count", 0) or 0
             total_entries = max(total_entries, int(vector_count))
         except Exception as exc:
-            logger.warning("Failed to read Pinecone index stats: %s", exc)
+            logger.warning("index_stats_failed", f"Failed to read Pinecone index stats: {exc}", {"error": str(exc)})
 
         return {
             "total_entries": total_entries,

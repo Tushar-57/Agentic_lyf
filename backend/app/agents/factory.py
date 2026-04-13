@@ -151,7 +151,7 @@ class AgentFactory:
                                 "method": "llm_completion"
                             }
                         }
-                        logger.debug("Agent %s returned: %s", self.agent_id, result)
+                        logger.debug("agent_returned", f"Agent {self.agent_id} returned", {"agent_id": self.agent_id, "result": result})
                         return result
                     except Exception as e:
                         logger.error("agent_execute_llm_error", f"Agent {self.agent_id} LLM execution error", {"agent_id": self.agent_id}, error=e)
@@ -175,7 +175,7 @@ class AgentFactory:
                                     "error": str(e)
                                 }
                             }
-                        logger.debug("Agent %s returned: %s", self.agent_id, result)
+                        logger.debug("agent_returned", f"Agent {self.agent_id} returned", {"agent_id": self.agent_id, "result": result})
                         return result
             agent = GenericAgent(
                 agent_id=agent_id,

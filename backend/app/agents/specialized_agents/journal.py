@@ -92,7 +92,7 @@ class JournalAgent(BaseAgent):
                     context=merged_context,
                 )
                 if interaction_id:
-                    logger.info("Created pending interaction %s for journal approval", interaction_id)
+                    logger.info("pending_interaction_created", f"Created pending interaction {interaction_id} for journal approval", {"interaction_id": interaction_id})
             
             return {
                 "response": response,

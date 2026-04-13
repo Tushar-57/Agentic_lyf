@@ -617,7 +617,7 @@ Response contract:
                 profile_snapshot = self._build_profile_snapshot(user_preferences_dict)
                 coach_profile = self._build_coach_profile(profile_snapshot)
             except Exception as profile_error:
-                logger.warning("Failed to load user preference snapshot: %s", profile_error)
+                logger.warning("profile_snapshot_failed", f"Failed to load user preference snapshot: {profile_error}", {"error": str(profile_error)})
 
             routing_context = dict(context or {})
             general_context: Dict[str, Any] = {}
@@ -631,7 +631,7 @@ Response contract:
                     routing_context["knowledge_context_summary"] = general_context.get("context_summary")
                     routing_context["general_recent_time_entries"] = general_context.get("recent_time_entries", [])[:3]
             except Exception as context_error:
-                logger.warning("Failed to load general knowledge context: %s", context_error)
+                logger.warning("knowledge_context_failed", f"Failed to load general knowledge context: {context_error}", {"error": str(context_error)})
 
             if profile_snapshot:
                 routing_context["profile_snapshot"] = profile_snapshot
@@ -886,11 +886,14 @@ Response contract:
 
             normalized_agent = self._normalize_agent_type(policy_result.get("agent_type"))
             logger.info(
-                "Intent routing decided: agent=%s confidence=%.2f method=%s primary_intent=%s",
-                normalized_agent.value,
-                float(policy_result.get("confidence", 0.0) or 0.0),
-                policy_result.get("method"),
-                policy_result.get("primary_intent"),
+                "intent_routing_decided",
+                f"Intent routing decided: agent={normalized_agent.value} confidence={float(policy_result.get('confidence', 0.0) or 0.0):.2f} method={policy_result.get('method')} primary_intent={policy_result.get('primary_intent')}",
+                {
+                    "agent": normalized_agent.value,
+                    "confidence": float(policy_result.get("confidence", 0.0) or 0.0),
+                    "method": policy_result.get("method"),
+                    "primary_intent": policy_result.get("primary_intent"),
+                }
             )
             return policy_result
                 

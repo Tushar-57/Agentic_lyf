@@ -274,7 +274,7 @@ class VectorStore:
                     remaining_entries.append((entry, entry.embedding))
 
             self._rebuild_from_entries(remaining_entries, persist=persist)
-            logger.debug("Removed %d entries from vector store", len(ids_to_remove))
+            logger.debug("entries_removed", f"Removed {len(ids_to_remove)} entries from vector store", {"count": len(ids_to_remove)})
             return len(ids_to_remove)
         except Exception as e:
             logger.error("remove_failed", "Failed to remove entries from vector store", error=e)
@@ -477,7 +477,7 @@ class InMemoryVectorStore:
             self.entry_metadata = normalized_entries
             self.embeddings_by_entry_id = normalized_embeddings
         except Exception as error:
-            logger.warning("Failed to load in-memory vector store metadata: %s", error)
+            logger.warning("load_metadata_failed", f"Failed to load in-memory vector store metadata: {error}", {"error": str(error)})
             self.entry_metadata = {}
             self.embeddings_by_entry_id = {}
 
@@ -666,7 +666,7 @@ def _build_vector_store_for_user(resolved_user_id: str) -> Any:
                 dimension=int(os.getenv("EMBEDDING_DIMENSION", "1536")),
                 local_metadata_path=f"{index_path}_pinecone_metadata.pkl",
             )
-            logger.info("Using Pinecone vector store for user %s", resolved_user_id)
+            logger.info("pinecone_store_selected", f"Using Pinecone vector store for user {resolved_user_id}", {"user_id": resolved_user_id})
 
             if _parse_bool_env("PINECONE_BACKFILL_FROM_FAISS_ON_BOOT", False):
                 try:
