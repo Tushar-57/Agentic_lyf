@@ -3266,8 +3266,8 @@ async def run_evening_checkup(request: DailyCheckupRequest):
         style_directive = _build_style_directive(communication_profile, "evening")
 
         # Prepare precomputed metrics
-        wins = _compute_wins(overdue_tasks, completed_tasks_today, habits_completed_today, total_minutes, billable_minutes, focus_tasks, avg_focus)
-        tomorrow_focus = _compute_tomorrow_focus(upcoming_tasks, overdue_tasks, due_today_tasks, avg_energy, blockers, focus_tasks, communication_profile)
+        # wins = _compute_wins(overdue_tasks, completed_tasks_today, habits_completed_today, total_minutes, billable_minutes, focus_tasks, avg_focus)
+        # tomorrow_focus = _compute_tomorrow_focus(upcoming_tasks, overdue_tasks, due_today_tasks, avg_energy, blockers, focus_tasks, communication_profile)
         
         # Build detailed time entry analysis for deep reasoning
         today_time_entries = [item for item in time_entries if item["event_date"] == checkup_date]
