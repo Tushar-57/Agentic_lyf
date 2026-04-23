@@ -838,7 +838,7 @@ _graph = None
 
 # In-memory conversation history store: keyed by conversation_id
 # Each value is a list of {"role": "user"|"assistant", "content": str}
-_conversation_histories: Dict[str, List[Any]] = {}
+_conversation_histories: dict[str, List[Any]] = {}
 _CONVERSATION_MAX_TURNS = 20  # keep last 20 turns (10 exchanges) to avoid unbounded growth
 
 async def get_workflow():
