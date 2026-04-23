@@ -294,9 +294,15 @@ async def chat_endpoint(request: ChatRequest):
                 reasoning="Error: Orchestrator agent not found in registry.",
                 timestamp=datetime.now()
             )
+         # Load existing conversation history for this conversation
+        conversation_history = _conversation_histories.get(request.conversation_id, [])
+
         state = {
             "user_input": request.message,
-            "context": {},
+            "context": {
+                "conversation_history": conversation_history,
+                "conversation_id": request.conversation_id,
+            },
             "conversation_id": request.conversation_id,
             "agent": orchestrator.agent_id
         }
@@ -368,12 +374,21 @@ async def chat_endpoint(request: ChatRequest):
                 {"resolved_user_id": resolved_user_id, "conversation_id": request.conversation_id, "agent_id": request.agent}
             )
 
+        # Persist this turn into the conversation history
+        history = _conversation_histories.setdefault(request.conversation_id, [])
+        history.append({"role": "user", "content": request.message})
+        history.append({"role": "assistant", "content": response if isinstance(response, str) else str(response)})
+        # Trim to max turns to prevent unbounded memory growth
+        if len(history) > _CONVERSATION_MAX_TURNS * 2:
+            _conversation_histories[request.conversation_id] = history[-(_CONVERSATION_MAX_TURNS * 2):]
+
         return ChatResponse(
             response=response,
             agent=state.get("agent", orchestrator.agent_id),
             reasoning=reasoning,
             timestamp=datetime.now()
         )
+
     except Exception as e:
         logger.error("orchestrator_error", "Orchestrator Error", error=e)
         error_text = str(e)
@@ -820,6 +835,11 @@ async def update_config(request: ConfigUpdateRequest):
 # Global workflow instance
 _workflow = None
 _graph = None
+
+# In-memory conversation history store: keyed by conversation_id
+# Each value is a list of {"role": "user"|"assistant", "content": str}
+_conversation_histories: Dict[str, List[Any]] = {}
+_CONVERSATION_MAX_TURNS = 20  # keep last 20 turns (10 exchanges) to avoid unbounded growth
 
 async def get_workflow():
     """Get or create the workflow instance."""

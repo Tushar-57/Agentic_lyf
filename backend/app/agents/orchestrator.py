@@ -177,6 +177,19 @@ class OrchestratorAgent(BaseAgent):
                 user_preferences_dict = {}
 
             # Classify intent
+            # intent_result = await self._classify_intent(user_input, context)
+            # Fetch RAG context ONCE here — passed to specialist so it doesn't re-fetch
+            pre_fetched_rag_context = None
+            try:
+                pre_fetched_rag_context = await self.knowledge_base.get_contextual_knowledge_for_agent(
+                    user_input=user_input,
+                    agent_type="general",
+                    max_results=10,
+                )
+            except Exception as rag_err:
+                logger.warning("orchestrator_rag_prefetch_failed", "Pre-fetch RAG context failed", error=rag_err)
+
+            # Classify intent
             intent_result = await self._classify_intent(user_input, context)
             target_agent_type = intent_result.get("agent_type")
             confidence = intent_result.get("confidence", 0.0)
@@ -205,7 +218,11 @@ class OrchestratorAgent(BaseAgent):
                 })
                 
                 # Delegate to appropriate agent WITH user preferences
-                delegation_result = await self._delegate_to_agent(target_agent_type, user_input, context, user_preferences_dict)
+                # delegation_result = await self._delegate_to_agent(target_agent_type, user_input, context, user_preferences_dict)
+                delegation_result = await self._delegate_to_agent(
+                    target_agent_type, user_input, context, user_preferences_dict,
+                    pre_fetched_rag_context=pre_fetched_rag_context,
+                )
                 if delegation_result and delegation_result.get("response"):
                     # Merge knowledge sources from specialist agent into orchestrator reasoning
                     specialist_reasoning = delegation_result.get("reasoning", {})
@@ -595,6 +612,8 @@ class OrchestratorAgent(BaseAgent):
                 "context": context,
                 "user_preferences": user_preferences or {},
                 "conversation_id": context.get("conversation_id"),
+                "conversation_history": context.get("conversation_history", []),
+                "pre_fetched_rag_context": pre_fetched_rag_context,  # skip re-fetch in specialist
                 "agent": target_agent.agent_id
             }
             
