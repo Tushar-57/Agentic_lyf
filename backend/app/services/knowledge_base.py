@@ -227,6 +227,31 @@ EMBEDDING_METADATA_ALLOWLIST: Dict[str, Set[str]] = {
         "habit_highlights",
         "daily_completion_digest",
     },
+    "task_board_snapshot": {
+        "agent_type",
+        "summary",
+        "captured_at",
+        "task_count",
+        "active_count",
+        "completed_count",
+        "overdue_count",
+        "due_today_count",
+        "tasks_preview",
+    },
+    "goal_update": {
+        "agent_type",
+        "summary",
+        "captured_at",
+        "goal_id",
+        "goal_title",
+        "category",
+        "priority",
+        "end_date",
+        "progress_percent",
+        "status",
+        "days_until_deadline",
+        "milestones_completed",
+    },
     "system": {
         "last_updated",
     },
@@ -2097,6 +2122,8 @@ class KnowledgeBaseService:
             "schedule",
             "goal",
             "goals",
+            "goal_update",
+            "task_board_snapshot",
         }:
             if normalized_agent == "health":
                 sub_type = KnowledgeEntrySubType.HEALTH_INTERACTION
@@ -3705,7 +3732,272 @@ class KnowledgeBaseService:
 
         return snippets
 
-    async def get_contextual_knowledge_for_agent(self, 
+    async def build_chat_context_payload(self, user_id: Optional[str] = None) -> Dict[str, Any]:
+        """Build a structured chat-context payload of tasks, habits, goals, focus areas, and today overview.
+
+        Pulls the latest snapshots/entries from the knowledge base and shapes them for the
+        orchestrator system prompt so chat replies are grounded in real user state.
+        """
+        payload: Dict[str, Any] = {
+            "active_tasks": [],
+            "habits": {},
+            "goals": [],
+            "focus_areas": {},
+            "today_overview": {},
+        }
+
+        try:
+            all_entries = await self.get_all_entries()
+        except Exception as fetch_error:
+            logger.warning(
+                "build_chat_context_payload_fetch_failed",
+                f"Failed to load entries for chat context payload: {fetch_error}",
+                {"error": str(fetch_error)},
+            )
+            return payload
+
+        # ---- profile / focus areas ------------------------------------------------
+        try:
+            preferences = await self.get_user_preferences()
+            general = preferences.general if isinstance(preferences.general, dict) else {}
+            priorities = general.get("priorities", []) if isinstance(general.get("priorities"), list) else []
+            domain_prefs = (
+                general.get("domainPreferences")
+                or general.get("domain_preferences")
+                or {}
+            )
+            payload["focus_areas"] = {
+                "priorities": [str(item) for item in priorities if str(item).strip()][:6],
+                "domainPreferences": domain_prefs if isinstance(domain_prefs, dict) else {},
+            }
+        except Exception as pref_error:
+            logger.warning(
+                "build_chat_context_payload_pref_failed",
+                f"Failed to read preferences for chat context: {pref_error}",
+                {"error": str(pref_error)},
+            )
+
+        # ---- helpers --------------------------------------------------------------
+        def _entry_metadata(entry: KnowledgeEntry) -> Dict[str, Any]:
+            return entry.metadata if isinstance(entry.metadata, dict) else {}
+
+        def _entry_context_payload(entry: KnowledgeEntry) -> Dict[str, Any]:
+            metadata = _entry_metadata(entry)
+            ctx = metadata.get("context")
+            return ctx if isinstance(ctx, dict) else {}
+
+        def _entry_event_ts(entry: KnowledgeEntry) -> datetime:
+            ts = getattr(entry, "updated_at", None) or getattr(entry, "created_at", None)
+            if ts is None:
+                return datetime.min.replace(tzinfo=timezone.utc)
+            if ts.tzinfo is None:
+                return ts.replace(tzinfo=timezone.utc)
+            return ts.astimezone(timezone.utc)
+
+        # Bucket by category for efficient filtering.
+        task_board_entries: List[KnowledgeEntry] = []
+        habit_entries: List[KnowledgeEntry] = []
+        goal_entries: List[KnowledgeEntry] = []
+        time_entry_entries: List[KnowledgeEntry] = []
+
+        for entry in all_entries:
+            category = (entry.category or "").strip().lower()
+            if category == "task_board_snapshot":
+                task_board_entries.append(entry)
+            elif category in {"habit_snapshot", "habit_progress"}:
+                habit_entries.append(entry)
+            elif category in {"goal", "goals", "goal_update"}:
+                goal_entries.append(entry)
+            elif category == "time_entry":
+                time_entry_entries.append(entry)
+
+        # ---- active tasks ---------------------------------------------------------
+        if task_board_entries:
+            latest_task_entry = max(task_board_entries, key=_entry_event_ts)
+            ctx = _entry_context_payload(latest_task_entry)
+            tasks_raw: List[Any] = []
+            for key in ("tasks", "tasks_preview", "task_list"):
+                candidate = ctx.get(key)
+                if isinstance(candidate, list):
+                    tasks_raw = candidate
+                    break
+
+            active_tasks: List[Dict[str, Any]] = []
+            for raw_task in tasks_raw:
+                if not isinstance(raw_task, dict):
+                    continue
+                status = str(raw_task.get("status") or "").strip().lower()
+                if status in {"done", "completed", "complete", "archived"}:
+                    continue
+                title = str(raw_task.get("title") or raw_task.get("name") or "").strip()
+                if not title:
+                    continue
+                active_tasks.append(
+                    {
+                        "title": title,
+                        "status": status or "open",
+                        "due_date": raw_task.get("due_date") or raw_task.get("dueDate"),
+                        "priority": raw_task.get("priority"),
+                    }
+                )
+
+            payload["active_tasks"] = active_tasks[:10]
+
+        # ---- habits ---------------------------------------------------------------
+        if habit_entries:
+            latest_habit_entry = max(habit_entries, key=_entry_event_ts)
+            ctx = _entry_context_payload(latest_habit_entry)
+            habits_today_raw = []
+            for key in ("habits_today", "habits", "today"):
+                candidate = ctx.get(key)
+                if isinstance(candidate, list):
+                    habits_today_raw = candidate
+                    break
+
+            habits_today: List[Dict[str, Any]] = []
+            pending_names: List[str] = []
+            n_completed = 0
+            for raw_habit in habits_today_raw:
+                if not isinstance(raw_habit, dict):
+                    continue
+                name = str(raw_habit.get("name") or raw_habit.get("title") or "").strip()
+                if not name:
+                    continue
+                completed_today = bool(
+                    raw_habit.get("completedToday")
+                    or raw_habit.get("completed_today")
+                    or raw_habit.get("done")
+                    or raw_habit.get("isCompleted")
+                )
+                habits_today.append({"name": name, "completedToday": completed_today})
+                if completed_today:
+                    n_completed += 1
+                else:
+                    pending_names.append(name)
+
+            payload["habits"] = {
+                "current_run": self._safe_int(ctx.get("current_run"), default=0),
+                "longest_run": self._safe_int(ctx.get("longest_run"), default=0),
+                "completionRate7d": ctx.get("completionRate7d") or ctx.get("completion_rate_7d"),
+                "today": habits_today,
+                "n_total": len(habits_today),
+                "n_completed": n_completed,
+                "pending_names": pending_names[:10],
+            }
+
+        # ---- goals ----------------------------------------------------------------
+        active_goals_payload: List[Dict[str, Any]] = []
+        # De-dupe by goal_id if present, prefer the most recent entry per goal.
+        goal_dedup: Dict[str, KnowledgeEntry] = {}
+        for entry in goal_entries:
+            metadata = _entry_metadata(entry)
+            ctx = _entry_context_payload(entry)
+            goal_id = str(
+                metadata.get("goal_id")
+                or ctx.get("goal_id")
+                or metadata.get("goalId")
+                or ctx.get("goalId")
+                or entry.entry_id
+            )
+            existing = goal_dedup.get(goal_id)
+            if existing is None or _entry_event_ts(entry) > _entry_event_ts(existing):
+                goal_dedup[goal_id] = entry
+
+        for entry in goal_dedup.values():
+            metadata = _entry_metadata(entry)
+            ctx = _entry_context_payload(entry)
+            status = str(metadata.get("status") or ctx.get("status") or "").strip().lower()
+            if status in {"completed", "complete", "done", "archived", "abandoned"}:
+                continue
+
+            title = (
+                metadata.get("goal_title")
+                or ctx.get("goal_title")
+                or metadata.get("title")
+                or ctx.get("title")
+                or entry.title
+            )
+            progress = ctx.get("progress_percent")
+            if progress is None:
+                progress = metadata.get("progress_percent")
+            try:
+                progress_value = round(float(progress), 1) if progress is not None else None
+            except (TypeError, ValueError):
+                progress_value = None
+
+            days_until = ctx.get("days_until_deadline") or metadata.get("days_until_deadline")
+            try:
+                days_until_value = int(days_until) if days_until is not None else None
+            except (TypeError, ValueError):
+                days_until_value = None
+
+            active_goals_payload.append(
+                {
+                    "title": str(title or "").strip() or "Untitled goal",
+                    "priority": metadata.get("priority") or ctx.get("priority"),
+                    "end_date": metadata.get("end_date") or ctx.get("end_date") or ctx.get("endDate"),
+                    "progress_percent": progress_value,
+                    "days_until_deadline": days_until_value,
+                    "status": status or "active",
+                }
+            )
+
+        # Sort: nearest deadline first, then highest progress.
+        def _goal_sort_key(g: Dict[str, Any]) -> tuple:
+            d = g.get("days_until_deadline")
+            d_key = d if isinstance(d, int) else 10**6
+            return (d_key, -1 * (g.get("progress_percent") or 0))
+
+        active_goals_payload.sort(key=_goal_sort_key)
+        payload["goals"] = active_goals_payload[:8]
+
+        # ---- today overview -------------------------------------------------------
+        now_utc = datetime.now(timezone.utc)
+        today_str = now_utc.date().isoformat()
+
+        # Active timer = latest time_entry whose context lacks an end_time
+        active_timer_description: Optional[str] = None
+        if time_entry_entries:
+            sorted_time_entries = sorted(time_entry_entries, key=_entry_event_ts, reverse=True)
+            for entry in sorted_time_entries[:5]:
+                ctx = _entry_context_payload(entry)
+                end_time_value = ctx.get("end_time") or ctx.get("endTime")
+                if end_time_value:
+                    continue
+                desc = str(
+                    ctx.get("description")
+                    or ctx.get("task_name")
+                    or ctx.get("project_name")
+                    or "active session"
+                ).strip()
+                if desc:
+                    active_timer_description = desc
+                    break
+
+        # Overdue + due-today derived from active_tasks list when available
+        overdue_count = 0
+        due_today_count = 0
+        for task in payload["active_tasks"]:
+            due_date = str(task.get("due_date") or "")[:10]
+            if not due_date:
+                continue
+            if due_date < today_str:
+                overdue_count += 1
+            elif due_date == today_str:
+                due_today_count += 1
+
+        habits_pending = len(payload["habits"].get("pending_names", [])) if payload["habits"] else 0
+
+        payload["today_overview"] = {
+            "overdue_tasks": overdue_count,
+            "due_today_tasks": due_today_count,
+            "habits_pending": habits_pending,
+            "active_timer": active_timer_description,
+        }
+
+        return payload
+
+    async def get_contextual_knowledge_for_agent(self,
                                                 user_input: str,
                                                 agent_type: str,
                                                 max_results: int = 10) -> Dict[str, Any]:

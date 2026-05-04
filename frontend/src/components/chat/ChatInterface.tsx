@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Send, Bot, User, Sparkles, Zap, Brain, Settings, Database, ChevronDown, ChevronUp, X, Calendar, Clock, Target, Play, CheckCircle, AlertCircle } from 'lucide-react'
+import { Send, Bot, User, Sparkles, Zap, Brain, Settings, Database, ChevronDown, ChevronUp, X, Calendar, Clock, Target, Play, CheckCircle, AlertCircle, RefreshCw, ListTodo, Leaf, Flame } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
@@ -8,6 +8,17 @@ import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+
+interface ChatContextSummary {
+  tasks_count: number
+  habits_pending: number
+  habits_total: number
+  goals_count: number
+  overdue_tasks: number
+  due_today_tasks: number
+  active_timer: string | null
+  last_updated: string
+}
 
 interface ActionableSuggestion {
   id: string
@@ -638,6 +649,120 @@ const ActionableSuggestions = React.memo(({
 
 ActionableSuggestions.displayName = 'ActionableSuggestions'
 
+const ContextPill = React.memo(({
+  summary,
+  isLoading,
+  onRefresh,
+}: {
+  summary: ChatContextSummary | null
+  isLoading: boolean
+  onRefresh: () => void
+}) => {
+  if (isLoading) {
+    return (
+      <div className="flex items-center gap-2 border-b border-border/50 bg-gray-50/70 px-4 py-2 dark:bg-gray-800/40">
+        <div className="h-3 w-3 animate-pulse rounded-full bg-gray-300 dark:bg-gray-600" />
+        <div className="h-3 w-16 animate-pulse rounded bg-gray-200 dark:bg-gray-700" />
+        <div className="h-3 w-20 animate-pulse rounded bg-gray-200 dark:bg-gray-700" />
+        <div className="h-3 w-20 animate-pulse rounded bg-gray-200 dark:bg-gray-700" />
+        <div className="h-3 w-16 animate-pulse rounded bg-gray-200 dark:bg-gray-700" />
+      </div>
+    )
+  }
+
+  if (!summary) {
+    return (
+      <div className="flex items-center gap-2 border-b border-border/50 bg-gray-50/70 px-4 py-2 dark:bg-gray-800/40">
+        <Brain className="h-3.5 w-3.5 text-muted-foreground" />
+        <span className="text-xs text-muted-foreground">Context loading...</span>
+      </div>
+    )
+  }
+
+  const isEmpty =
+    summary.tasks_count === 0 &&
+    summary.habits_total === 0 &&
+    summary.goals_count === 0 &&
+    !summary.active_timer
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border/50 bg-gray-50/70 px-4 py-1.5 dark:bg-gray-800/40">
+      {/* Label */}
+      <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 dark:text-slate-300">
+        <Brain className="h-3.5 w-3.5 text-teal-600 dark:text-teal-400" />
+        <span>AI Context</span>
+      </div>
+
+      {isEmpty ? (
+        <span className="text-xs text-muted-foreground italic">No data loaded yet</span>
+      ) : (
+        <>
+          {summary.tasks_count > 0 && (
+            <div
+              className="group relative flex cursor-default items-center gap-1 rounded-full bg-white/80 px-2 py-0.5 text-xs font-medium shadow-sm ring-1 ring-border/50 dark:bg-slate-800/70"
+              title={`${summary.tasks_count} active task${summary.tasks_count !== 1 ? 's' : ''} loaded from task board`}
+            >
+              <ListTodo className="h-3 w-3 text-blue-500" />
+              <span>{summary.tasks_count} task{summary.tasks_count !== 1 ? 's' : ''}</span>
+            </div>
+          )}
+
+          {summary.habits_total > 0 && (
+            <div
+              className="group relative flex cursor-default items-center gap-1 rounded-full bg-white/80 px-2 py-0.5 text-xs font-medium shadow-sm ring-1 ring-border/50 dark:bg-slate-800/70"
+              title={`${summary.habits_pending} of ${summary.habits_total} habits still pending today`}
+            >
+              <Leaf className="h-3 w-3 text-green-500" />
+              <span>{summary.habits_pending} habit{summary.habits_pending !== 1 ? 's' : ''} pending</span>
+            </div>
+          )}
+
+          {summary.goals_count > 0 && (
+            <div
+              className="group relative flex cursor-default items-center gap-1 rounded-full bg-white/80 px-2 py-0.5 text-xs font-medium shadow-sm ring-1 ring-border/50 dark:bg-slate-800/70"
+              title={`${summary.goals_count} active goal${summary.goals_count !== 1 ? 's' : ''} tracked`}
+            >
+              <Target className="h-3 w-3 text-violet-500" />
+              <span>Goals: {summary.goals_count}</span>
+            </div>
+          )}
+
+          {summary.overdue_tasks > 0 && (
+            <div
+              className="flex cursor-default items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-xs font-medium text-red-700 ring-1 ring-red-200 dark:bg-red-950/40 dark:text-red-400 dark:ring-red-900"
+              title={`${summary.overdue_tasks} task${summary.overdue_tasks !== 1 ? 's' : ''} past their due date`}
+            >
+              <AlertCircle className="h-3 w-3" />
+              <span>Overdue: {summary.overdue_tasks}</span>
+            </div>
+          )}
+
+          {summary.active_timer && (
+            <div
+              className="flex cursor-default items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-400 dark:ring-amber-900"
+              title={`Timer active: ${summary.active_timer}`}
+            >
+              <Flame className="h-3 w-3" />
+              <span className="max-w-[120px] truncate">Tracking: {summary.active_timer}</span>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Refresh button */}
+      <button
+        onClick={onRefresh}
+        className="ml-auto flex items-center rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+        title="Refresh context"
+        aria-label="Refresh AI context"
+      >
+        <RefreshCw className="h-3 w-3" />
+      </button>
+    </div>
+  )
+})
+ContextPill.displayName = 'ContextPill'
+
 const TypingIndicator = () => (
   <div className="flex items-center space-x-1 p-4">
     <div className="flex space-x-1">
@@ -1082,32 +1207,57 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const [userAvatar, setUserAvatar] = useState<string>('')
   const [communicationStyle, setCommunicationStyle] = useState<string>('Direct')
 
-  const starterCapabilities = useMemo(() => [
-    {
-      title: 'Smart Routing',
-      description: 'I connect you to the right coach automatically.',
-    },
-    {
-      title: 'Remembers You',
-      description: 'I recall your goals and preferences.',
-    },
-    {
-      title: 'Action Plans',
-      description: 'I turn big goals into doable steps.',
-    },
-  ], [])
+  // Chat context summary state
+  const [chatContextSummary, setChatContextSummary] = useState<ChatContextSummary | null>(null)
+  const [contextSummaryLoading, setContextSummaryLoading] = useState<boolean>(true)
 
-  const starterTasks = useMemo(() => [
-    'Plan tomorrow\'s top 3 priorities',
-    'Block focused work time',
-    'Prepare weekly meal plan and grocery list',
-  ], [])
+  // Derive first name from profile role string or a name field
+  const firstName = useMemo(() => {
+    if (!userProfile) return ''
+    const nameField =
+      userProfile.name ||
+      userProfile.firstName ||
+      userProfile.first_name ||
+      (typeof userProfile.role === 'string' ? userProfile.role.split(' ')[0] : '') ||
+      ''
+    return typeof nameField === 'string' ? nameField.trim() : ''
+  }, [userProfile])
 
-  const starterHabits = useMemo(() => [
-    'Build a consistent morning routine',
-    'Track a daily health habit',
-    'Add movement to your day',
-  ], [])
+  // Time-based greeting
+  const greeting = useMemo(() => {
+    const hour = new Date().getHours()
+    if (hour < 12) return 'Good morning'
+    if (hour < 17) return 'Good afternoon'
+    return 'Good evening'
+  }, [])
+
+  // Smart jump-back-in actions derived from real context
+  const jumpBackInActions = useMemo(() => {
+    const actions: Array<{ label: string; message: string; isPrimary?: boolean }> = [
+      { label: 'What should I focus on?', message: 'What should I focus on right now?', isPrimary: true },
+    ]
+    if (chatContextSummary) {
+      if (chatContextSummary.habits_pending > 0) {
+        actions.push({
+          label: `Check in on habits (${chatContextSummary.habits_pending} remaining)`,
+          message: `I have ${chatContextSummary.habits_pending} habit${chatContextSummary.habits_pending !== 1 ? 's' : ''} pending today. Help me check in on them.`,
+        })
+      }
+      if (chatContextSummary.overdue_tasks > 0) {
+        actions.push({
+          label: `${chatContextSummary.overdue_tasks} overdue task${chatContextSummary.overdue_tasks !== 1 ? 's' : ''} — help me tackle them`,
+          message: `I have ${chatContextSummary.overdue_tasks} overdue task${chatContextSummary.overdue_tasks !== 1 ? 's' : ''}. Help me prioritize and tackle them.`,
+        })
+      }
+      if (chatContextSummary.active_timer) {
+        actions.push({
+          label: `Log time for ${chatContextSummary.active_timer}`,
+          message: `I'm currently tracking time for "${chatContextSummary.active_timer}". Help me wrap up this session.`,
+        })
+      }
+    }
+    return actions
+  }, [chatContextSummary])
 
   // Load user profile callback
   const loadProfile = useCallback(async () => {
@@ -1146,6 +1296,31 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   useEffect(() => {
     void loadProfile();
   }, [loadProfile]);
+
+  // Load chat context summary
+  const loadContextSummary = useCallback(async () => {
+    setContextSummaryLoading(true)
+    try {
+      const res = await fetch('/api/knowledge/chat-context-summary', {
+        headers: { 'Accept': 'application/json' },
+      })
+      if (res.ok) {
+        const data = await res.json() as ChatContextSummary
+        setChatContextSummary(data)
+      }
+    } catch {
+      // silently fail — pill shows "Context loading..." state
+    } finally {
+      setContextSummaryLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadContextSummary()
+    // Refresh every 5 minutes
+    const interval = setInterval(() => { void loadContextSummary() }, 5 * 60 * 1000)
+    return () => clearInterval(interval)
+  }, [loadContextSummary])
 
   const scrollToBottom = () => {
     if (messagesContainerRef.current) {
@@ -1231,62 +1406,155 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className="flex h-full flex-col items-center justify-center p-8 text-center"
+              className="flex h-full flex-col items-start justify-start gap-4 overflow-y-auto p-6"
             >
-              <div className="floating-animation mb-4 flex h-16 w-16 items-center justify-center rounded-3xl bg-gradient-to-br from-teal-700 via-cyan-600 to-amber-500 shadow-lg shadow-cyan-500/30">
-                <Sparkles className="w-8 h-8 text-white" />
-              </div>
-              <h3 className="mb-2 text-xl font-semibold">Start a conversation</h3>
-              <p className="max-w-md text-muted-foreground">
-                Ask me anything—I'll connect you to the right expertise.
-              </p>
-              <div className="mt-6 grid w-full max-w-3xl gap-3 sm:grid-cols-3">
-                {starterCapabilities.map((item) => (
-                  <div
-                    key={item.title}
-                    className="rounded-2xl border border-border/70 bg-white/70 p-3 text-left shadow-sm backdrop-blur-lg dark:bg-slate-900/65"
-                  >
-                    <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{item.title}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">{item.description}</p>
-                  </div>
-                ))}
-              </div>
-
-              <div className="mt-6 grid w-full max-w-3xl gap-3 text-left sm:grid-cols-2">
-                <div className="rounded-2xl border border-border/70 bg-white/75 p-4 shadow-sm backdrop-blur-lg dark:bg-slate-900/65">
-                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Sample Tasks</p>
-                  <ul className="mt-2 space-y-2 text-xs text-muted-foreground">
-                    {starterTasks.map((task) => (
-                      <li key={task} className="flex items-start gap-2">
-                        <span className="mt-[2px] h-1.5 w-1.5 rounded-full bg-teal-500" />
-                        <button
-                          type="button"
-                          onClick={() => setInputValue(`Add task: ${task}`)}
-                          className="text-left transition-colors hover:text-teal-700 dark:hover:text-teal-300"
-                        >
-                          {task}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
+              {/* Header row */}
+              <div className="flex w-full max-w-2xl items-center gap-4">
+                <div className={cn(
+                  "flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl shadow-md",
+                  userAvatar ? "overflow-hidden border border-border/50 bg-transparent" : "bg-gradient-to-br from-teal-700 via-cyan-600 to-amber-500"
+                )}>
+                  {userAvatar ? (
+                    <img src={userAvatar} alt="Coach" className="h-full w-full object-cover" />
+                  ) : (
+                    <Sparkles className="h-7 w-7 text-white" />
+                  )}
                 </div>
+                <div>
+                  <h2 className="text-xl font-bold text-slate-900 dark:text-slate-100">
+                    {greeting}{firstName ? `, ${firstName}` : ''}!
+                  </h2>
+                  <p className="text-sm text-muted-foreground">Here's where things stand today</p>
+                </div>
+              </div>
 
-                <div className="rounded-2xl border border-border/70 bg-white/75 p-4 shadow-sm backdrop-blur-lg dark:bg-slate-900/65">
-                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">Sample Habits</p>
-                  <ul className="mt-2 space-y-2 text-xs text-muted-foreground">
-                    {starterHabits.map((habit) => (
-                      <li key={habit} className="flex items-start gap-2">
-                        <span className="mt-[2px] h-1.5 w-1.5 rounded-full bg-amber-500" />
-                        <button
-                          type="button"
-                          onClick={() => setInputValue(`Track habit: ${habit}`)}
-                          className="text-left transition-colors hover:text-amber-700 dark:hover:text-amber-300"
-                        >
-                          {habit}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
+              {/* Stats row */}
+              {contextSummaryLoading ? (
+                <div className="grid w-full max-w-2xl grid-cols-3 gap-3">
+                  {[0, 1, 2].map((i) => (
+                    <div key={i} className="h-20 animate-pulse rounded-2xl bg-gray-100 dark:bg-slate-800" />
+                  ))}
+                </div>
+              ) : chatContextSummary && (chatContextSummary.tasks_count > 0 || chatContextSummary.habits_total > 0 || chatContextSummary.goals_count > 0) ? (
+                <div className="grid w-full max-w-2xl grid-cols-3 gap-3">
+                  {/* Tasks card */}
+                  <div className="rounded-2xl border border-border/70 bg-white/75 p-3 shadow-sm backdrop-blur-lg dark:bg-slate-900/65">
+                    <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                      <ListTodo className="h-3.5 w-3.5 text-blue-500" />
+                      Tasks
+                    </div>
+                    <p className="mt-1 text-2xl font-bold text-slate-900 dark:text-slate-100">{chatContextSummary.tasks_count}</p>
+                    <p className="text-xs text-muted-foreground">active</p>
+                    {chatContextSummary.overdue_tasks > 0 && (
+                      <p className="mt-1 flex items-center gap-1 text-xs font-medium text-red-600 dark:text-red-400">
+                        <AlertCircle className="h-3 w-3" />
+                        {chatContextSummary.overdue_tasks} overdue
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Habits card */}
+                  <div className="rounded-2xl border border-border/70 bg-white/75 p-3 shadow-sm backdrop-blur-lg dark:bg-slate-900/65">
+                    <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                      <Leaf className="h-3.5 w-3.5 text-green-500" />
+                      Habits
+                    </div>
+                    <p className="mt-1 text-2xl font-bold text-slate-900 dark:text-slate-100">
+                      {chatContextSummary.habits_total - chatContextSummary.habits_pending}
+                      <span className="text-base font-normal text-muted-foreground">/{chatContextSummary.habits_total}</span>
+                    </p>
+                    <p className="text-xs text-muted-foreground">done today</p>
+                    {chatContextSummary.habits_pending > 0 && (
+                      <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">{chatContextSummary.habits_pending} pending</p>
+                    )}
+                  </div>
+
+                  {/* Goals card */}
+                  <div className="rounded-2xl border border-border/70 bg-white/75 p-3 shadow-sm backdrop-blur-lg dark:bg-slate-900/65">
+                    <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                      <Target className="h-3.5 w-3.5 text-violet-500" />
+                      Goals
+                    </div>
+                    <p className="mt-1 text-2xl font-bold text-slate-900 dark:text-slate-100">{chatContextSummary.goals_count}</p>
+                    <p className="text-xs text-muted-foreground">active</p>
+                    {chatContextSummary.active_timer && (
+                      <p className="mt-1 flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400 truncate">
+                        <Flame className="h-3 w-3 shrink-0" />
+                        <span className="truncate">{chatContextSummary.active_timer}</span>
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                !contextSummaryLoading && (
+                  <div className="w-full max-w-2xl rounded-2xl border border-dashed border-border/70 bg-white/50 p-4 text-center text-sm text-muted-foreground dark:bg-slate-900/40">
+                    Start by telling your coach about your goals for today.
+                  </div>
+                )
+              )}
+
+              {/* Jump back in */}
+              <div className="w-full max-w-2xl">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                  Jump back in
+                </p>
+                <div className="flex flex-col gap-2">
+                  {contextSummaryLoading ? (
+                    [0, 1, 2].map((i) => (
+                      <div key={i} className="h-9 animate-pulse rounded-xl bg-gray-100 dark:bg-slate-800" />
+                    ))
+                  ) : (
+                    jumpBackInActions.map((action) => (
+                      <button
+                        key={action.label}
+                        type="button"
+                        onClick={() => {
+                          setInputValue(action.message)
+                          setTimeout(() => {
+                            if (!isLoading) {
+                              onSendMessage?.(action.message)
+                              setInputValue('')
+                            }
+                          }, 80)
+                        }}
+                        className={cn(
+                          "w-full rounded-xl px-4 py-2.5 text-left text-sm font-medium transition-all",
+                          action.isPrimary
+                            ? "border border-teal-500/40 bg-teal-50 text-teal-800 hover:bg-teal-100 dark:border-teal-700/50 dark:bg-teal-950/40 dark:text-teal-200 dark:hover:bg-teal-950/70"
+                            : "border border-border/70 bg-white/75 text-slate-700 hover:border-teal-400/50 hover:bg-teal-50/50 dark:bg-slate-900/65 dark:text-slate-300 dark:hover:bg-slate-800/80"
+                        )}
+                      >
+                        {action.label}
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* Or start fresh */}
+              <div className="w-full max-w-2xl">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                  Or start fresh
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {['Plan my day', 'Health check-in', 'Quick win', 'Weekly review'].map((label) => (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={() => {
+                        setInputValue(label)
+                        setTimeout(() => {
+                          if (!isLoading) {
+                            onSendMessage?.(label)
+                            setInputValue('')
+                          }
+                        }, 80)
+                      }}
+                      className="rounded-full border border-border/70 bg-white/70 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:border-teal-400/50 hover:bg-teal-50/60 dark:bg-slate-900/60 dark:text-slate-400 dark:hover:bg-teal-950/30"
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
               </div>
             </motion.div>

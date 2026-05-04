@@ -25,7 +25,7 @@ import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { cn } from '@/lib/utils'
+import { cn, formatMinutesToHoursMinutes } from '@/lib/utils'
 import { getAgenticBridgeUserKey } from '@/lib/agenticBridgeSession'
 
 interface KnowledgeEntry {
@@ -202,20 +202,7 @@ const formatDurationMinutes = (value: unknown): string | null => {
   if (!Number.isFinite(numericValue) || numericValue <= 0) {
     return null
   }
-
-  const roundedMinutes = Math.round(numericValue)
-  const hours = Math.floor(roundedMinutes / 60)
-  const minutes = roundedMinutes % 60
-
-  if (hours > 0 && minutes > 0) {
-    return `${hours} hour${hours === 1 ? '' : 's'} ${minutes} minute${minutes === 1 ? '' : 's'}`
-  }
-
-  if (hours > 0) {
-    return `${hours} hour${hours === 1 ? '' : 's'}`
-  }
-
-  return `${minutes} minute${minutes === 1 ? '' : 's'}`
+  return formatMinutesToHoursMinutes(numericValue)
 }
 
 const parseTimestamp = (value: string | null | undefined): Date | null => {

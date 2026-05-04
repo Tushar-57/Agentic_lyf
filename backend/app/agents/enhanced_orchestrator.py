@@ -539,6 +539,97 @@ You are the intelligent coordinator that makes the AI ecosystem greater than the
         result["method"] = f"{result.get('method', 'unknown')}_policy"
         return result
 
+    def _format_chat_context_sections(self, chat_context: Optional[Dict[str, Any]]) -> str:
+        """Render structured tasks/habits/goals/today sections for system-prompt injection."""
+        if not isinstance(chat_context, dict) or not chat_context:
+            return ""
+
+        sections: List[str] = []
+
+        active_tasks = chat_context.get("active_tasks") or []
+        if isinstance(active_tasks, list) and active_tasks:
+            task_lines: List[str] = []
+            for task in active_tasks[:10]:
+                if not isinstance(task, dict):
+                    continue
+                title = str(task.get("title", "")).strip() or "(untitled)"
+                status = str(task.get("status", "")).strip() or "open"
+                due = task.get("due_date") or "no due date"
+                priority = task.get("priority")
+                priority_part = f", priority {priority}" if priority else ""
+                task_lines.append(f"- {title} [{status}, due {due}{priority_part}]")
+            if task_lines:
+                sections.append("## Current Tasks (Top 10 Active)\n" + "\n".join(task_lines))
+
+        habits = chat_context.get("habits") or {}
+        if isinstance(habits, dict) and habits:
+            current_run = habits.get("current_run", 0)
+            n_completed = habits.get("n_completed", 0)
+            n_total = habits.get("n_total", 0)
+            pending = habits.get("pending_names", []) or []
+            pending_text = ", ".join(pending) if pending else "none"
+            completion_rate = habits.get("completionRate7d")
+            rate_part = f" — 7d rate {completion_rate}%" if completion_rate is not None else ""
+            sections.append(
+                "## Habits Today\n"
+                f"- Streak: {current_run} days{rate_part}\n"
+                f"- Today: {n_completed}/{n_total} done — pending: {pending_text}"
+            )
+
+        goals = chat_context.get("goals") or []
+        if isinstance(goals, list) and goals:
+            goal_lines: List[str] = []
+            for goal in goals[:8]:
+                if not isinstance(goal, dict):
+                    continue
+                title = str(goal.get("title", "")).strip() or "(untitled)"
+                progress = goal.get("progress_percent")
+                progress_part = f"{progress}%" if progress is not None else "?%"
+                end_date = goal.get("end_date") or "no end date"
+                days_left = goal.get("days_until_deadline")
+                days_part = f" ({days_left} days)" if isinstance(days_left, int) else ""
+                goal_lines.append(f"- {title} — {progress_part} — due {end_date}{days_part}")
+            if goal_lines:
+                sections.append("## Active Goals\n" + "\n".join(goal_lines))
+
+        today = chat_context.get("today_overview") or {}
+        if isinstance(today, dict) and today:
+            overdue = today.get("overdue_tasks", 0)
+            due_today = today.get("due_today_tasks", 0)
+            habits_pending = today.get("habits_pending", 0)
+            active_timer = today.get("active_timer") or "nothing"
+            sections.append(
+                "## Today So Far\n"
+                f"- Overdue: {overdue}, Due today: {due_today}, Habits pending: {habits_pending}\n"
+                f"- Currently tracking: {active_timer}"
+            )
+
+        focus_areas = chat_context.get("focus_areas") or {}
+        if isinstance(focus_areas, dict):
+            priorities = focus_areas.get("priorities") or []
+            domain_prefs = focus_areas.get("domainPreferences") or {}
+            if priorities or domain_prefs:
+                pri_text = ", ".join(priorities) if priorities else "none"
+                domain_text = (
+                    ", ".join(f"{k}={v}" for k, v in list(domain_prefs.items())[:6])
+                    if isinstance(domain_prefs, dict) and domain_prefs
+                    else ""
+                )
+                section = f"## Focus Areas\n- Priorities: {pri_text}"
+                if domain_text:
+                    section += f"\n- Domain preferences: {domain_text}"
+                sections.append(section)
+
+        return "\n\n".join(sections)
+
+    def _compose_runtime_system_prompt(self, context: Dict[str, Any]) -> str:
+        """Wrap the static system prompt with injected user-state sections."""
+        chat_context = context.get("chat_context_payload") if isinstance(context, dict) else None
+        injected = self._format_chat_context_sections(chat_context)
+        if not injected:
+            return self.system_prompt
+        return f"{self.system_prompt}\n\n# Live User State\n\n{injected}"
+
     def _compose_guided_user_prompt(self, user_input: str, context: Dict[str, Any]) -> str:
         """Compose a context-aware prompt for direct/simple responses."""
         profile_snapshot = context.get("profile_snapshot", {}) if isinstance(context.get("profile_snapshot"), dict) else {}
@@ -571,7 +662,7 @@ Knowledge summary:
 
 Response contract:
 1. Align tone with coach style guidance.
-2. Provide concrete, immediate value (not generic motivation).
+2. Provide concrete, immediate value grounded in the live user state above (tasks, habits, goals, today overview).
 3. Keep it concise and structured.
 4. End with one practical next action.
 """.strip()
@@ -637,6 +728,18 @@ Response contract:
                 routing_context["profile_snapshot"] = profile_snapshot
             if coach_profile:
                 routing_context["coach_profile"] = coach_profile
+
+            # Load structured chat-context (tasks/habits/goals/focus/today overview)
+            try:
+                chat_context_payload = await self.knowledge_base.build_chat_context_payload()
+                if isinstance(chat_context_payload, dict):
+                    routing_context["chat_context_payload"] = chat_context_payload
+            except Exception as chat_ctx_error:
+                logger.warning(
+                    "chat_context_payload_failed",
+                    f"Failed to build chat context payload: {chat_ctx_error}",
+                    {"error": str(chat_ctx_error)},
+                )
 
             intent_blueprint = self._derive_intent_blueprint(user_input, profile_snapshot)
             routing_context["intent_blueprint"] = intent_blueprint
@@ -726,6 +829,16 @@ Response contract:
                 "result": response_preview or "No response body returned.",
             }
 
+            # Collect knowledge sources from the general_context retrieved earlier
+            knowledge_results = general_context.get("results") or general_context.get("knowledge_results") or []
+            # Also check for semantic_results key used by some code paths
+            if not knowledge_results and isinstance(general_context, dict):
+                for key in ("semantic_results", "combined_results", "context_entries"):
+                    candidate = general_context.get(key)
+                    if isinstance(candidate, list):
+                        knowledge_results = candidate
+                        break
+
             reasoning = {
                 "complexity": complexity.value,
                 "intent": intent_payload,
@@ -766,6 +879,16 @@ Response contract:
                         }
                         for path_step in execution_path
                     ],
+                ],
+                "knowledge_sources": [
+                    {
+                        "type": entry.get("category", "knowledge") if isinstance(entry, dict) else "knowledge",
+                        "content": (entry.get("content", "") if isinstance(entry, dict) else str(entry))[:200],
+                        "similarity": entry.get("similarity_score") if isinstance(entry, dict) else None,
+                        "category": entry.get("category") if isinstance(entry, dict) else None,
+                        "created_at": entry.get("created_at") if isinstance(entry, dict) else None,
+                    }
+                    for entry in (knowledge_results or [])[:5]
                 ],
             }
             
@@ -1390,20 +1513,21 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
             return {}
 
     async def _handle_simple_task(
-        self, 
-        user_input: str, 
-        context: Dict[str, Any], 
+        self,
+        user_input: str,
+        context: Dict[str, Any],
         deep_state: DeepAgentState
     ) -> str:
         """Handle simple tasks directly without delegation."""
         try:
             # Use LLM service directly for simple responses
             guided_prompt = self._compose_guided_user_prompt(user_input, context or {})
+            runtime_system_prompt = self._compose_runtime_system_prompt(context or {})
             messages = [
-                ChatMessage(role="system", content=self.system_prompt),
+                ChatMessage(role="system", content=runtime_system_prompt),
                 ChatMessage(role="user", content=guided_prompt)
             ]
-            
+
             request = CompletionRequest(
                 messages=messages,
                 max_tokens=340,

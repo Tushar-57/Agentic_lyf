@@ -51,7 +51,7 @@ import { Card } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
+import { cn, formatMinutesToHoursMinutes } from '@/lib/utils'
 
 // CSS class names for premium checkup rendered HTML content
 const PREMIUM_CHECKUP_HTML_CLASSNAMES = 'prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed text-foreground'
@@ -80,6 +80,16 @@ interface AnalyticsData {
     time_entry_records: number
     time_entry_billable_records: number
     avg_time_entry_minutes: number
+    time_entry_total_minutes: number
+    time_entry_count: number
+    time_entry_daily?: Array<{ date: string; total_minutes: number; count: number }>
+    habit_metrics?: {
+      total_habits: number
+      completed_today: number
+      completion_rate_7d: number
+      current_streak: number
+      longest_streak: number
+    }
   }
 }
 
@@ -357,22 +367,9 @@ const formatCheckupTime = (checkupDate: string | undefined) => {
 const formatMinutesLabel = (value: unknown): string => {
   const numericValue = Number(value)
   if (!Number.isFinite(numericValue) || numericValue <= 0) {
-    return '0 minutes'
+    return '0m'
   }
-
-  const roundedMinutes = Math.round(numericValue)
-  const hours = Math.floor(roundedMinutes / 60)
-  const minutes = roundedMinutes % 60
-
-  if (hours > 0 && minutes > 0) {
-    return `${hours} hour${hours === 1 ? '' : 's'} ${minutes} minute${minutes === 1 ? '' : 's'}`
-  }
-
-  if (hours > 0) {
-    return `${hours} hour${hours === 1 ? '' : 's'}`
-  }
-
-  return `${minutes} minute${minutes === 1 ? '' : 's'}`
+  return formatMinutesToHoursMinutes(numericValue)
 }
 
 const stripHtmlTags = (value?: string) => {
@@ -624,6 +621,11 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
   const [profileData, setProfileData] = useState<OnboardingProfileData | null>(null)
   const [morningForm, setMorningForm] = useState<CheckupFormState>(() => createInitialCheckupForm())
   const [eveningForm, setEveningForm] = useState<CheckupFormState>(() => createInitialCheckupForm())
+  const [habitMetrics, setHabitMetrics] = useState<{
+    totalHabits: number
+    completedToday: number
+    completionRate7d: number | null
+  }>({ totalHabits: 0, completedToday: 0, completionRate7d: null })
   const [aiNotifications, setAiNotifications] = useState<AINotification[]>([])
   const [notificationsError, setNotificationsError] = useState<string | null>(null)
   const [notificationsPersistenceEnabled, setNotificationsPersistenceEnabled] = useState(false)
@@ -978,6 +980,128 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     }
   }
 
+  const loadHabitMetrics = async (): Promise<void> => {
+    // Today's local date key (re-derived here so this helper has no React deps)
+    const now = new Date()
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+
+    const applyMetrics = (raw: Record<string, unknown> | null | undefined) => {
+      if (!raw || typeof raw !== 'object') {
+        return false
+      }
+
+      const summary = (raw.summary && typeof raw.summary === 'object'
+        ? (raw.summary as Record<string, unknown>)
+        : raw) as Record<string, unknown>
+
+      const totalHabits = toFiniteNumber(summary.totalHabits ?? summary.total_habits ?? raw.totalHabits ?? raw.total_habits, NaN)
+
+      const dailyCounts = (summary.dailyCompletionCounts
+        || summary.daily_completion_counts
+        || raw.dailyCompletionCounts
+        || raw.daily_completion_counts) as Record<string, unknown> | undefined
+      let completedToday = NaN
+      if (dailyCounts && typeof dailyCounts === 'object') {
+        completedToday = toFiniteNumber(dailyCounts[today], NaN)
+      }
+      if (!Number.isFinite(completedToday)) {
+        completedToday = toFiniteNumber(
+          summary.completedToday
+          ?? summary.completed_today
+          ?? raw.completedToday
+          ?? raw.completed_today,
+          NaN,
+        )
+      }
+
+      const rate7d = toFiniteNumber(
+        summary.completionRate7d
+        ?? summary.completion_rate_7d
+        ?? raw.completionRate7d
+        ?? raw.completion_rate_7d,
+        NaN,
+      )
+
+      if (!Number.isFinite(totalHabits) && !Number.isFinite(completedToday)) {
+        return false
+      }
+
+      setHabitMetrics({
+        totalHabits: Math.max(0, Number.isFinite(totalHabits) ? Math.round(totalHabits) : 0),
+        completedToday: Math.max(0, Number.isFinite(completedToday) ? Math.round(completedToday) : 0),
+        completionRate7d: Number.isFinite(rate7d) ? Math.max(0, Math.min(100, rate7d)) : null,
+      })
+      return true
+    }
+
+    // 1) Try analytics endpoint first — it might already expose habit_metrics.
+    try {
+      const analyticsResponse = await fetch(`/api/knowledge/analytics?range=30d`)
+      if (analyticsResponse.ok) {
+        const analyticsPayload = await analyticsResponse.json()
+        const habitBlock =
+          analyticsPayload?.habit_metrics
+          ?? analyticsPayload?.insights?.habit_metrics
+          ?? analyticsPayload?.habits
+        if (applyMetrics(habitBlock as Record<string, unknown> | null | undefined)) {
+          return
+        }
+      }
+    } catch (error) {
+      console.warn('Habit metrics: analytics endpoint failed, falling back to entries:', error)
+    }
+
+    // 2) Fall back to the latest habit_snapshot knowledge entry.
+    try {
+      const entriesResponse = await fetch('/api/knowledge/entries?category=habit_snapshot&limit=1')
+      if (!entriesResponse.ok) {
+        throw new Error(`habit_snapshot request failed with status ${entriesResponse.status}`)
+      }
+      const entriesPayload = await entriesResponse.json()
+      const list: unknown[] = Array.isArray(entriesPayload)
+        ? entriesPayload
+        : Array.isArray(entriesPayload?.entries)
+          ? entriesPayload.entries
+          : Array.isArray(entriesPayload?.results)
+            ? entriesPayload.results
+            : []
+      const latest = list[0]
+      if (latest && typeof latest === 'object') {
+        const record = latest as Record<string, unknown>
+        const metadata = (record.metadata && typeof record.metadata === 'object'
+          ? record.metadata
+          : {}) as Record<string, unknown>
+        const context = (metadata.context && typeof metadata.context === 'object'
+          ? metadata.context
+          : {}) as Record<string, unknown>
+
+        // Try parsing the entry content as JSON if structured habit data was stored there.
+        let parsedContent: Record<string, unknown> | null = null
+        if (typeof record.content === 'string') {
+          try {
+            const candidate = JSON.parse(record.content)
+            if (candidate && typeof candidate === 'object') {
+              parsedContent = candidate as Record<string, unknown>
+            }
+          } catch {
+            // content was not JSON — ignore.
+          }
+        }
+
+        for (const candidate of [parsedContent, context, metadata, record]) {
+          if (applyMetrics(candidate as Record<string, unknown> | null)) {
+            return
+          }
+        }
+      }
+    } catch (error) {
+      console.warn('Habit metrics: snapshot fallback failed, defaulting to 0/0:', error)
+    }
+
+    // 3) Default — keep prior state, but ensure we never block the UI.
+    setHabitMetrics((previous) => previous)
+  }
+
   const loadAnalyticsData = async (options?: { silent?: boolean }) => {
     const shouldToggleLoading = !options?.silent
     if (shouldToggleLoading) {
@@ -1062,10 +1186,21 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
           time_entry_records: Math.max(0, toFiniteNumber(data.insights?.time_entry_records, 0)),
           time_entry_billable_records: Math.max(0, toFiniteNumber(data.insights?.time_entry_billable_records, 0)),
           avg_time_entry_minutes: Math.max(0, toFiniteNumber(data.insights?.avg_time_entry_minutes, 0)),
+          time_entry_total_minutes: Math.max(0, toFiniteNumber(data.insights?.time_entry_total_minutes, 0)),
+          time_entry_count: Math.max(0, toFiniteNumber(data.insights?.time_entry_count, 0)),
+          time_entry_daily: Array.isArray(data.insights?.time_entry_daily)
+            ? data.insights.time_entry_daily.map((entry: Record<string, unknown>) => ({
+                date: toDisplayLabel(entry?.date, ''),
+                total_minutes: Math.max(0, toFiniteNumber(entry?.total_minutes, 0)),
+                count: Math.max(0, toFiniteNumber(entry?.count, 0)),
+              }))
+            : undefined,
         },
       }
 
       setAnalyticsData(normalizedData)
+      // Habit metrics live alongside analytics — fetch them in the background.
+      void loadHabitMetrics()
     } catch (error) {
       console.error('Failed to load analytics data:', error)
       setAnalyticsData(null)
@@ -1287,9 +1422,33 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
     const fallbackRecent = [...dailyEntries].reverse().find((entry) => entry.date.slice(0, 10) < todayDateKey)
     const baselineEntry = exactYesterday || fallbackRecent || null
 
+    // interactions is the chat-interaction count for yesterday — kept for display only.
+    // It MUST NOT be used as a proxy for focused work time.
     const interactions = baselineEntry ? toFiniteNumber(baselineEntry.count, 0) : 0
-    const avgSessionMinutes = Math.max(0, toFiniteNumber(analyticsData.insights.avg_time_entry_minutes, 0))
-    const estimatedFocusedMinutes = Math.round(interactions * avgSessionMinutes)
+
+    // Prefer per-day breakdown if backend provides one (`insights.time_entry_daily`).
+    // Otherwise fall back to the aggregate totals as a best-effort estimate.
+    // TODO: When the backend exposes a daily time_entry breakdown, scope this strictly
+    // to `yesterdayKey` only. Until then, the aggregate range total is the closest signal.
+    const dailyTimeEntries = analyticsData.insights.time_entry_daily
+    let totalTrackedMinutes = 0
+    let sessionCount = 0
+    if (Array.isArray(dailyTimeEntries) && dailyTimeEntries.length > 0) {
+      const yesterdayBucket =
+        dailyTimeEntries.find((entry) => entry.date.slice(0, 10) === yesterdayKey)
+        || [...dailyTimeEntries].reverse().find((entry) => entry.date.slice(0, 10) < todayDateKey)
+      if (yesterdayBucket) {
+        totalTrackedMinutes = Math.max(0, toFiniteNumber(yesterdayBucket.total_minutes, 0))
+        sessionCount = Math.max(0, toFiniteNumber(yesterdayBucket.count, 0))
+      }
+    } else {
+      totalTrackedMinutes = Math.max(0, toFiniteNumber(analyticsData.insights.time_entry_total_minutes, 0))
+      sessionCount = Math.max(0, toFiniteNumber(analyticsData.insights.time_entry_count, 0))
+    }
+
+    const avgSessionMinutes = sessionCount > 0 ? totalTrackedMinutes / sessionCount : 0
+    // Cap at one day's worth of minutes to keep downstream math sane.
+    const estimatedFocusedMinutes = Math.min(totalTrackedMinutes, 1440)
 
     return {
       interactions,
@@ -1325,9 +1484,11 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       return {
         ...previous,
         topPriority: goalDeadlineSummary.topGoals[0] || '',
-        plannedDeepWorkMinutes: Math.max(90, Math.round(yesterdaySnapshot.estimatedFocusedMinutes || 120)),
-        totalEstimatedMinutes: Math.max(120, Math.round(yesterdaySnapshot.estimatedFocusedMinutes || 120)),
-        totalTimeSpentMinutes: Math.max(0, yesterdaySnapshot.estimatedFocusedMinutes),
+        plannedDeepWorkMinutes: Math.max(90, Math.min(480, Math.round(yesterdaySnapshot.estimatedFocusedMinutes || 120))),
+        totalEstimatedMinutes: Math.max(120, Math.min(1440, Math.round(yesterdaySnapshot.estimatedFocusedMinutes || 120))),
+        totalTimeSpentMinutes: Math.max(0, Math.min(1440, yesterdaySnapshot.estimatedFocusedMinutes)),
+        habitsTotal: Math.max(previous.habitsTotal, habitMetrics.totalHabits),
+        habitsCompletedToday: Math.max(previous.habitsCompletedToday, habitMetrics.completedToday),
       }
     })
 
@@ -1341,10 +1502,47 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       return {
         ...previous,
         focusTaskOne: goalDeadlineSummary.topGoals[0] || '',
-        totalEstimatedMinutes: Math.max(120, Math.round(yesterdaySnapshot.estimatedFocusedMinutes || 120)),
+        totalEstimatedMinutes: Math.max(120, Math.min(1440, Math.round(yesterdaySnapshot.estimatedFocusedMinutes || 120))),
+        habitsTotal: Math.max(previous.habitsTotal, habitMetrics.totalHabits),
+        habitsCompletedToday: Math.max(previous.habitsCompletedToday, habitMetrics.completedToday),
       }
     })
-  }, [analyticsData, goalDeadlineSummary.topGoals, yesterdaySnapshot.estimatedFocusedMinutes])
+  }, [
+    analyticsData,
+    goalDeadlineSummary.topGoals,
+    yesterdaySnapshot.estimatedFocusedMinutes,
+    habitMetrics.totalHabits,
+    habitMetrics.completedToday,
+  ])
+
+  // Habit metrics may arrive after the initial form sync (separate fetch).
+  // Backfill the form whenever the backend reports values and the user has
+  // not yet entered their own.
+  useEffect(() => {
+    if (habitMetrics.totalHabits === 0 && habitMetrics.completedToday === 0) {
+      return
+    }
+    setMorningForm((previous) => {
+      if (previous.habitsTotal !== 0 || previous.habitsCompletedToday !== 0) {
+        return previous
+      }
+      return {
+        ...previous,
+        habitsTotal: habitMetrics.totalHabits,
+        habitsCompletedToday: habitMetrics.completedToday,
+      }
+    })
+    setEveningForm((previous) => {
+      if (previous.habitsTotal !== 0 || previous.habitsCompletedToday !== 0) {
+        return previous
+      }
+      return {
+        ...previous,
+        habitsTotal: habitMetrics.totalHabits,
+        habitsCompletedToday: habitMetrics.completedToday,
+      }
+    })
+  }, [habitMetrics.totalHabits, habitMetrics.completedToday])
 
   const openCheckupFlow = (flow: 'morning' | 'evening') => {
     setActiveCheckupFlow(flow)
@@ -1434,9 +1632,18 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       ? Number((spentMinutes / estimatedMinutes).toFixed(2))
       : 0
 
-    const habitCompletionRate7d = form.habitsTotal > 0
+    // Today's completion rate — derived strictly from today's totals.
+    const habitCompletionRateToday = form.habitsTotal > 0
       ? Number(((form.habitsCompletedToday / form.habitsTotal) * 100).toFixed(1))
       : 0
+
+    // 7-day rolling completion rate — sourced from the latest habit_snapshot
+    // when available, falling back to today's rate if the backend hasn't
+    // produced a 7d aggregate yet.
+    const backendRate7d = habitMetrics.completionRate7d
+    const habitCompletionRate7d = backendRate7d !== null && Number.isFinite(backendRate7d)
+      ? Number(backendRate7d.toFixed(1))
+      : habitCompletionRateToday
 
     const contextSnapshot = {
       priorityFocus: form.topPriority.trim(),
@@ -1458,6 +1665,10 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
       habitMetrics: {
         totalHabits: Math.max(0, toFiniteNumber(form.habitsTotal, 0)),
         completedToday: Math.max(0, toFiniteNumber(form.habitsCompletedToday, 0)),
+        habitCompletionRateToday: Math.max(0, Math.min(100, habitCompletionRateToday)),
+        habitCompletionRate7d: Math.max(0, Math.min(100, habitCompletionRate7d)),
+        // Kept under the legacy key for backward compatibility with consumers
+        // that still read `completionRate7d` from this payload.
         completionRate7d: Math.max(0, Math.min(100, habitCompletionRate7d)),
       },
       timeMetrics: {
@@ -1625,6 +1836,56 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                 ? 'In Progress Today'
                 : 'Not Started Today'}
           </Badge>
+        </div>
+
+        {/* At-a-glance stat strip — auto-populated from tracker data */}
+        <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="flex flex-col rounded-xl border border-border/60 bg-white/70 px-3 py-2 dark:bg-slate-900/60">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Yesterday Tracked</span>
+            <span className="mt-0.5 text-base font-bold text-foreground">
+              {yesterdaySnapshot.estimatedFocusedMinutes > 0
+                ? formatMinutesLabel(yesterdaySnapshot.estimatedFocusedMinutes)
+                : '—'}
+            </span>
+            <span className="text-[10px] text-muted-foreground">from time tracker</span>
+          </div>
+          <div className="flex flex-col rounded-xl border border-border/60 bg-white/70 px-3 py-2 dark:bg-slate-900/60">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Habits Today</span>
+            <span className="mt-0.5 text-base font-bold text-foreground">
+              {habitMetrics.totalHabits > 0
+                ? `${habitMetrics.completedToday}/${habitMetrics.totalHabits}`
+                : '—'}
+            </span>
+            <span className="text-[10px] text-muted-foreground">
+              {habitMetrics.totalHabits > 0
+                ? `${Math.round((habitMetrics.completedToday / habitMetrics.totalHabits) * 100)}% done`
+                : 'sync needed'}
+            </span>
+          </div>
+          <div className="flex flex-col rounded-xl border border-border/60 bg-white/70 px-3 py-2 dark:bg-slate-900/60">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Goals Active</span>
+            <span className="mt-0.5 text-base font-bold text-foreground">
+              {goalDeadlineSummary.topGoals.length > 0 ? goalDeadlineSummary.topGoals.length : '—'}
+            </span>
+            <span className="text-[10px] text-muted-foreground">
+              {goalDeadlineSummary.overdue > 0
+                ? `${goalDeadlineSummary.overdue} overdue`
+                : goalDeadlineSummary.dueToday > 0
+                  ? `${goalDeadlineSummary.dueToday} due today`
+                  : goalDeadlineSummary.upcoming[0]
+                    ? `next in ${goalDeadlineSummary.upcoming[0].daysLeft}d`
+                    : 'no deadlines'}
+            </span>
+          </div>
+          <div className="flex flex-col rounded-xl border border-border/60 bg-white/70 px-3 py-2 dark:bg-slate-900/60">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Avg Session</span>
+            <span className="mt-0.5 text-base font-bold text-foreground">
+              {yesterdaySnapshot.avgSessionMinutes > 0
+                ? formatMinutesLabel(yesterdaySnapshot.avgSessionMinutes)
+                : '—'}
+            </span>
+            <span className="text-[10px] text-muted-foreground">per work block</span>
+          </div>
         </div>
 
         <div className="relative mb-4 rounded-2xl border border-border/70 bg-white/70 p-4 dark:bg-slate-900/65">
@@ -1808,16 +2069,20 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                         <div className="rounded-xl border border-border/70 bg-background/80 p-3">
                           <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                             <ClipboardCheck className="h-3.5 w-3.5" />
-                            Yesterday Snapshot
+                            Yesterday · from tracker
                           </p>
-                          <p className="text-sm font-semibold text-foreground">
-                            {yesterdaySnapshot.interactions} interactions logged
-                          </p>
+                          <div className="flex items-baseline gap-1">
+                            <p className="text-lg font-bold text-foreground">
+                              {formatMinutesLabel(yesterdaySnapshot.estimatedFocusedMinutes)}
+                            </p>
+                            <span className="text-xs text-muted-foreground">tracked</span>
+                          </div>
                           <p className="mt-1 text-xs text-muted-foreground">
-                            Estimated focused time: {formatMinutesLabel(yesterdaySnapshot.estimatedFocusedMinutes)}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            Avg session: {formatMinutesLabel(yesterdaySnapshot.avgSessionMinutes)}
+                            {yesterdaySnapshot.interactions > 0
+                              ? `${yesterdaySnapshot.interactions} sessions · avg ${formatMinutesLabel(yesterdaySnapshot.avgSessionMinutes)} each`
+                              : yesterdaySnapshot.avgSessionMinutes > 0
+                                ? `Avg session: ${formatMinutesLabel(yesterdaySnapshot.avgSessionMinutes)}`
+                                : 'No sessions logged yesterday'}
                           </p>
                         </div>
 
@@ -1868,23 +2133,46 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                           />
                         </label>
 
-                        <label className="space-y-1">
-                          <span className="text-xs font-medium text-muted-foreground">Planned Deep Work (minutes)</span>
-                          <input
-                            type="number"
-                            min={0}
-                            step={15}
-                            value={activeForm.plannedDeepWorkMinutes}
-                            onChange={(event) => {
-                              const parsed = Number(event.target.value)
-                              updateActiveFormField(
-                                'plannedDeepWorkMinutes',
-                                Number.isFinite(parsed) ? Math.max(0, parsed) : 0,
-                              )
-                            }}
-                            className="w-full rounded-lg border border-border/70 bg-background px-3 py-2 text-sm"
-                          />
-                        </label>
+                        <div className="space-y-1">
+                          <span className="text-xs font-medium text-muted-foreground">Planned Deep Work</span>
+                          <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="number"
+                                min={0}
+                                max={16}
+                                step={1}
+                                value={Math.floor(activeForm.plannedDeepWorkMinutes / 60)}
+                                onChange={(event) => {
+                                  const h = Math.max(0, Math.min(16, Number(event.target.value) || 0))
+                                  const m = activeForm.plannedDeepWorkMinutes % 60
+                                  updateActiveFormField('plannedDeepWorkMinutes', h * 60 + m)
+                                }}
+                                className="w-14 rounded-lg border border-border/70 bg-background px-2 py-2 text-center text-sm"
+                              />
+                              <span className="text-xs text-muted-foreground">h</span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="number"
+                                min={0}
+                                max={59}
+                                step={15}
+                                value={activeForm.plannedDeepWorkMinutes % 60}
+                                onChange={(event) => {
+                                  const m = Math.max(0, Math.min(59, Number(event.target.value) || 0))
+                                  const h = Math.floor(activeForm.plannedDeepWorkMinutes / 60)
+                                  updateActiveFormField('plannedDeepWorkMinutes', h * 60 + m)
+                                }}
+                                className="w-14 rounded-lg border border-border/70 bg-background px-2 py-2 text-center text-sm"
+                              />
+                              <span className="text-xs text-muted-foreground">m</span>
+                            </div>
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">
+                            = {formatMinutesToHoursMinutes(activeForm.plannedDeepWorkMinutes)} total focused work
+                          </p>
+                        </div>
 
                         <label className="space-y-1">
                           <span className="text-xs font-medium text-muted-foreground">
@@ -1999,6 +2287,9 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                                 }}
                                 className="w-full rounded-md border border-border/70 bg-background px-2 py-1.5 text-sm"
                               />
+                              <p className="text-[11px] text-muted-foreground">
+                                = {formatMinutesToHoursMinutes(activeForm.totalEstimatedMinutes)}
+                              </p>
                             </label>
                             <label className="space-y-1">
                               <span className="text-[11px] text-muted-foreground">Spent</span>
@@ -2016,55 +2307,50 @@ export const AnalyticsDashboard: React.FC<AnalyticsDashboardProps> = ({
                                 }}
                                 className="w-full rounded-md border border-border/70 bg-background px-2 py-1.5 text-sm"
                               />
+                              <p className="text-[11px] text-muted-foreground">
+                                = {formatMinutesToHoursMinutes(activeForm.totalTimeSpentMinutes)}
+                              </p>
                             </label>
                           </div>
                           <p className="mt-2 text-xs text-muted-foreground">
-                            Deep-work coverage: {Math.round(activeDeepWorkCoverage)}% (spent / estimated)
+                            Deep-work coverage: {Math.round(activeDeepWorkCoverage)}% — spent {formatMinutesToHoursMinutes(activeForm.totalTimeSpentMinutes)} of {formatMinutesToHoursMinutes(activeForm.totalEstimatedMinutes)}
                           </p>
                         </div>
 
                         <div className="rounded-xl border border-border/70 bg-background/70 p-3">
-                          <p className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                            <Activity className="h-3.5 w-3.5" />
-                            Habit Pulse
+                          <p className="mb-2 flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            <span className="flex items-center gap-2">
+                              <Activity className="h-3.5 w-3.5" />
+                              Habit Pulse · from tracker
+                            </span>
+                            {activeForm.habitsTotal === 0 && (
+                              <span className="text-[10px] font-normal normal-case text-amber-600 dark:text-amber-400">
+                                Sync habits from AlterEgo
+                              </span>
+                            )}
                           </p>
-                          <p className="mb-2 text-[11px] leading-relaxed text-muted-foreground/90">
-                            Total = habits expected today. Completed = habits already checked off today.
-                          </p>
-                          <div className="grid grid-cols-2 gap-2">
-                            <label className="space-y-1">
-                              <span className="text-[11px] text-muted-foreground">Total</span>
-                              <input
-                                type="number"
-                                min={0}
-                                value={activeForm.habitsTotal}
-                                onChange={(event) => {
-                                  const parsed = Number(event.target.value)
-                                  updateActiveFormField('habitsTotal', Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0)
-                                }}
-                                className="w-full rounded-md border border-border/70 bg-background px-2 py-1.5 text-sm"
-                              />
-                            </label>
-                            <label className="space-y-1">
-                              <span className="text-[11px] text-muted-foreground">Completed</span>
-                              <input
-                                type="number"
-                                min={0}
-                                value={activeForm.habitsCompletedToday}
-                                onChange={(event) => {
-                                  const parsed = Number(event.target.value)
-                                  updateActiveFormField(
-                                    'habitsCompletedToday',
-                                    Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0,
-                                  )
-                                }}
-                                className="w-full rounded-md border border-border/70 bg-background px-2 py-1.5 text-sm"
-                              />
-                            </label>
-                          </div>
-                          <p className="mt-2 text-xs text-muted-foreground">
-                            Habit completion today: {Math.round(activeHabitCompletionToday)}%
-                          </p>
+                          {activeForm.habitsTotal > 0 ? (
+                            <>
+                              <div className="flex items-end gap-2">
+                                <span className="text-lg font-bold text-foreground">{activeForm.habitsCompletedToday}</span>
+                                <span className="mb-0.5 text-sm text-muted-foreground">/ {activeForm.habitsTotal} done</span>
+                              </div>
+                              <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
+                                <div
+                                  className="h-full rounded-full bg-green-500 transition-all"
+                                  style={{ width: `${Math.round(activeHabitCompletionToday)}%` }}
+                                />
+                              </div>
+                              <p className="mt-1.5 text-xs text-muted-foreground">
+                                {Math.round(activeHabitCompletionToday)}% today
+                                {habitMetrics.completionRate7d !== null && (
+                                  <span className="ml-2 text-muted-foreground/70">· {habitMetrics.completionRate7d.toFixed(0)}% this week</span>
+                                )}
+                              </p>
+                            </>
+                          ) : (
+                            <p className="text-xs text-muted-foreground italic">No habit data synced yet. Open AlterEgo → Settings → Sync to Agentic.</p>
+                          )}
                         </div>
                       </div>
                     )}

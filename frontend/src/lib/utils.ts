@@ -134,3 +134,20 @@ export function randomBetween(min: number, max: number): number {
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
+
+/**
+ * Format a minutes count as a compact "Xh Ym" string.
+ * - 0 / negative / non-finite -> "0m"
+ * - Less than an hour -> "Ym"
+ * - Whole hours -> "Xh"
+ * - Else -> "Xh Ym"
+ */
+export function formatMinutesToHoursMinutes(minutes: number): string {
+  if (!Number.isFinite(minutes) || minutes <= 0) return '0m'
+  const total = Math.round(minutes)
+  const h = Math.floor(total / 60)
+  const m = total % 60
+  if (h === 0) return `${m}m`
+  if (m === 0) return `${h}h`
+  return `${h}h ${m}m`
+}

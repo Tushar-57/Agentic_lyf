@@ -641,6 +641,32 @@ def _safe_int(raw_value: Any, default: int = 0) -> int:
         return default
 
 
+def _clamp_minutes(
+    raw_minutes: float,
+    *,
+    upper: float,
+    field_name: str,
+    lower: float = 0.0,
+) -> float:
+    """Clamp a minutes-valued metric to [lower, upper] and log when clamping occurred.
+
+    Guards against absurd values (negative, 'infinity', or thousands of hours) that can
+    poison downstream scoring or schedule generation.
+    """
+    clamped = max(lower, min(raw_minutes, upper))
+    if clamped != raw_minutes:
+        try:
+            logger.warning(
+                "minutes_metric_clamped",
+                f"Clamped {field_name} from {raw_minutes} to {clamped} (allowed range {lower}..{upper}).",
+                {"field": field_name, "raw_value": raw_minutes, "clamped_value": clamped},
+            )
+        except Exception:
+            # Logging is best-effort; never let a logging failure break the request.
+            pass
+    return clamped
+
+
 def _parse_requested_date(date_token: Optional[str], timezone_name: Optional[str] = None) -> date:
     """Parse YYYY-MM-DD dates from API payloads with bounds validation."""
     if not date_token:
@@ -1780,16 +1806,26 @@ def _build_ai_notification_candidates(
     if habit_completion_ratio <= 0:
         habit_completion_ratio = 0.6
 
-    checkup_consistency = _recent_checkup_consistency_ratio(user_id)
-    deadline_health_ratio = max(0.0, 1.0 - min(((overdue_tasks * 1.5) + (due_today_tasks * 0.75)) / 10.0, 1.0))
+    checkup_consistency = max(0.0, min(1.0, _recent_checkup_consistency_ratio(user_id)))
+    # Clamp counters defensively before they shape the score (guards against absurdly large
+    # snapshots that would otherwise zero-out deadline_health_ratio purely from outliers).
+    overdue_tasks_clamped = max(0, min(int(overdue_tasks), 200))
+    due_today_tasks_clamped = max(0, min(int(due_today_tasks), 200))
+    deadline_health_ratio = max(
+        0.0,
+        1.0 - min(((overdue_tasks_clamped * 1.5) + (due_today_tasks_clamped * 0.75)) / 10.0, 1.0),
+    )
+    habit_completion_ratio_clamped = max(0.0, min(1.0, habit_completion_ratio))
+    deep_work_coverage_ratio_clamped = max(0.0, min(1.0, deep_work_coverage_ratio))
+    performance_score_clamped = max(0.0, min(10.0, performance_score))
 
-    goal_alignment_score = round(
-        ((performance_score / 10.0) * 35.0)
-        + (deep_work_coverage_ratio * 25.0)
-        + (habit_completion_ratio * 20.0)
+    goal_alignment_score = int(max(0, min(100, round(
+        ((performance_score_clamped / 10.0) * 35.0)
+        + (deep_work_coverage_ratio_clamped * 25.0)
+        + (habit_completion_ratio_clamped * 20.0)
         + (deadline_health_ratio * 10.0)
         + (checkup_consistency * 10.0)
-    )
+    ))))
 
     if goal_alignment_score < 45:
         goal_alignment_severity = "critical"
@@ -2276,6 +2312,8 @@ async def get_knowledge_analytics(
         time_entry_count = 0
         time_entry_billable_count = 0
         time_entry_total_minutes = 0.0
+        time_entry_daily_minutes: Dict[str, float] = defaultdict(float)
+        time_entry_daily_count: Dict[str, int] = defaultdict(int)
 
         for entry, ts in interaction_entries:
             day_key = _format_iso_date(ts)
@@ -2302,8 +2340,14 @@ async def get_knowledge_analytics(
                 context = metadata.get("context") if isinstance(metadata.get("context"), dict) else {}
 
                 duration_minutes = context.get("duration_minutes")
+                entry_duration = 0.0
                 if duration_minutes is not None:
-                    time_entry_total_minutes += max(0.0, _safe_float(duration_minutes, default=0.0))
+                    entry_duration = max(0.0, _safe_float(duration_minutes, default=0.0))
+                    time_entry_total_minutes += entry_duration
+
+                # Accumulate per-day totals for time_entry_daily
+                time_entry_daily_minutes[day_key] += entry_duration
+                time_entry_daily_count[day_key] += 1
 
                 raw_billable = context.get("billable", False)
                 if isinstance(raw_billable, bool):
@@ -2467,6 +2511,99 @@ async def get_knowledge_analytics(
             for hour in range(24)
         ]
 
+        # Build per-day time entry breakdown, one entry per date in the range.
+        cursor_date = start.date()
+        end_date_for_range = now.date()
+        time_entry_daily: List[Dict[str, Any]] = []
+        while cursor_date <= end_date_for_range:
+            day_key = cursor_date.isoformat()
+            daily_mins = time_entry_daily_minutes.get(day_key, 0.0)
+            daily_cnt = time_entry_daily_count.get(day_key, 0)
+            if daily_mins > 0 or daily_cnt > 0:
+                time_entry_daily.append({
+                    "date": day_key,
+                    "total_minutes": round(daily_mins, 1),
+                    "count": daily_cnt,
+                })
+            cursor_date += timedelta(days=1)
+
+        # Fetch latest habit_snapshot entry for the current user.
+        habit_metrics_payload: Dict[str, Any] = {
+            "total_habits": 0,
+            "completed_today": 0,
+            "completion_rate_7d": None,
+            "current_streak": 0,
+            "longest_streak": 0,
+        }
+        try:
+            habit_snapshot_entries = await kb_service.get_all_entries(category="habit_snapshot")
+            if habit_snapshot_entries:
+                latest_habit_entry = max(
+                    habit_snapshot_entries,
+                    key=lambda e: _ensure_timezone(e.updated_at or e.created_at),
+                )
+                hs_meta = latest_habit_entry.metadata if isinstance(latest_habit_entry.metadata, dict) else {}
+                hs_context = hs_meta.get("context") if isinstance(hs_meta.get("context"), dict) else {}
+                hs_summary = hs_context.get("summary") if isinstance(hs_context.get("summary"), dict) else {}
+
+                # Resolve fields from multiple possible locations (context takes priority)
+                def _hs_field(key_variants: List[str], default: Any) -> Any:
+                    for root in [hs_context, hs_summary, hs_meta]:
+                        for key in key_variants:
+                            val = root.get(key)
+                            if val is not None:
+                                return val
+                    return default
+
+                total_habits_raw = _hs_field(["total_habits", "totalHabits"], 0)
+                # current_run / longest_run are the canonical names in KB storage
+                current_streak_raw = _hs_field(["current_run", "currentRun", "currentStreak", "current_streak"], 0)
+                longest_streak_raw = _hs_field(["longest_run", "longestRun", "longestStreak", "longest_streak"], 0)
+                rate_7d_raw = _hs_field(["completionRate7d", "completion_rate_7d"], None)
+
+                # Derive completed_today: prefer daily_completion_counts keyed by today's date
+                completed_today = 0
+                daily_counts_map = hs_context.get("daily_completion_counts") or hs_context.get("dailyCompletionCounts")
+                if isinstance(daily_counts_map, dict):
+                    raw_today_count = daily_counts_map.get(today_key, 0)
+                    try:
+                        completed_today = max(0, int(raw_today_count))
+                    except (TypeError, ValueError):
+                        completed_today = 0
+                else:
+                    # Fall back to counting from habits_today list
+                    habits_today_list = hs_context.get("habits_today") or hs_context.get("habits") or []
+                    if isinstance(habits_today_list, list):
+                        for raw_habit in habits_today_list:
+                            if isinstance(raw_habit, dict) and bool(
+                                raw_habit.get("completedToday")
+                                or raw_habit.get("completed_today")
+                                or raw_habit.get("done")
+                                or raw_habit.get("isCompleted")
+                            ):
+                                completed_today += 1
+
+                completion_rate_7d: Optional[float] = None
+                if rate_7d_raw is not None:
+                    try:
+                        completion_rate_7d = round(max(0.0, min(100.0, float(rate_7d_raw))), 2)
+                    except (TypeError, ValueError):
+                        pass
+
+                habit_metrics_payload = {
+                    "total_habits": max(0, _safe_int(total_habits_raw, 0)),
+                    "completed_today": completed_today,
+                    "completion_rate_7d": completion_rate_7d,
+                    "current_streak": max(0, _safe_int(current_streak_raw, 0)),
+                    "longest_streak": max(0, _safe_int(longest_streak_raw, 0)),
+                }
+        except Exception as habit_err:
+            logger.warning(
+                "habit_metrics_analytics_failed",
+                "Could not load habit_snapshot for analytics insights",
+                error=habit_err,
+            )
+
         return {
             "interactions": {
                 "daily": daily_interactions,
@@ -2491,6 +2628,8 @@ async def get_knowledge_analytics(
                 "time_entry_records": time_entry_count,
                 "time_entry_billable_records": time_entry_billable_count,
                 "avg_time_entry_minutes": round(avg_time_entry_minutes, 1),
+                "time_entry_daily": time_entry_daily,
+                "habit_metrics": habit_metrics_payload,
             },
         }
     except Exception as e:
@@ -2818,7 +2957,11 @@ async def run_morning_checkup(request: DailyCheckupRequest):
         deadline_tasks = context_snapshot.get("deadlineTasks", {}) if isinstance(context_snapshot.get("deadlineTasks"), dict) else {}
         overdue_tasks = int(_safe_float(deadline_tasks.get("overdue"), default=0.0))
         due_today_tasks = int(_safe_float(deadline_tasks.get("dueToday"), default=0.0))
-        planned_deep_work_minutes = _safe_float(perspective.get("plannedDeepWorkMinutes"), default=0.0)
+        planned_deep_work_minutes = _clamp_minutes(
+            _safe_float(perspective.get("plannedDeepWorkMinutes"), default=0.0),
+            upper=720.0,  # cap at 12h of planned deep work
+            field_name="morning.plannedDeepWorkMinutes",
+        )
         confidence_score = _safe_float(perspective.get("confidence"), default=0.0)
 
         top_goals = context_snapshot.get("topGoals", []) if isinstance(context_snapshot.get("topGoals"), list) else []
@@ -2847,9 +2990,17 @@ async def run_morning_checkup(request: DailyCheckupRequest):
         habits_completion_rate_7d = _safe_float(habit_metrics.get("completionRate7d"), default=0.0)
 
         time_metrics = context_snapshot.get("timeMetrics", {}) if isinstance(context_snapshot.get("timeMetrics"), dict) else {}
-        tracked_time_spent_minutes = _safe_float(time_metrics.get("totalTimeSpentMinutes"), default=0.0)
-        tracked_estimated_minutes = _safe_float(time_metrics.get("totalEstimatedMinutes"), default=0.0)
-        deep_work_coverage_ratio = _safe_float(time_metrics.get("deepWorkCoverageRatio"), default=0.0)
+        tracked_time_spent_minutes = _clamp_minutes(
+            _safe_float(time_metrics.get("totalTimeSpentMinutes"), default=0.0),
+            upper=1440.0,
+            field_name="morning.totalTimeSpentMinutes",
+        )
+        tracked_estimated_minutes = _clamp_minutes(
+            _safe_float(time_metrics.get("totalEstimatedMinutes"), default=0.0),
+            upper=1440.0,
+            field_name="morning.totalEstimatedMinutes",
+        )
+        deep_work_coverage_ratio = max(0.0, min(1.0, _safe_float(time_metrics.get("deepWorkCoverageRatio"), default=0.0)))
 
         # Use actual runtime anchor if available, otherwise show check-in preference
         display_anchor_time = run_anchor_time if run_anchor_time else check_in_time
@@ -3184,15 +3335,27 @@ async def run_evening_checkup(request: DailyCheckupRequest):
         habits_completion_rate_7d = _safe_float(habit_metrics.get("completionRate7d"), default=0.0)
 
         time_metrics = context_snapshot.get("timeMetrics", {}) if isinstance(context_snapshot.get("timeMetrics"), dict) else {}
-        tracked_time_spent_minutes = _safe_float(time_metrics.get("totalTimeSpentMinutes"), default=0.0)
-        tracked_estimated_minutes = _safe_float(time_metrics.get("totalEstimatedMinutes"), default=0.0)
-        deep_work_coverage_ratio = _safe_float(time_metrics.get("deepWorkCoverageRatio"), default=0.0)
-
-        planned_deep_work_minutes = _safe_float(
-            perspective.get("plannedDeepWorkMinutes"),
-            default=_safe_float(context_snapshot.get("plannedDeepWorkMinutes"), default=0.0),
+        tracked_time_spent_minutes = _clamp_minutes(
+            _safe_float(time_metrics.get("totalTimeSpentMinutes"), default=0.0),
+            upper=1440.0,
+            field_name="evening.totalTimeSpentMinutes",
         )
-        self_rating = _safe_float(perspective.get("selfRating"), default=0.0)
+        tracked_estimated_minutes = _clamp_minutes(
+            _safe_float(time_metrics.get("totalEstimatedMinutes"), default=0.0),
+            upper=1440.0,
+            field_name="evening.totalEstimatedMinutes",
+        )
+        deep_work_coverage_ratio = max(0.0, min(1.0, _safe_float(time_metrics.get("deepWorkCoverageRatio"), default=0.0)))
+
+        planned_deep_work_minutes = _clamp_minutes(
+            _safe_float(
+                perspective.get("plannedDeepWorkMinutes"),
+                default=_safe_float(context_snapshot.get("plannedDeepWorkMinutes"), default=0.0),
+            ),
+            upper=720.0,
+            field_name="evening.plannedDeepWorkMinutes",
+        )
+        self_rating = max(0.0, min(10.0, _safe_float(perspective.get("selfRating"), default=0.0)))
 
         top_priority_raw = perspective.get("topPriorityCompleted")
         if isinstance(top_priority_raw, bool):
@@ -3265,33 +3428,25 @@ async def run_evening_checkup(request: DailyCheckupRequest):
         communication_profile = _extract_communication_profile(all_entries)
         style_directive = _build_style_directive(communication_profile, "evening")
 
-        # Prepare precomputed metrics
-        # wins = _compute_wins(overdue_tasks, completed_tasks_today, habits_completed_today, total_minutes, billable_minutes, focus_tasks, avg_focus)
-        # tomorrow_focus = _compute_tomorrow_focus(upcoming_tasks, overdue_tasks, due_today_tasks, avg_energy, blockers, focus_tasks, communication_profile)
-        
-        # Build detailed time entry analysis for deep reasoning
-        today_time_entries = [item for item in time_entries if item["event_date"] == checkup_date]
+        # Build detailed time entry analysis for deep reasoning using today_entries (evening scope).
         time_entry_details = " | ".join([
             f"{entry['project_name']}: {entry['description']} ({entry['duration_minutes']:.0f}min, focus:{entry['focus_score']:.0f})"
-            for entry in today_time_entries[:8]
-        ]) if today_time_entries else "No tracked sessions today"
-        
-        fallback_lines = _build_evening_fallback(
-            total_minutes,
-            billable_minutes,
-            len(today_entries),
-            top_projects,
-            avg_focus,
-            avg_energy,
-            blockers,
-            focus_task_titles,
-            completed_tasks_today,
-            habits_completed_today,
-            habits_total,
-            wins,
-            tomorrow_focus,
-            habits_completion_rate_7d,
-            communication_profile
+            for entry in today_entries[:8]
+        ]) if today_entries else "No tracked sessions today"
+
+        fallback_html = _build_evening_reflection_html(
+            checkup_date=checkup_date,
+            recap_line=f"Logged {_format_minutes(total_minutes)} across {len(today_entries)} sessions",
+            total_minutes=total_minutes,
+            billable_minutes=billable_minutes,
+            performance_score=performance_score,
+            avg_focus=avg_focus,
+            avg_energy=avg_energy,
+            wins=wins,
+            blockers=blockers,
+            tomorrow_focus=tomorrow_focus,
+            focus_task_titles=focus_task_titles,
+            top_projects=top_projects,
         )
         fallback_text = _build_fallback_checkup_message(fallback_lines, communication_profile, "evening")
 
@@ -3894,7 +4049,7 @@ async def get_onboarding_profile():
         
         profile_data["onboardingCompleted"] = profile_data["role"] is not None
         return profile_data
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -3902,3 +4057,37 @@ async def get_onboarding_profile():
         error_detail = f"Error retrieving profile: {str(e)}\n{traceback.format_exc()}"
         logger.error("profile_retrieve_failed", "Error retrieving profile", {"detail": str(e)}, error=e)
         raise HTTPException(status_code=500, detail=error_detail)
+
+
+@router.get("/chat-context-summary")
+async def get_chat_context_summary():
+    """Return lightweight context counts for the chat context pill.
+
+    Calls build_chat_context_payload() and shapes the result into summary
+    counts only — no full task/habit lists, no LLM call.
+    """
+    try:
+        kb_service = get_knowledge_base_service()
+        payload = await kb_service.build_chat_context_payload()
+
+        active_tasks = payload.get("active_tasks") or []
+        habits = payload.get("habits") or {}
+        goals = payload.get("goals") or []
+        today_overview = payload.get("today_overview") or {}
+
+        return {
+            "tasks_count": len(active_tasks),
+            "habits_pending": today_overview.get("habits_pending", 0),
+            "habits_total": habits.get("n_total", 0),
+            "goals_count": len([g for g in goals if g.get("status") not in {"completed", "complete", "done", "archived"}]),
+            "overdue_tasks": today_overview.get("overdue_tasks", 0),
+            "due_today_tasks": today_overview.get("due_today_tasks", 0),
+            "active_timer": today_overview.get("active_timer"),
+            "last_updated": datetime.utcnow().isoformat() + "Z",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("chat_context_summary_failed", "Error building chat context summary", {"detail": str(e)}, error=e)
+        raise HTTPException(status_code=500, detail=f"Error building chat context summary: {str(e)}")
