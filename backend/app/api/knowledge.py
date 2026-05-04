@@ -283,11 +283,32 @@ async def get_preference_categories():
         raise HTTPException(status_code=500, detail=f"Failed to get preference categories: {str(e)}")
 
 
-@router.post("/interactions", response_model=KnowledgeEntry)
+@router.post("/interactions")
 async def add_interaction_history(request: InteractionHistoryRequest):
     """Add an interaction to the history."""
     try:
         kb_service = get_knowledge_base_service()
+
+        context = request.context or {}
+        source_action = str(context.get("source_action", "")).strip().lower()
+        sync_event_key = str(context.get("sync_event_key", "")).strip()
+
+        # Idempotent dedup for backfill entries: if this sync_event_key already exists,
+        # skip without re-embedding so repeated backfills don't create duplicate vectors.
+        if source_action == "backfill_time_entry" and sync_event_key:
+            existing = await kb_service._find_interaction_by_sync_event_key(sync_event_key)
+            if existing:
+                logger.info(
+                    "skip_duplicate_time_entry",
+                    f"Skipped duplicate time entry",
+                    {
+                        "embedding_key": sync_event_key[:32],
+                        "existing_id": existing.entry_id,
+                        "source_action": source_action,
+                    },
+                )
+                return {"status": "skipped", "reason": "already_exists", "entry_id": existing.entry_id}
+
         entry = await kb_service.add_interaction_history(
             agent_type=request.agent_type,
             user_input=request.user_input,
