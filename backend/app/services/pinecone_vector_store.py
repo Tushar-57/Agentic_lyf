@@ -11,7 +11,7 @@ VALID_USER_ID_PATTERN = re.compile(r'^[a-zA-Z0-9._-]{1,64}$')
 
 import numpy as np
 
-from ..models.knowledge import KnowledgeEntry, KnowledgeSearchResult
+from ..models.knowledge import KnowledgeEntry, KnowledgeEntryType, KnowledgeEntrySubType, KnowledgeSearchResult
 from .storage_paths import resolve_data_path
 from ..utils.structured_logging import get_logger, LogComponent
 
@@ -193,9 +193,42 @@ class PineconeVectorStore:
                             entry_id = str(metadata.get("entry_id") or vector_id)
                             user_id = str(metadata.get("user_id") or self.user_id)
                             category = str(metadata.get("category") or "")
+
+                            # Resolve entry_type — old vectors may not have it stored
+                            raw_entry_type = metadata.get("entry_type")
+                            raw_entry_sub_type = metadata.get("entry_sub_type")
+                            if not raw_entry_type:
+                                cat_lower = category.lower()
+                                if cat_lower in ("time_entry", "time_tracking"):
+                                    raw_entry_type = "interaction"
+                                    raw_entry_sub_type = raw_entry_sub_type or "work interaction"
+                                elif cat_lower in ("habit_snapshot", "habit"):
+                                    raw_entry_type = "interaction"
+                                    raw_entry_sub_type = raw_entry_sub_type or "health interaction"
+                                elif cat_lower in ("goal", "goals"):
+                                    raw_entry_type = "preference"
+                                    raw_entry_sub_type = raw_entry_sub_type or "goal"
+                                elif cat_lower in ("insight", "insights", "daily_checkup"):
+                                    raw_entry_type = "insight"
+                                    raw_entry_sub_type = raw_entry_sub_type or "misc insight"
+                                else:
+                                    raw_entry_type = "preference"
+                                    raw_entry_sub_type = raw_entry_sub_type or "other preference"
+
+                            try:
+                                entry_type_enum = KnowledgeEntryType(raw_entry_type)
+                            except (ValueError, KeyError):
+                                entry_type_enum = KnowledgeEntryType.INTERACTION
+                            try:
+                                entry_sub_type_enum = KnowledgeEntrySubType(raw_entry_sub_type)
+                            except (ValueError, KeyError):
+                                entry_sub_type_enum = KnowledgeEntrySubType.MISC_INTERACTION
+
                             rebuilt[vector_id] = KnowledgeEntry(
                                 entry_id=entry_id,
                                 user_id=user_id,
+                                entry_type=entry_type_enum,
+                                entry_sub_type=entry_sub_type_enum,
                                 category=category,
                                 title=str(metadata.get("title") or entry_id),
                                 content=str(metadata.get("content") or ""),
