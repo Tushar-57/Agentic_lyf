@@ -62,6 +62,11 @@ class PineconeVectorStore:
         self._ensure_index_exists()
         self.index = self._client.Index(self.index_name)
 
+        # On startup, verify local cache count matches Pinecone. If Pinecone has
+        # significantly more vectors than the cache (threshold = 5), rebuild so that
+        # get_all_entries() doesn't return stale/incomplete data.
+        self._verify_and_refresh_cache()
+
     @staticmethod
     def _parse_bool_env(name: str, default: bool) -> bool:
         raw_value = os.getenv(name)
@@ -130,6 +135,92 @@ class PineconeVectorStore:
             logger.warning("metadata_cache_load_failed", f"Failed to load Pinecone metadata cache: {exc}", {"error": str(exc)})
             self.entry_metadata = {}
 
+    def _get_pinecone_vector_count(self) -> int:
+        """Query Pinecone for the actual vector count in this namespace."""
+        try:
+            stats = self.index.describe_index_stats()
+            namespaces = self._extract_field(stats, "namespaces", {}) or {}
+            namespace_stats = namespaces.get(self.namespace, {}) if isinstance(namespaces, dict) else {}
+            vector_count = self._extract_field(namespace_stats, "vector_count", 0) or 0
+            return int(vector_count)
+        except Exception as exc:
+            logger.warning("pinecone_count_failed", f"Failed to get Pinecone vector count: {exc}", {"error": str(exc)})
+            return -1
+
+    def _rebuild_cache_from_pinecone(self) -> None:
+        """Rebuild the local metadata cache by fetching all vector IDs from Pinecone and
+        hydrating their metadata via index.fetch()."""
+        try:
+            logger.info(
+                "rebuilding_metadata_cache",
+                f"Rebuilding metadata cache from Pinecone for namespace {self.namespace}",
+                {"namespace": self.namespace}
+            )
+            all_ids: List[str] = []
+            # Pinecone list() paginates IDs — iterate through pages
+            list_response = self.index.list(namespace=self.namespace)
+            for page in list_response:
+                if isinstance(page, list):
+                    all_ids.extend([str(item) for item in page])
+                elif isinstance(page, str):
+                    all_ids.append(page)
+                elif hasattr(page, "__iter__"):
+                    for item in page:
+                        all_ids.append(str(item))
+
+            if not all_ids:
+                logger.info("no_vectors_in_namespace", f"No vectors found in namespace {self.namespace}", {"namespace": self.namespace})
+                return
+
+            # Fetch metadata in batches of 100 (Pinecone fetch limit)
+            batch_size = 100
+            rebuilt: Dict[str, KnowledgeEntry] = {}
+            for batch_start in range(0, len(all_ids), batch_size):
+                batch_ids = all_ids[batch_start:batch_start + batch_size]
+                try:
+                    fetch_response = self.index.fetch(ids=batch_ids, namespace=self.namespace)
+                    vectors = self._extract_field(fetch_response, "vectors", {}) or {}
+                    if not isinstance(vectors, dict):
+                        continue
+                    for vector_id, vector_data in vectors.items():
+                        metadata = self._extract_field(vector_data, "metadata", {}) or {}
+                        # Prefer existing cache entry if already hydrated
+                        if vector_id in self.entry_metadata:
+                            rebuilt[vector_id] = self.entry_metadata[vector_id]
+                            continue
+                        # Build a minimal KnowledgeEntry from Pinecone metadata
+                        try:
+                            entry_id = str(metadata.get("entry_id") or vector_id)
+                            user_id = str(metadata.get("user_id") or self.user_id)
+                            category = str(metadata.get("category") or "")
+                            rebuilt[vector_id] = KnowledgeEntry(
+                                entry_id=entry_id,
+                                user_id=user_id,
+                                category=category,
+                                title=str(metadata.get("title") or entry_id),
+                                content=str(metadata.get("content") or ""),
+                                metadata=metadata,
+                            )
+                        except Exception as build_exc:
+                            logger.warning(
+                                "rebuild_entry_failed",
+                                f"Failed to build entry for vector {vector_id}: {build_exc}",
+                                {"vector_id": vector_id, "error": str(build_exc)}
+                            )
+                except Exception as batch_exc:
+                    logger.warning("fetch_batch_failed", f"Failed to fetch batch from Pinecone: {batch_exc}", {"error": str(batch_exc)})
+
+            if rebuilt:
+                self.entry_metadata = rebuilt
+                self._save_metadata()
+                logger.info(
+                    "metadata_cache_rebuilt",
+                    f"Rebuilt metadata cache with {len(rebuilt)} entries from Pinecone",
+                    {"entry_count": len(rebuilt), "namespace": self.namespace}
+                )
+        except Exception as exc:
+            logger.warning("rebuild_cache_failed", f"Failed to rebuild metadata cache from Pinecone: {exc}", {"error": str(exc)})
+
     def _save_metadata(self) -> None:
         try:
             payload = {
@@ -147,6 +238,22 @@ class PineconeVectorStore:
     def persist_metadata_cache(self) -> None:
         """Persist the local metadata cache to disk."""
         self._save_metadata()
+
+    def _verify_and_refresh_cache(self, threshold: int = 5) -> None:
+        """Compare local cache size against Pinecone vector count. If Pinecone has
+        more than `threshold` additional vectors, rebuild the local cache from Pinecone."""
+        pinecone_count = self._get_pinecone_vector_count()
+        if pinecone_count < 0:
+            # Could not reach Pinecone — skip refresh to avoid disruption
+            return
+        cache_count = len(self.entry_metadata)
+        if pinecone_count > cache_count + threshold:
+            logger.info(
+                "cache_stale_detected",
+                f"Pinecone has {pinecone_count} vectors but cache has {cache_count} entries — rebuilding",
+                {"pinecone_count": pinecone_count, "cache_count": cache_count, "namespace": self.namespace}
+            )
+            self._rebuild_cache_from_pinecone()
 
     def _normalize_embedding(self, embedding: List[float]) -> List[float]:
         if not embedding:
@@ -411,7 +518,10 @@ class PineconeVectorStore:
 
         return embeddings
 
-    def get_all_entries(self) -> List[KnowledgeEntry]:
+    def get_all_entries(self, force_refresh: bool = False) -> List[KnowledgeEntry]:
+        if force_refresh:
+            self._rebuild_cache_from_pinecone()
+
         if self.entry_metadata:
             return list(self.entry_metadata.values())
 

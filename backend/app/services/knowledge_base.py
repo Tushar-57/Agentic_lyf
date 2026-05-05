@@ -255,6 +255,21 @@ EMBEDDING_METADATA_ALLOWLIST: Dict[str, Set[str]] = {
     "system": {
         "last_updated",
     },
+    "daily_checkup": {
+        "checkup_type",
+        "checkup_date",
+        "generated_with",
+        "coach_message",
+        "coach_message_html",
+        "focus_target",
+        "intent_note",
+        "reflection_note",
+        "wins",
+        "blockers",
+        "tomorrow_focus",
+        "stats",
+        "content_key",
+    },
 }
 
 EMBEDDING_CONTEXT_ALLOWLIST: Dict[str, Set[str]] = {
@@ -308,6 +323,19 @@ EMBEDDING_CONTEXT_ALLOWLIST: Dict[str, Set[str]] = {
         "longest_run",
         "habit_highlights",
         "daily_completion_digest",
+    },
+    "daily_checkup": {
+        "checkup_type",
+        "checkup_date",
+        "generated_with",
+        "coach_message",
+        "focus_target",
+        "intent_note",
+        "reflection_note",
+        "wins",
+        "blockers",
+        "tomorrow_focus",
+        "content_key",
     },
 }
 
@@ -1745,7 +1773,7 @@ class KnowledgeBaseService:
             logger.warning("search_failed", "Failed to search knowledge base", error=e)
             return []
     
-    async def _fetch_all_entries_fresh(self) -> List[KnowledgeEntry]:
+    async def _fetch_all_entries_fresh(self, force_refresh: bool = False) -> List[KnowledgeEntry]:
         """Fetch all entries from vector store (internal method for caching)."""
         if self.knowledge_db_store and self.knowledge_db_store.is_available:
             db_entries = self.knowledge_db_store.list_entries(self.user_id)
@@ -1755,11 +1783,12 @@ class KnowledgeBaseService:
                 if hydrated:
                     hydrated_entries.append(hydrated)
             return hydrated_entries
-        return self.vector_store.get_all_entries()
+        return self.vector_store.get_all_entries(force_refresh=force_refresh)
 
     async def get_all_entries(self,
                              category: Optional[str] = None,
-                             entry_type: Optional[KnowledgeEntryType] = None) -> List[KnowledgeEntry]:
+                             entry_type: Optional[KnowledgeEntryType] = None,
+                             force_refresh: bool = False) -> List[KnowledgeEntry]:
         """
         Get all knowledge entries, optionally filtered by category or type.
         Uses short-lived cache to avoid redundant Pinecone calls within same request.
@@ -1767,6 +1796,7 @@ class KnowledgeBaseService:
         Args:
             category: Filter by category (optional)
             entry_type: Filter by entry type (optional)
+            force_refresh: If True, bypass local cache and rebuild from Pinecone (optional)
 
         Returns:
             List of knowledge entries
@@ -1775,12 +1805,13 @@ class KnowledgeBaseService:
             # Check cache first (with lock for thread safety)
             async with self._get_all_cache_lock:
                 now = time.time()
-                if (self._get_all_cache is not None and
+                if (not force_refresh and
+                    self._get_all_cache is not None and
                     (now - self._get_all_cache_at) < GET_ALL_CACHE_TTL_SECONDS):
                     all_entries = self._get_all_cache
                 else:
-                    # Cache miss or expired - fetch fresh
-                    all_entries = await self._fetch_all_entries_fresh()
+                    # Cache miss, expired, or force_refresh requested
+                    all_entries = await self._fetch_all_entries_fresh(force_refresh=force_refresh)
                     self._get_all_cache = all_entries
                     self._get_all_cache_at = now
 

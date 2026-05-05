@@ -346,6 +346,17 @@ async def get_knowledge_stats():
         kb_service = get_knowledge_base_service()
         await _sync_missing_db_checkup_insights(kb_service)
         stats = await kb_service.get_stats()
+        # If time_entry count is 0 or suspiciously low, the local cache may be stale.
+        # Force a rebuild from Pinecone so the returned stats reflect actual state.
+        time_entry_count = (stats.entries_by_category or {}).get("time_entry", 0)
+        if time_entry_count == 0:
+            logger.info(
+                "stats_cache_refresh",
+                "time_entry count is 0 in stats — forcing Pinecone cache refresh",
+                {"time_entry_count": time_entry_count}
+            )
+            await kb_service.get_all_entries(force_refresh=True)
+            stats = await kb_service.get_stats()
         return stats
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}")
@@ -1514,6 +1525,122 @@ def _persist_checkup_payload_to_db(checkup_type: str, checkup_date: date, payloa
         logger.warning("persist_checkup_failed", f"Failed to persist {checkup_type} checkup in database", {"checkup_type": checkup_type, "user": request_user.storage_key})
 
 
+async def _persist_checkup_to_kb(
+    kb_service,
+    checkup_type: str,
+    checkup_date: str,
+    payload: Dict[str, Any],
+) -> None:
+    """Persist checkup completion as a Pinecone KB entry so it survives restarts.
+
+    Uses _upsert_checkup_insight with the full payload as metadata so the entry is
+    idempotent (same content_key → same deterministic vector ID via sync_event_key).
+    This is in addition to the DB path; if DB is not configured the KB entry is the
+    only durable store.
+    """
+    try:
+        checkup_date_obj = date.fromisoformat(checkup_date) if isinstance(checkup_date, str) else checkup_date
+        content_key = f"daily_checkup:{checkup_type}:{checkup_date}"
+        coach_msg = str(payload.get("coach_message", "") or "")[:500]
+        content = (
+            f"Daily {checkup_type} checkup for {checkup_date}. "
+            f"Generated: {payload.get('generated_with', 'unknown')}. "
+            f"Coach: {coach_msg}"
+        )
+        metadata = {
+            "checkup_type": checkup_type,
+            "checkup_date": checkup_date,
+            "generated_with": payload.get("generated_with"),
+            "coach_message": str(payload.get("coach_message", "") or "")[:1000],
+            "coach_message_html": str(payload.get("coach_message_html", "") or "")[:2000],
+            "focus_target": payload.get("focus_target"),
+            "intent_note": payload.get("intent_note"),
+            "reflection_note": payload.get("reflection_note"),
+            "wins": payload.get("wins", []),
+            "blockers": payload.get("blockers", []),
+            "tomorrow_focus": payload.get("tomorrow_focus", []),
+            "stats": payload.get("stats", {}),
+            "content_key": content_key,
+            # Include sync_event_key via context so create_entry generates deterministic ID
+            "context": {"sync_event_key": content_key},
+        }
+        tags = ["daily_checkup", checkup_type, "insight", "kb_persisted"]
+        await _upsert_checkup_insight(
+            kb_service=kb_service,
+            checkup_type=checkup_type,
+            checkup_date=checkup_date_obj,
+            title=f"{checkup_type.capitalize()} Checkup - {checkup_date}",
+            content=content,
+            metadata=metadata,
+            tags=tags,
+        )
+        logger.info(
+            "checkup_kb_persisted",
+            f"Persisted {checkup_type} checkup to Pinecone KB for {checkup_date}",
+            {"checkup_type": checkup_type, "checkup_date": checkup_date, "content_key": content_key},
+        )
+    except Exception as exc:
+        logger.warning(
+            "checkup_kb_persist_failed",
+            f"Failed to persist {checkup_type} checkup to KB: {exc}",
+            {"checkup_type": checkup_type, "checkup_date": checkup_date, "error": str(exc)},
+        )
+
+
+async def _load_checkups_from_kb(
+    kb_service,
+    today_date: str,
+    yesterday_date: str,
+) -> Dict[str, Dict[str, Any]]:
+    """Fallback: load checkup records from Pinecone KB for today or yesterday."""
+    result: Dict[str, Dict[str, Any]] = {}
+    try:
+        entries = await kb_service.get_all_entries(
+            category="daily_checkup",
+            entry_type=KnowledgeEntryType.INSIGHT,
+        )
+        # Sort newest-first so we pick the most recent for each type
+        sorted_entries = sorted(
+            entries,
+            key=lambda e: _coerce_datetime(e.updated_at or e.created_at),
+            reverse=True,
+        )
+        for entry in sorted_entries:
+            meta = entry.metadata if isinstance(entry.metadata, dict) else {}
+            ctype = str(meta.get("checkup_type", "")).strip().lower()
+            cdate = str(meta.get("checkup_date") or meta.get("date") or "").strip()[:10]
+            if ctype not in ("morning", "evening"):
+                continue
+            if cdate not in (today_date, yesterday_date):
+                continue
+            if ctype in result:
+                continue
+            result[ctype] = {
+                "date": cdate,
+                "checkup_type": ctype,
+                "checkup_date": cdate,
+                "coach_message": meta.get("coach_message", ""),
+                "coach_message_html": meta.get("coach_message_html"),
+                "generated_with": meta.get("generated_with", "kb_restored"),
+                "focus_target": meta.get("focus_target"),
+                "intent_note": meta.get("intent_note"),
+                "reflection_note": meta.get("reflection_note"),
+                "wins": meta.get("wins", []),
+                "blockers": meta.get("blockers", []),
+                "tomorrow_focus": meta.get("tomorrow_focus", []),
+                "stats": meta.get("stats", {}),
+            }
+            if "morning" in result and "evening" in result:
+                break
+    except Exception as exc:
+        logger.warning(
+            "load_checkups_from_kb_failed",
+            f"Failed to load checkups from KB: {exc}",
+            {"error": str(exc)},
+        )
+    return result
+
+
 def _load_latest_checkups_from_db() -> Dict[str, Dict[str, Any]]:
     checkup_store = get_daily_checkup_store()
     if not checkup_store:
@@ -1729,6 +1856,17 @@ async def _resolve_latest_checkups_with_fallback(kb_service) -> Dict[str, Dict[s
         latest_from_kb[checkup_type] = payload
         if "morning" in latest_from_kb and "evening" in latest_from_kb:
             break
+
+    # If DB and KB general lookup both came up empty for today/yesterday,
+    # fall back to an explicit KB query restricted to recent dates so we pick up
+    # entries written by _persist_checkup_to_kb during the current or previous day.
+    if not latest_from_kb.get("morning") or not latest_from_kb.get("evening"):
+        today_date = datetime.now(timezone.utc).date().isoformat()
+        yesterday_date = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+        kb_recent = await _load_checkups_from_kb(kb_service, today_date, yesterday_date)
+        for ctype, cpayload in kb_recent.items():
+            if ctype not in latest_from_kb:
+                latest_from_kb[ctype] = cpayload
 
     return {
         "morning": latest_from_db.get("morning") or latest_from_kb.get("morning") or {},
@@ -3248,6 +3386,8 @@ async def run_morning_checkup(request: DailyCheckupRequest):
         else:
             logger.error("morning_checkup_persist_failed", f"Failed to persist morning checkup insight", {"date": checkup_date.isoformat()})
         _persist_checkup_payload_to_db("morning", checkup_date, response_payload)
+        # Also persist to Pinecone KB so the checkup survives ephemeral-disk restarts
+        await _persist_checkup_to_kb(kb_service, "morning", checkup_date.isoformat(), response_payload)
 
         return response_payload
     except HTTPException:
@@ -3651,6 +3791,8 @@ async def run_evening_checkup(request: DailyCheckupRequest):
         else:
             logger.error("evening_checkup_persist_failed", f"Failed to persist evening checkup insight", {"date": checkup_date.isoformat()})
         _persist_checkup_payload_to_db("evening", checkup_date, response_payload)
+        # Also persist to Pinecone KB so the checkup survives ephemeral-disk restarts
+        await _persist_checkup_to_kb(kb_service, "evening", checkup_date.isoformat(), response_payload)
 
         return response_payload
     except HTTPException:
