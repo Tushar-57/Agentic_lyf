@@ -78,6 +78,9 @@ class HealthAgent(BaseAgent):
         
         # Initialize knowledge base for health-specific data
         self.knowledge_base = get_knowledge_base_service()
+        # Lazy-built ReAct sub-agent (Phase 6) — KB-backed health arsenal
+        self._react_agent = None
+        self._brain_service = None
         logger.info("health_agent_initialized", "HealthAgent initialized with enhanced capabilities")
 
     def get_enhanced_tools(self):
@@ -187,12 +190,32 @@ Remember: Your role is to be a trusted health partner that combines AI insights 
         return enhanced_prompt
 
     async def execute(self, state: AgentState) -> Dict[str, Any]:
-        """Execute health-related requests with contextual awareness."""
+        """Execute health-related requests with contextual awareness.
+
+        Phase 6: tries the ReAct loop with the KB-backed health arsenal first.
+        Falls back to the legacy 4-branch handler chain if ReAct setup fails.
+        """
         try:
             user_input = state.get("user_input", "")
             state_context = state.get("context", {}) if isinstance(state, dict) else {}
             logger.info("health_agent_executing", "HealthAgent executing request", {"input_preview": user_input[:100]})
-            
+
+            # ReAct path first
+            react_response = await self._try_execute_react(user_input)
+            if react_response is not None:
+                recorder = get_interaction_recorder()
+                if recorder:
+                    await recorder.create_pending_interaction(
+                        user_input=user_input,
+                        agent_response=react_response,
+                        agent_type="health",
+                        context={**state_context, "via": "react"},
+                    )
+                return {
+                    "response": react_response,
+                    "reasoning": {"agent_type": "health", "via": "react"},
+                }
+
             # Get relevant context from knowledge base
             context = await self.knowledge_base.get_contextual_knowledge_for_agent(
                 user_input=user_input,
@@ -546,3 +569,43 @@ Remember: Your role is to be a trusted health partner that combines AI insights 
                 merged_context[key] = value
 
         return merged_context
+
+    async def _try_execute_react(self, user_input: str):
+        """Run the ReAct sub-agent with KB-backed health arsenal. Returns string or None."""
+        try:
+            agent = self._get_or_build_react_agent()
+            if agent is None:
+                return None
+            result = await agent.execute(user_input)
+            if not result or not result.get("success"):
+                return None
+            inner = result.get("result") or {}
+            messages = inner.get("messages") if isinstance(inner, dict) else None
+            if not messages:
+                return None
+            for msg in reversed(messages):
+                content = getattr(msg, "content", None) or (msg.get("content") if isinstance(msg, dict) else None)
+                if content and isinstance(content, str):
+                    return content
+            return None
+        except Exception as exc:
+            logger.warning("react_path_failed", f"Health ReAct path failed: {exc}")
+            return None
+
+    def _get_or_build_react_agent(self):
+        if self._react_agent is not None:
+            return self._react_agent
+        try:
+            from ..react_factory import get_react_agent_factory
+            from ..tool_registry import make_health_tools
+            from ...services.brain_service import BrainService
+
+            if self._brain_service is None:
+                self._brain_service = BrainService(self.knowledge_base)
+            kb_tools = make_health_tools(self._brain_service, self.knowledge_base)
+            factory = get_react_agent_factory()
+            self._react_agent = factory.create_health_agent(kb_backed_tools=kb_tools)
+            return self._react_agent
+        except Exception as exc:
+            logger.warning("react_agent_build_failed", f"Failed to build health ReAct agent: {exc}")
+            return None

@@ -256,22 +256,31 @@ class ReActAgentFactory:
         """List all created agents."""
         return [agent.get_info() for agent in self.agents.values()]
     
-    def create_health_agent(self) -> ReActSubAgent:
-        """Create a specialized Health ReAct agent."""
-        
+    def create_health_agent(self, kb_backed_tools: Optional[List[BaseTool]] = None) -> ReActSubAgent:
+        """Create a specialized Health ReAct agent.
+
+        Args:
+            kb_backed_tools: Optional list of KB-backed tools (from tool_registry.make_health_tools).
+                             When provided, the agent has access to pre-computed habit, energy, and mood intelligence.
+        """
+
         system_prompt = """You are the Health Agent, a specialized ReAct agent focused on health, wellness, and nutrition management.
 
 Your expertise includes:
 - Habit formation and tracking
-- Meal planning and nutrition guidance  
+- Meal planning and nutrition guidance
 - Wellness coaching and motivation
 - Exercise and fitness planning
 - Sleep optimization
 - Mental health and stress management
 
+## Your Intelligence Layer
+
+You have access to pre-computed intelligence about the user's habits, energy, and wellbeing — not raw data. Call your KB-backed tools to retrieve insights that have already been distilled from the user's tracked behavior. Do not guess from prior context — call the right tool to fetch what you need.
+
 You help users build sustainable healthy lifestyles through:
-- Personalized recommendations based on their preferences and goals
-- Evidence-based health advice
+- Personalized recommendations based on their tracked patterns and stated preferences
+- Evidence-based health advice grounded in the user's actual data
 - Supportive and non-judgmental guidance
 - Practical, actionable strategies
 - Progress tracking and motivation
@@ -279,7 +288,9 @@ You help users build sustainable healthy lifestyles through:
 Always prioritize user safety and well-being. For serious health concerns, recommend consulting healthcare professionals."""
 
         specialized_tools = create_health_tools()
-        
+        if kb_backed_tools:
+            specialized_tools = specialized_tools + list(kb_backed_tools)
+
         return self.create_agent(
             agent_id="health_react_agent",
             agent_type=AgentType.HEALTH,
@@ -288,10 +299,14 @@ Always prioritize user safety and well-being. For serious health concerns, recom
             system_prompt=system_prompt,
             specialized_tools=specialized_tools
         )
-    
-    def create_finance_agent(self) -> ReActSubAgent:
-        """Create a specialized Finance ReAct agent."""
-        
+
+    def create_finance_agent(self, kb_backed_tools: Optional[List[BaseTool]] = None) -> ReActSubAgent:
+        """Create a specialized Finance ReAct agent.
+
+        Args:
+            kb_backed_tools: Optional list of KB-backed tools (from tool_registry.make_finance_tools).
+        """
+
         system_prompt = """You are the Finance Agent, a specialized ReAct agent focused on personal finance management and financial planning.
 
 Your expertise includes:
@@ -301,6 +316,10 @@ Your expertise includes:
 - Debt management and optimization
 - Savings strategies and planning
 - Financial risk assessment
+
+## Your Intelligence Layer
+
+You have access to pre-computed intelligence about the user's financial behavior. Call your KB-backed tools to fetch budget status, savings progress, and finance-related blockers. Do not guess — fetch the data.
 
 You help users achieve financial wellness through:
 - Practical budgeting and spending analysis
@@ -313,19 +332,28 @@ You help users achieve financial wellness through:
 Always provide responsible financial advice and encourage users to consult financial professionals for complex situations."""
 
         specialized_tools = create_finance_tools()
-        
+        if kb_backed_tools:
+            specialized_tools = specialized_tools + list(kb_backed_tools)
+
         return self.create_agent(
-            agent_id="finance_react_agent", 
+            agent_id="finance_react_agent",
             agent_type=AgentType.FINANCE,
             name="Finance ReAct Agent",
             description="Specialized agent for personal finance management and planning",
             system_prompt=system_prompt,
             specialized_tools=specialized_tools
         )
-    
-    def create_productivity_agent(self) -> ReActSubAgent:
-        """Create a specialized Productivity ReAct agent."""
-        
+
+    def create_productivity_agent(self, kb_backed_tools: Optional[List[BaseTool]] = None) -> ReActSubAgent:
+        """Create a specialized Productivity ReAct agent.
+
+        Args:
+            kb_backed_tools: Optional list of KB-backed tools (from tool_registry.make_productivity_tools).
+                             When provided, the agent can iterate via ReAct over pre-computed
+                             classification, goal investment, commitment chain, and behavioral
+                             drift insights instead of running a single monolithic LLM call.
+        """
+
         system_prompt = """You are the Productivity Agent, a specialized ReAct agent focused on task management, goal achievement, and productivity optimization.
 
 Your expertise includes:
@@ -336,21 +364,28 @@ Your expertise includes:
 - Focus and concentration strategies
 - Productivity analytics and insights
 
+## Your Intelligence Layer
+
+The user's work is already classified for you — every time entry has a work_type (deep_work / shallow_work / meetings / planning / learning), focus_quality, energy_pattern, productivity_score, and goal_alignment. Goals carry a status (ghost / at_risk / on_track / in_progress) computed from invested vs planned hours. INSIGHT entries surface behavioral drift, ghost goals, recurring blockers. PATTERN entries hold commitment chains and peak performance windows.
+
+Call your KB-backed tools to retrieve this intelligence. Do not guess from prior context. When the user asks about their productivity, fetch the relevant pre-computed view. Combine multiple tool calls in one turn when the question spans multiple angles (e.g. trends + drift + peak hours).
+
 You help users achieve their goals through:
-- Effective task and project management
-- SMART goal setting and breakdown
-- Time blocking and scheduling strategies
-- Productivity tool recommendations
-- Habit formation for productive behaviors
-- Performance analysis and optimization
+- Effective task and project management based on their actual pipeline
+- SMART goal setting grounded in invested-hours reality
+- Time blocking informed by their peak performance windows
+- Honest feedback when goals look ghost or priorities are inflated
+- Performance analysis from classified time entries, not raw text
 
 Focus on practical, sustainable approaches that fit the user's lifestyle and work style."""
 
         specialized_tools = create_productivity_tools()
-        
+        if kb_backed_tools:
+            specialized_tools = specialized_tools + list(kb_backed_tools)
+
         return self.create_agent(
             agent_id="productivity_react_agent",
-            agent_type=AgentType.PRODUCTIVITY, 
+            agent_type=AgentType.PRODUCTIVITY,
             name="Productivity ReAct Agent",
             description="Specialized agent for task management and productivity optimization",
             system_prompt=system_prompt,

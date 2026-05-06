@@ -394,6 +394,53 @@ EMBEDDING_CHUNK_PROFILE: Dict[str, Dict[str, Any]] = {
         "max_chunks": 2,
         "semantic": True,
     },
+    # Intelligence-engine per-type profiles (atomic vectors, no chunking)
+    "habit_entry": {"max_chars": 220, "overlap": 0, "max_chunks": 1, "semantic": False},
+    "daily_habit_summary": {"max_chars": 200, "overlap": 0, "max_chunks": 1, "semantic": False},
+    "task_entry": {"max_chars": 240, "overlap": 0, "max_chunks": 1, "semantic": False},
+    "morning_intent": {"max_chars": 220, "overlap": 0, "max_chunks": 1, "semantic": False},
+    "evening_reflection": {"max_chars": 260, "overlap": 0, "max_chunks": 1, "semantic": False},
+    "goal_v2": {"max_chars": 360, "overlap": 0, "max_chunks": 1, "semantic": False},
+    "chat_interaction": {"max_chars": 420, "overlap": 0, "max_chunks": 1, "semantic": False},
+    "user_preference": {"max_chars": 340, "overlap": 0, "max_chunks": 1, "semantic": False},
+    "reminder_memory": {"max_chars": 260, "overlap": 0, "max_chunks": 1, "semantic": False},
+    "conscious_patterns": {"max_chars": 300, "overlap": 0, "max_chunks": 1, "semantic": False},
+    "subconscious_patterns": {"max_chars": 300, "overlap": 0, "max_chunks": 1, "semantic": False},
+    "tag_catalog": {"max_chars": 160, "overlap": 0, "max_chunks": 1, "semantic": False},
+    "project": {"max_chars": 240, "overlap": 0, "max_chunks": 1, "semantic": False},
+    "pattern_v2": {"max_chars": 320, "overlap": 0, "max_chunks": 1, "semantic": False},
+    "insight_v2": {"max_chars": 320, "overlap": 0, "max_chunks": 1, "semantic": False},
+}
+
+# Categories that are intelligence-engine pre-built embedding content.
+# When entry.category matches one of these, the `content` field is already the
+# optimized retrieval surface — no extra fact-extraction needed.
+INTELLIGENCE_PREBUILT_CATEGORIES: Set[str] = {
+    "habit_entry",
+    "daily_habit_summary",
+    "task_entry",
+    "morning_intent",
+    "evening_reflection",
+    "goal_v2",
+    "chat_interaction",
+    "user_preference",
+    "reminder_memory",
+    "conscious_patterns",
+    "subconscious_patterns",
+    "tag_catalog",
+    "project",
+    "pattern_v2",
+    "insight_v2",
+    "time_entry_v2",
+}
+
+# time_entry_v2 reuses the existing time_entry chunk profile but routes through
+# the intelligence-engine branch (content is the prebuilt classification string).
+EMBEDDING_CHUNK_PROFILE["time_entry_v2"] = {
+    "max_chars": 240,
+    "overlap": 0,
+    "max_chunks": 1,
+    "semantic": False,
 }
 
 
@@ -767,6 +814,11 @@ class KnowledgeBaseService:
         source = str(context_payload.get("source", "")).strip().lower()
         source_action = str(context_payload.get("source_action", "")).strip().lower()
 
+        # Intelligence-engine prebuilt categories pass through unchanged so the
+        # `content` field stays the embedding surface.
+        if normalized_category in INTELLIGENCE_PREBUILT_CATEGORIES:
+            return normalized_category
+
         if (
             normalized_category == "time_entry"
             or source == "alterego_timetracker"
@@ -861,6 +913,11 @@ class KnowledgeBaseService:
             bucket.append(f"{label}: {normalized_value}")
 
         facts: List[str] = []
+
+        # Intelligence-engine prebuilt content: the `content` field already IS
+        # the optimized retrieval surface. Skip fact extraction so it stays atomic.
+        if strategy_category in INTELLIGENCE_PREBUILT_CATEGORIES:
+            return facts
 
         if strategy_category == "time_anchor":
             time_matches = re.findall(r"\b([01]?\d|2[0-3])[:.]([0-5]\d)\b", f"{normalized_title} {normalized_content}")
@@ -1106,6 +1163,223 @@ class KnowledgeBaseService:
             entry_sub_type=entry_sub_type,
         )
         return embedding_text
+
+    # ────────────────────────────────────────────────────────────────────────
+    # Intelligence-engine embedding builders (Part 1 of architecture plan).
+    # Each builder returns a single-line embedding string that IS the
+    # retrieval surface — classification, status, and structure expressed
+    # directly so semantic search can match on intelligence, not raw text.
+    # ────────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def deterministic_entry_id(*parts: Any) -> str:
+        """Compose stable sha256 ID from string parts. Used for upserts."""
+        joined = "::".join(str(part) for part in parts if part is not None)
+        return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _kv(label: str, value: Any) -> Optional[str]:
+        if value is None or value == "":
+            return None
+        return f"{label}:{value}"
+
+    @staticmethod
+    def _join_facts(parts: List[Optional[str]], sep: str = " | ") -> str:
+        return sep.join(p for p in parts if p)
+
+    def _build_time_entry_embedding(self, entry: Dict[str, Any], classification: Dict[str, Any]) -> str:
+        """Build the rich classification-as-embedding string for a time entry."""
+        context_notes = entry.get("context_notes") or entry.get("ai_detail")
+        leads: List[str] = []
+        if entry.get("context_notes"):
+            leads.append(f"User note: {entry['context_notes']}")
+        if entry.get("ai_detail"):
+            leads.append(f"AI detail: {entry['ai_detail']}")
+
+        work_type = classification.get("work_type", "work")
+        project = entry.get("project_name") or entry.get("project") or "unknown"
+        description = entry.get("description") or entry.get("task_name") or entry.get("title") or ""
+        duration = entry.get("duration_minutes")
+        if duration is None and entry.get("duration_seconds") is not None:
+            try:
+                duration = round(float(entry["duration_seconds"]) / 60.0, 1)
+            except (TypeError, ValueError):
+                duration = None
+        focus = classification.get("focus_quality")
+        energy = classification.get("energy_pattern")
+        goal_alignment = classification.get("goal_alignment")
+        if isinstance(goal_alignment, list):
+            goal_alignment = ",".join(goal_alignment)
+        productivity = classification.get("productivity_score")
+
+        parts: List[Optional[str]] = [
+            f"{work_type} | {project}: {description}",
+            f"{duration}m" if duration is not None else None,
+            f"focus:{focus}" if focus is not None else None,
+            f"energy:{energy}" if energy else None,
+            f"goal:{goal_alignment}" if goal_alignment else None,
+            f"productivity:{productivity}" if productivity is not None else None,
+        ]
+        if entry.get("is_first_entry_of_day"):
+            parts.append("boundary:start")
+        if entry.get("is_last_entry_of_day"):
+            parts.append("boundary:end")
+
+        body = self._join_facts(parts)
+        if leads:
+            return " | ".join(leads + [body])
+        return body
+
+    def _build_per_habit_embedding(self, habit: Dict[str, Any]) -> str:
+        """One vector per habit per snapshot."""
+        lead = habit.get("noteToAI") or habit.get("note_to_ai")
+        parts: List[Optional[str]] = [
+            f"habit:{habit.get('name', 'unknown')}",
+            f"streak:{habit.get('currentStreak', habit.get('streak', 0))}d",
+            f"completion_7d:{habit.get('completionRate7d', habit.get('completion_7d', 0))}%",
+            f"completion_30d:{habit.get('completionRate30d', habit.get('completion_30d', 0))}%",
+            self._kv("last_completed", habit.get("lastCompleted") or habit.get("last_completed")),
+            self._kv("last_skipped", habit.get("lastSkipped") or habit.get("last_skipped")),
+            self._kv("trend", habit.get("trend")),
+            self._kv("priority", habit.get("priority")),
+        ]
+        body = self._join_facts(parts)
+        if lead:
+            return f"{lead} | {body}"
+        return body
+
+    def _build_daily_habit_summary_embedding(
+        self,
+        date_str: str,
+        habits: List[Dict[str, Any]],
+    ) -> str:
+        completed = sum(1 for h in habits if h.get("completedToday") or h.get("completed_today"))
+        total = len(habits)
+        streaks = [int(h.get("currentStreak", h.get("streak", 0)) or 0) for h in habits]
+        streak_avg = round(sum(streaks) / len(streaks), 1) if streaks else 0
+        pending = [h.get("name") for h in habits if not (h.get("completedToday") or h.get("completed_today"))]
+        return self._join_facts([
+            f"daily_habits:{date_str}",
+            f"completed:{completed}/{total}",
+            f"streak_avg:{streak_avg}d",
+            f"pending:{','.join(p for p in pending if p)}" if pending else None,
+        ])
+
+    def _build_morning_intent_embedding(self, checkup: Dict[str, Any]) -> str:
+        return self._join_facts([
+            f"morning_intent:{checkup.get('checkup_date', '')}",
+            self._kv("focus_target", checkup.get("focus_target")),
+            self._kv("energy", checkup.get("morning_energy") or checkup.get("energy")),
+            self._kv("planned_deep_work", checkup.get("planned_deep_work_hours") or checkup.get("planned_deep_work")),
+            self._kv("commitment", checkup.get("intent_note") or checkup.get("commitment")),
+        ])
+
+    def _build_evening_reflection_embedding(self, checkup: Dict[str, Any]) -> str:
+        morning_score = checkup.get("morning_energy") or checkup.get("morning_score")
+        evening_score = checkup.get("evening_energy") or checkup.get("evening_score")
+        mood_shift = None
+        if morning_score is not None and evening_score is not None:
+            mood_shift = f"{morning_score}->{evening_score}"
+        return self._join_facts([
+            f"evening_reflection:{checkup.get('checkup_date', '')}",
+            self._kv("wins", checkup.get("wins")),
+            self._kv("blockers", checkup.get("blockers")),
+            self._kv("follow_through", checkup.get("follow_through_score") or checkup.get("follow_through")),
+            self._kv("mood_shift", mood_shift),
+        ])
+
+    def _build_goal_embedding(self, goal: Dict[str, Any]) -> str:
+        invested_total = goal.get("invested_hours") or 0
+        planned = goal.get("estimatedEffortHours") or goal.get("estimated_effort_hours") or 0
+        pct = None
+        try:
+            if planned and float(planned) > 0:
+                pct = round(float(invested_total) / float(planned) * 100, 1)
+        except (TypeError, ValueError):
+            pct = None
+        return self._join_facts([
+            f"goal:{goal.get('title', goal.get('name', 'unknown'))}",
+            self._kv("description", goal.get("description")),
+            self._kv("why", goal.get("whyItMatters") or goal.get("why_it_matters")),
+            self._kv("smart", goal.get("smartCriteria") or goal.get("smart_criteria")),
+            self._kv("priority", goal.get("priority")),
+            self._kv("days_remaining", goal.get("days_remaining")),
+            f"invested:{invested_total}h / planned:{planned}h ({pct}%)" if planned else f"invested:{invested_total}h",
+            self._kv("this_month", f"{goal.get('hours_this_month', 0)}h"),
+            self._kv("status", goal.get("status")),
+        ])
+
+    def _build_task_embedding(self, task: Dict[str, Any]) -> str:
+        lead = task.get("note_to_ai") or task.get("noteToAI")
+        body = self._join_facts([
+            f"task:{task.get('title', '')}",
+            self._kv("status", task.get("status")),
+            self._kv("priority", task.get("priority")),
+            self._kv("due", task.get("due_date") or task.get("dueDate")),
+            self._kv("goal", task.get("linked_goal") or task.get("linkedGoal")),
+            self._kv("est", f"{task.get('estimated_duration', task.get('estimatedDuration', ''))}m" if task.get("estimated_duration") or task.get("estimatedDuration") else None),
+        ])
+        if lead:
+            return f"{lead} | {body}"
+        return body
+
+    def _build_chat_user_embedding(self, user_message: str) -> str:
+        return f"user_said: {user_message.strip()}"
+
+    def _build_preference_embedding(self, preference: Dict[str, Any]) -> str:
+        question_id = preference.get("question_id") or preference.get("id") or "pref"
+        parts = [
+            f"preference:{question_id}",
+            self._kv("Q", preference.get("question_text") or preference.get("question")),
+            self._kv("A", preference.get("answer")),
+            self._kv("detail", preference.get("description") or preference.get("detail")),
+        ]
+        return self._join_facts(parts)
+
+    def _build_reminder_memory_embedding(self, memory: Dict[str, Any]) -> str:
+        return self._join_facts([
+            f"reminder:{memory.get('title', '')}",
+            self._kv("content", memory.get("content")),
+            self._kv("due", memory.get("due") or memory.get("when")),
+            self._kv("trigger", memory.get("trigger") or memory.get("trigger_event")),
+        ])
+
+    def _build_conscious_pattern_embedding(self, memory: Dict[str, Any]) -> str:
+        return self._join_facts([
+            f"conscious_pattern: {memory.get('pattern_description', memory.get('description', ''))}",
+            self._kv("observed_in", memory.get("observed_in") or memory.get("contexts")),
+        ])
+
+    def _build_subconscious_pattern_embedding(self, memory: Dict[str, Any]) -> str:
+        return self._join_facts([
+            f"subconscious_pattern: {memory.get('pattern_description', memory.get('description', ''))}",
+            self._kv("inferred_from", memory.get("inferred_from") or memory.get("evidence")),
+        ])
+
+    def _build_tag_embedding(self, tag: Dict[str, Any]) -> str:
+        return self._join_facts([
+            f"tag:{tag.get('name', '')}",
+            self._kv("description", tag.get("description")),
+            self._kv("usage_count", tag.get("usage_count")),
+        ])
+
+    def _build_project_embedding(self, project: Dict[str, Any]) -> str:
+        linked = project.get("linked_goals") or []
+        if isinstance(linked, list):
+            linked = ",".join(str(g) for g in linked)
+        return self._join_facts([
+            f"project:{project.get('name', '')}",
+            self._kv("description", project.get("description")),
+            self._kv("status", project.get("status")),
+            self._kv("linked_goals", linked or None),
+            self._kv("total_hours", f"{project.get('total_hours', 0)}h"),
+        ])
+
+    def _build_insight_embedding(self, insight_text: str) -> str:
+        return str(insight_text or "").strip()
+
+    def _build_pattern_embedding(self, pattern_text: str) -> str:
+        return str(pattern_text or "").strip()
 
     def _build_embedding_cache_key(self, embedding_text: str) -> str:
         normalized_text = " ".join(str(embedding_text or "").split()).strip().lower() or "empty"
@@ -2834,6 +3108,8 @@ class KnowledgeBaseService:
         """
         try:
             context_payload = dict(context or {})
+            # Preserve the un-compacted context for downstream precompute (habit array, etc.)
+            original_context = dict(context_payload)
             category, entry_sub_type, tags = self._infer_interaction_category_and_sub_type(
                 agent_type=agent_type,
                 context=context_payload,
@@ -2898,7 +3174,7 @@ class KnowledgeBaseService:
                     if updated_entry:
                         return updated_entry
 
-            return await self.create_entry(
+            created_entry = await self.create_entry(
                 entry_type=entry_type,
                 entry_sub_type=entry_sub_type,
                 category=category,
@@ -2907,9 +3183,168 @@ class KnowledgeBaseService:
                 metadata=metadata_payload,
                 tags=tags
             )
+
+            # Fire-and-forget intelligence pre-computation for behaviorally
+            # rich categories. Errors swallowed inside the service so sync
+            # path is never blocked. Pass the un-compacted original_context so
+            # the habit array, full task list, etc. survive into per-type vectors.
+            if category in {"time_entry", "habit_snapshot", "daily_checkup", "task_board_snapshot", "goal", "goal_update"}:
+                try:
+                    asyncio.create_task(
+                        self._run_intelligence_precompute_async(category, original_context)
+                    )
+                except RuntimeError:
+                    # No running event loop (sync test context) — skip silently
+                    pass
+
+            return created_entry
         except Exception as e:
             logger.error("add_interaction_history", "Failed to add interaction history", error=e)
             raise
+
+    async def _persist_habit_n_plus_one(self, context_payload: Dict[str, Any]) -> None:
+        """Persist N+1 vectors for a habit snapshot: one per habit + one daily summary.
+
+        Reads the un-compacted habits[] array out of the original sync payload.
+        Each per-habit vector uses a deterministic ID so re-syncs upsert in place.
+        """
+        try:
+            habits = context_payload.get("habits") or []
+            if not isinstance(habits, list) or not habits:
+                return
+
+            captured_at = str(context_payload.get("captured_at") or "")
+            date_str = captured_at[:10] if len(captured_at) >= 10 else datetime.utcnow().date().isoformat()
+
+            # 1. Per-habit vectors
+            for habit in habits:
+                if not isinstance(habit, dict):
+                    continue
+                content = self._build_per_habit_embedding(habit)
+                if not content:
+                    continue
+                habit_id = (
+                    habit.get("habit_id")
+                    or habit.get("id")
+                    or habit.get("name")
+                    or "unknown"
+                )
+                sync_event_key = f"habit_entry:{habit_id}:{date_str}"
+                metadata = {
+                    "habit_id": habit.get("habit_id") or habit.get("id"),
+                    "habit_name": habit.get("name"),
+                    "completion_7d": habit.get("completionRate7d") or habit.get("completion_7d"),
+                    "completion_30d": habit.get("completionRate30d") or habit.get("completion_30d"),
+                    "streak": habit.get("currentStreak") or habit.get("streak"),
+                    "pattern": habit.get("pattern"),
+                    "priority": habit.get("priority"),
+                    "last_completed": habit.get("lastCompleted") or habit.get("last_completed"),
+                    "last_skipped": habit.get("lastSkipped") or habit.get("last_skipped"),
+                    "trend": habit.get("trend"),
+                    "has_note_to_ai": bool(habit.get("noteToAI") or habit.get("note_to_ai")),
+                    "captured_at": captured_at or None,
+                    "checkup_date": date_str,
+                    "context": {"sync_event_key": sync_event_key},
+                }
+                try:
+                    await self.create_entry(
+                        entry_type=KnowledgeEntryType.INTERACTION,
+                        entry_sub_type=KnowledgeEntrySubType.HEALTH_INTERACTION,
+                        category="habit_entry",
+                        title=content[:140],
+                        content=content,
+                        metadata=metadata,
+                        tags=["habit", "habit_entry"],
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "habit_entry_persist_failed",
+                        f"Failed to persist habit_entry for {habit.get('name')}: {exc}",
+                    )
+
+            # 2. Daily summary vector
+            try:
+                summary_content = self._build_daily_habit_summary_embedding(date_str, habits)
+                if summary_content:
+                    sync_event_key = f"daily_habit_summary:{date_str}"
+                    await self.create_entry(
+                        entry_type=KnowledgeEntryType.INTERACTION,
+                        entry_sub_type=KnowledgeEntrySubType.HEALTH_INTERACTION,
+                        category="daily_habit_summary",
+                        title=summary_content[:140],
+                        content=summary_content,
+                        metadata={
+                            "checkup_date": date_str,
+                            "captured_at": captured_at or None,
+                            "total_habits": len(habits),
+                            "context": {"sync_event_key": sync_event_key},
+                        },
+                        tags=["habit", "daily_summary"],
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "daily_habit_summary_persist_failed",
+                    f"Failed to persist daily_habit_summary: {exc}",
+                )
+        except Exception as exc:
+            logger.warning(
+                "habit_n_plus_one_failed",
+                f"Habit N+1 split failed: {exc}",
+            )
+
+    async def _run_intelligence_precompute_async(
+        self,
+        category: str,
+        context_payload: Dict[str, Any],
+    ) -> None:
+        """Async background runner for IntelligencePrecomputeService.
+
+        Lazily imports to avoid circular import at module load time. Builds a
+        minimal `new_entries` list from the synced context so the precompute
+        service can classify+persist the time_entry_v2 vector and refresh
+        downstream patterns/insights.
+        """
+        try:
+            from app.services.intelligence_precompute import IntelligencePrecomputeService
+            from app.services.time_context_analyzer import get_time_analyzer
+
+            new_entries: List[Dict[str, Any]] = []
+            if category == "time_entry":
+                # Flatten context_payload into entry dict shape expected by the analyzer
+                new_entries.append({
+                    "category": "time_entry",
+                    "entry_id": context_payload.get("time_entry_id") or context_payload.get("entry_id"),
+                    "alterego_entry_id": context_payload.get("time_entry_id"),
+                    "project_name": context_payload.get("project_name"),
+                    "project_id": context_payload.get("project_id"),
+                    "description": context_payload.get("description") or context_payload.get("task_name"),
+                    "task_name": context_payload.get("task_name"),
+                    "duration_minutes": context_payload.get("duration_minutes"),
+                    "duration_seconds": context_payload.get("duration_seconds"),
+                    "start_time": context_payload.get("start_time"),
+                    "end_time": context_payload.get("end_time"),
+                    "focus_score": context_payload.get("focus_score"),
+                    "energy_score": context_payload.get("energy_score"),
+                    "linked_goal": context_payload.get("linked_goal"),
+                    "blockers": context_payload.get("blockers"),
+                    "context_notes": context_payload.get("context_notes"),
+                    "ai_detail": context_payload.get("ai_detail"),
+                    "tags": context_payload.get("tags") or context_payload.get("tag_names") or [],
+                    "is_first_entry_of_day": context_payload.get("is_first_entry_of_day", False),
+                    "is_last_entry_of_day": context_payload.get("is_last_entry_of_day", False),
+                })
+
+            # Habit snapshot N+1 split: per-habit vectors + 1 daily summary
+            if category == "habit_snapshot":
+                await self._persist_habit_n_plus_one(context_payload)
+
+            service = IntelligencePrecomputeService(self, get_time_analyzer())
+            await service.run_post_sync(self.user_id, new_entries)
+        except Exception as exc:
+            logger.warning(
+                "_run_intelligence_precompute_async",
+                f"Precompute failed for category={category}: {exc}",
+            )
 
     async def extract_and_store_preferences(self, 
                                           user_input: str, 
@@ -3828,6 +4263,7 @@ class KnowledgeBaseService:
         # Bucket by category for efficient filtering.
         task_board_entries: List[KnowledgeEntry] = []
         habit_entries: List[KnowledgeEntry] = []
+        per_habit_entries: List[KnowledgeEntry] = []  # Phase 5 N+1 vectors
         goal_entries: List[KnowledgeEntry] = []
         time_entry_entries: List[KnowledgeEntry] = []
 
@@ -3837,9 +4273,11 @@ class KnowledgeBaseService:
                 task_board_entries.append(entry)
             elif category in {"habit_snapshot", "habit_progress"}:
                 habit_entries.append(entry)
-            elif category in {"goal", "goals", "goal_update"}:
+            elif category == "habit_entry":
+                per_habit_entries.append(entry)
+            elif category in {"goal", "goals", "goal_update", "goal_v2"}:
                 goal_entries.append(entry)
-            elif category == "time_entry":
+            elif category in {"time_entry", "time_entry_v2"}:
                 time_entry_entries.append(entry)
 
         # ---- active tasks ---------------------------------------------------------
@@ -3915,6 +4353,36 @@ class KnowledgeBaseService:
                 "n_completed": n_completed,
                 "pending_names": pending_names[:10],
             }
+
+        # ---- per-habit detail (Phase 5 N+1 vectors) -------------------------------
+        # Add structured per-habit data so chat context includes completion_7d,
+        # streak, trend, etc. — not just the aggregate. Latest vector wins per habit.
+        if per_habit_entries:
+            latest_per_habit: Dict[str, KnowledgeEntry] = {}
+            for entry in per_habit_entries:
+                meta = _entry_metadata(entry)
+                key = str(meta.get("habit_id") or meta.get("habit_name") or entry.entry_id)
+                existing = latest_per_habit.get(key)
+                if existing is None or _entry_event_ts(entry) > _entry_event_ts(existing):
+                    latest_per_habit[key] = entry
+
+            per_habit_detail: List[Dict[str, Any]] = []
+            for entry in latest_per_habit.values():
+                meta = _entry_metadata(entry)
+                per_habit_detail.append({
+                    "name": meta.get("habit_name"),
+                    "completion_7d": meta.get("completion_7d"),
+                    "completion_30d": meta.get("completion_30d"),
+                    "streak": meta.get("streak"),
+                    "pattern": meta.get("pattern"),
+                    "priority": meta.get("priority"),
+                    "trend": meta.get("trend"),
+                    "last_completed": meta.get("last_completed"),
+                    "has_note_to_ai": meta.get("has_note_to_ai"),
+                    "content": (entry.content or "")[:240],
+                })
+            per_habit_detail.sort(key=lambda h: -int(h.get("streak") or 0))
+            payload.setdefault("habits", {})["per_habit_detail"] = per_habit_detail[:15]
 
         # ---- goals ----------------------------------------------------------------
         active_goals_payload: List[Dict[str, Any]] = []

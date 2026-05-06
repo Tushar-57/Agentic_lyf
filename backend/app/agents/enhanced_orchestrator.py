@@ -711,18 +711,11 @@ Response contract:
                 logger.warning("profile_snapshot_failed", f"Failed to load user preference snapshot: {profile_error}", {"error": str(profile_error)})
 
             routing_context = dict(context or {})
+            # Phase 6: orchestrator no longer runs its own RAG pre-fetch.
+            # Specialists own their KB queries via KB-backed tools (Phase 2b).
+            # The structured chat_context_payload below + profile snapshot are
+            # the only context the orchestrator needs for intent routing.
             general_context: Dict[str, Any] = {}
-            try:
-                general_context = await self.knowledge_base.get_contextual_knowledge_for_agent(
-                    user_input=user_input,
-                    agent_type="general",
-                    max_results=5,
-                )
-                if isinstance(general_context, dict):
-                    routing_context["knowledge_context_summary"] = general_context.get("context_summary")
-                    routing_context["general_recent_time_entries"] = general_context.get("recent_time_entries", [])[:3]
-            except Exception as context_error:
-                logger.warning("knowledge_context_failed", f"Failed to load general knowledge context: {context_error}", {"error": str(context_error)})
 
             if profile_snapshot:
                 routing_context["profile_snapshot"] = profile_snapshot
@@ -981,12 +974,15 @@ Response contract:
         try:
             intent_blueprint = intent_blueprint or {}
 
-            # First, try pattern-based classification for speed
+            # Phase 6.4: regex demoted to a fast-path pre-filter only.
+            # Regex result accepted as-is only when its confidence is >= 0.9 —
+            # otherwise we fall through to the LLM classifier (which is now the
+            # primary path). Threshold raised from 0.8 to 0.9 to avoid letting
+            # weakly-matched regex hits short-circuit good LLM routing.
             pattern_result = self._pattern_based_classification(user_input, complexity)
 
-            # For lower confidence or complex tasks, use LLM classification
             llm_result: Optional[Dict[str, Any]] = None
-            if pattern_result["confidence"] <= 0.8:
+            if pattern_result["confidence"] < 0.9:
                 llm_result = await self._llm_based_classification(
                     user_input,
                     context,
@@ -1594,13 +1590,20 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
             return f"I encountered an issue while delegating to the specialist: {str(e)}"
 
     async def _orchestrate_complex_workflow(
-        self, 
-        user_input: str, 
-        plan: Dict[str, Any], 
-        intent_result: Dict[str, Any], 
+        self,
+        user_input: str,
+        plan: Dict[str, Any],
+        intent_result: Dict[str, Any],
         deep_state: DeepAgentState
     ) -> str:
-        """Orchestrate complex multi-agent workflow."""
+        """Orchestrate complex multi-agent workflow.
+
+        Phase 6: when the plan only contains specialist steps with no
+        cross-step dependencies, fan them out in parallel via asyncio.gather
+        instead of running sequentially. Falls back to sequential execution
+        for steps that explicitly declare dependencies (`depends_on` field)
+        or for orchestrator/synthesis steps.
+        """
         try:
             if not plan:
                 # Fallback to single agent delegation
@@ -1611,27 +1614,51 @@ Focus on practical, actionable steps that leverage our specialized ReAct agents 
                     {},
                     deep_state
                 )
-            
-            workflow_results = []
-            
-            # Execute each step in the plan
-            for step in plan.get('steps', []):
+
+            steps = plan.get('steps', []) or []
+            specialist_steps = [
+                s for s in steps
+                if s.get('agent') and s.get('agent') != 'orchestrator' and not s.get('depends_on')
+            ]
+            other_steps = [s for s in steps if s not in specialist_steps]
+
+            workflow_results: List[Dict[str, Any]] = []
+
+            # Phase 6c: parallel fan-out for independent specialist steps
+            if specialist_steps:
+                import asyncio as _asyncio
+                parallel = await _asyncio.gather(*[
+                    self._execute_workflow_step(s, user_input, workflow_results, deep_state)
+                    for s in specialist_steps
+                ], return_exceptions=True)
+                for s, res in zip(specialist_steps, parallel):
+                    if isinstance(res, Exception):
+                        workflow_results.append({
+                            "step": s.get('step', 0),
+                            "agent": s.get('agent', 'unknown'),
+                            "action": s.get('action', ''),
+                            "result": f"Error: {res}",
+                            "status": "failed",
+                            "duration": 0.0,
+                        })
+                    else:
+                        workflow_results.append(res)
+
+            # Sequential for orchestrator/synthesis or dependency-bearing steps
+            for step in other_steps:
                 step_result = await self._execute_workflow_step(
-                    step, 
-                    user_input, 
-                    workflow_results, 
-                    deep_state
+                    step, user_input, workflow_results, deep_state
                 )
                 workflow_results.append(step_result)
-            
+
             # Synthesize results
             return await self._synthesize_workflow_results(
-                workflow_results, 
-                plan, 
-                user_input, 
+                workflow_results,
+                plan,
+                user_input,
                 deep_state
             )
-            
+
         except Exception as e:
             logger.error("workflow_failed", "Complex workflow orchestration failed", error=e)
             return f"I encountered an issue during workflow execution: {str(e)}"

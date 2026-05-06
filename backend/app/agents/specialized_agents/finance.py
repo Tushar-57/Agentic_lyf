@@ -53,14 +53,28 @@ class FinanceAgent(BaseAgent):
         )
         
         self.knowledge_base = get_knowledge_base_service()
-    
+        self._react_agent = None
+        self._brain_service = None
+
     async def execute(self, state: AgentState) -> Dict[str, Any]:
-        """Execute finance-related requests with contextual knowledge."""
+        """Execute finance-related requests with contextual knowledge.
+
+        Phase 6: tries the ReAct loop with the KB-backed finance arsenal first.
+        Falls back to legacy 4-branch handlers if ReAct setup fails.
+        """
         try:
             user_input = state.get("user_input", "")
             state_context = state.get("context", {}) if isinstance(state, dict) else {}
             logger.info("finance_processing", "FinanceAgent processing", {"input_preview": user_input[:100]})
-            
+
+            # ReAct path first
+            react_response = await self._try_execute_react(user_input)
+            if react_response is not None:
+                return {
+                    "response": react_response,
+                    "reasoning": {"agent_type": "finance", "via": "react"},
+                }
+
             # Get contextual knowledge from knowledge base
             contextual_knowledge = await self.knowledge_base.get_contextual_knowledge_for_agent(
                 user_input=user_input,
@@ -308,3 +322,43 @@ class FinanceAgent(BaseAgent):
                 merged_context[key] = value
 
         return merged_context
+
+    async def _try_execute_react(self, user_input: str):
+        """Run the ReAct sub-agent with KB-backed finance arsenal."""
+        try:
+            agent = self._get_or_build_react_agent()
+            if agent is None:
+                return None
+            result = await agent.execute(user_input)
+            if not result or not result.get("success"):
+                return None
+            inner = result.get("result") or {}
+            messages = inner.get("messages") if isinstance(inner, dict) else None
+            if not messages:
+                return None
+            for msg in reversed(messages):
+                content = getattr(msg, "content", None) or (msg.get("content") if isinstance(msg, dict) else None)
+                if content and isinstance(content, str):
+                    return content
+            return None
+        except Exception as exc:
+            logger.warning("react_path_failed", f"Finance ReAct path failed: {exc}")
+            return None
+
+    def _get_or_build_react_agent(self):
+        if self._react_agent is not None:
+            return self._react_agent
+        try:
+            from ..react_factory import get_react_agent_factory
+            from ..tool_registry import make_finance_tools
+            from ...services.brain_service import BrainService
+
+            if self._brain_service is None:
+                self._brain_service = BrainService(self.knowledge_base)
+            kb_tools = make_finance_tools(self._brain_service, self.knowledge_base)
+            factory = get_react_agent_factory()
+            self._react_agent = factory.create_finance_agent(kb_backed_tools=kb_tools)
+            return self._react_agent
+        except Exception as exc:
+            logger.warning("react_agent_build_failed", f"Failed to build finance ReAct agent: {exc}")
+            return None

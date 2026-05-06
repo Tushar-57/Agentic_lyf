@@ -104,6 +104,8 @@ class EnhancedProductivityAgent(BaseAgent):
         self.knowledge_base = get_knowledge_base_service()
         self.time_analyzer = get_time_analyzer()
         self.workflow_coordinator = get_workflow_coordinator()
+        self._react_agent = None  # lazy-built ReAct sub-agent (Phase 3)
+        self._brain_service = None
     
     def _build_enhanced_system_prompt(self) -> str:
         return """You are an advanced productivity coach with deep time analytics capabilities.
@@ -130,32 +132,54 @@ Response format:
 - Actionable Suggestions: Executable actions with impact estimates"""
 
     async def execute(self, state: AgentState) -> Dict[str, Any]:
-        """Execute enhanced productivity analysis with actionable outputs."""
+        """Execute productivity analysis via ReAct loop over KB-backed tools.
+
+        Replaces the prior 4-branch single-LLM-call structure (performance review,
+        actionable recommendations, goal gap analysis, general). The ReAct loop
+        iterates over typed tools that fetch pre-computed intelligence
+        (classified time entries, goal investment, commitment chains, behavioral
+        drift, peak hours, recurring blockers). The LLM picks tools, not branches.
+
+        Falls back to the legacy 4-branch flow if ReAct setup fails (e.g. import
+        issues during a partial deploy) so the agent always returns a response.
+        """
         try:
             user_input = state.get("user_input", "")
             state_context = state.get("context", {}) if isinstance(state, dict) else {}
-            
+
             logger.info(
                 "enhanced_productivity_processing",
-                "EnhancedProductivityAgent processing",
+                "EnhancedProductivityAgent processing via ReAct",
                 {"input_preview": user_input[:100]}
             )
-            
-            # Get contextual knowledge
+
+            # Try the ReAct path first. Any failure in setup or invocation falls
+            # through to the legacy handler so user is never blocked.
+            react_response = await self._try_execute_react(user_input, state_context)
+            if react_response is not None:
+                recorder = get_interaction_recorder()
+                if recorder:
+                    await recorder.create_pending_interaction(
+                        user_input=user_input,
+                        agent_response=react_response,
+                        agent_type="productivity_enhanced",
+                        context={**state_context, "via": "react"},
+                    )
+                return {
+                    "response": react_response,
+                    "reasoning": {"agent_type": "productivity_enhanced", "via": "react"},
+                }
+
+            # ─── Legacy fallback (4-branch single-LLM-call path) ───────────
             contextual_knowledge = await self.knowledge_base.get_contextual_knowledge_for_agent(
                 user_input=user_input,
                 agent_type="productivity",
                 max_results=10
             )
-            
             merged_context = self._merge_with_routing_context(contextual_knowledge, state_context)
-            
-            # Perform smart time analysis
             time_analysis = await self._analyze_time_context(merged_context)
-            
-            # Determine request type and handle
             normalized_input = user_input.lower()
-            
+
             if self._is_performance_review_request(normalized_input):
                 response_data = await self._handle_enhanced_performance_review(
                     user_input, merged_context, time_analysis
@@ -172,11 +196,8 @@ Response format:
                 response_data = await self._handle_general_enhanced(
                     user_input, merged_context, time_analysis
                 )
-            
-            # Format response with actionable sections
+
             formatted_response = self._format_actionable_response(response_data)
-            
-            # Create pending interaction
             recorder = get_interaction_recorder()
             if recorder:
                 await recorder.create_pending_interaction(
@@ -186,27 +207,80 @@ Response format:
                     context={
                         **merged_context,
                         "time_analysis": time_analysis,
-                        "suggestions": response_data.get("suggestions", [])
+                        "suggestions": response_data.get("suggestions", []),
+                        "via": "legacy_fallback",
                     }
                 )
-            
+
             return {
                 "response": formatted_response,
                 "reasoning": {
                     "agent_type": "productivity_enhanced",
+                    "via": "legacy_fallback",
                     "time_analysis_summary": time_analysis.pattern_insights[:3] if time_analysis else [],
                     "suggestions_count": len(response_data.get("suggestions", [])),
                     "workflow_triggered": response_data.get("workflow_triggered", False),
                 },
-                "actionable_data": response_data  # For frontend action buttons
+                "actionable_data": response_data
             }
-            
+
         except Exception as e:
             logger.error("enhanced_productivity_execution_failed", "Execution failed", error=e)
             return {
                 "response": "I encountered an error analyzing your productivity patterns. Please try again.",
                 "reasoning": {"error": str(e), "agent_type": "productivity_enhanced"}
             }
+
+    async def _try_execute_react(
+        self,
+        user_input: str,
+        state_context: Dict[str, Any],
+    ) -> Optional[str]:
+        """Build (lazily) and run the ReAct sub-agent. Returns response string or None on failure."""
+        try:
+            agent = self._get_or_build_react_agent()
+            if agent is None:
+                return None
+            result = await agent.execute(user_input)
+            if not result or not result.get("success"):
+                return None
+            inner = result.get("result") or {}
+            messages = inner.get("messages") if isinstance(inner, dict) else None
+            if not messages:
+                return None
+            for msg in reversed(messages):
+                content = getattr(msg, "content", None) or (msg.get("content") if isinstance(msg, dict) else None)
+                if content and isinstance(content, str):
+                    return content
+            return None
+        except Exception as exc:
+            logger.warning(
+                "react_path_failed",
+                f"ReAct path failed; falling back to legacy. err={exc}",
+            )
+            return None
+
+    def _get_or_build_react_agent(self):
+        """Lazy-build the ReAct productivity agent with KB-backed arsenal."""
+        if self._react_agent is not None:
+            return self._react_agent
+        try:
+            from ..react_factory import get_react_agent_factory
+            from ..tool_registry import make_productivity_tools
+            from ...services.brain_service import BrainService
+
+            if self._brain_service is None:
+                self._brain_service = BrainService(self.knowledge_base)
+            kb_tools = make_productivity_tools(self._brain_service, self.knowledge_base)
+            factory = get_react_agent_factory()
+            self._react_agent = factory.create_productivity_agent(kb_backed_tools=kb_tools)
+            return self._react_agent
+        except Exception as exc:
+            logger.warning(
+                "react_agent_build_failed",
+                f"Failed to build ReAct productivity agent: {exc}",
+            )
+            return None
     
     async def _analyze_time_context(
         self,

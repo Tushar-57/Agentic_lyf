@@ -33,13 +33,24 @@ class KnowledgeEntrySubType(str, Enum):
     WORK_INTERACTION = "work interaction"
     MISC_INTERACTION = "misc interaction"
     HEALTH_INTERACTION = "health interaction"
-    CONCIOUS_PATTERNS = "concious patterns"
-    SUBCONCIOUS_PATTERNS = "subconcious patterns"
+    CONSCIOUS_PATTERNS = "conscious patterns"
+    SUBCONSCIOUS_PATTERNS = "subconscious patterns"
     IMPORTANT_INSIGHT = "important insight"
     MISC_INSIGHT = "misc insight"
     CORE_MEMORY = "core memory"
-    REMAINDER_MEMORY = "reaminder memory"
+    REMINDER_MEMORY = "reminder memory"
     EMOTIONAL_MEMORY = "emotional memory"
+
+    @classmethod
+    def _missing_(cls, value):
+        legacy = {
+            "concious patterns": cls.CONSCIOUS_PATTERNS,
+            "subconcious patterns": cls.SUBCONSCIOUS_PATTERNS,
+            "reaminder memory": cls.REMINDER_MEMORY,
+        }
+        if isinstance(value, str) and value in legacy:
+            return legacy[value]
+        return None
 
 class KnowledgeEntry(BaseModel):
     @classmethod
