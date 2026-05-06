@@ -9,6 +9,63 @@ from typing import Any, Dict, List, Optional
 # Valid user_id pattern: alphanumeric, hyphens, underscores, dots, max 64 chars
 VALID_USER_ID_PATTERN = re.compile(r'^[a-zA-Z0-9._-]{1,64}$')
 
+_UUID_PATTERN = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
+
+
+def _derive_rebuild_title(metadata: dict, category: str, entry_id: str) -> str:
+    """Build a human-readable title from Pinecone vector metadata during cache rebuild.
+
+    Old vectors often lack a stored 'title' field. This derives one from the
+    richer metadata (context sub-dict, date fields, etc.) so entries display
+    meaningfully in the KB explorer instead of showing their UUID.
+    """
+    stored = str(metadata.get("title") or "").strip()
+    if stored and not _UUID_PATTERN.match(stored):
+        return stored
+
+    ctx = metadata.get("context")
+    ctx = ctx if isinstance(ctx, dict) else {}
+    cat = str(category or "").lower()
+
+    if cat in ("time_entry", "time_tracking"):
+        project = str(ctx.get("project_name") or metadata.get("project_name") or "").strip()
+        activity = str(
+            ctx.get("description") or ctx.get("task_name")
+            or metadata.get("description") or metadata.get("task_name") or ""
+        ).strip()
+        duration_raw = ctx.get("duration_minutes") or metadata.get("duration_minutes")
+        try:
+            dur = int(round(float(duration_raw))) if duration_raw is not None else 0
+        except (TypeError, ValueError):
+            dur = 0
+        suffix = f" ({dur}m)" if dur > 0 else ""
+        if project and activity and project.lower() != activity.lower():
+            base = f"{project}: {activity}"
+        else:
+            base = activity or project
+        if base:
+            compact = base if len(base) <= 90 else f"{base[:87]}..."
+            return f"Time Entry - {compact}{suffix}"
+        return f"Time Entry{suffix}" if suffix else "Time Entry"
+
+    if cat in ("habit_snapshot", "habit"):
+        date_str = str(
+            ctx.get("captured_at") or metadata.get("captured_at") or metadata.get("date") or ""
+        ).strip()[:10]
+        return f"Habit Snapshot{' - ' + date_str if date_str else ''}"
+
+    if cat == "daily_checkup":
+        ctype = str(ctx.get("checkup_type") or metadata.get("checkup_type") or "").strip()
+        date_str = str(
+            ctx.get("checkup_date") or metadata.get("checkup_date") or metadata.get("date") or ""
+        ).strip()[:10]
+        label = ctype.capitalize() if ctype else "Daily"
+        return f"{label} Checkup{' - ' + date_str if date_str else ''}"
+
+    # Generic: use category as human-readable title
+    cat_display = category.replace("_", " ").title()
+    return cat_display if cat_display else entry_id
+
 import numpy as np
 
 from ..models.knowledge import KnowledgeEntry, KnowledgeEntryType, KnowledgeEntrySubType, KnowledgeSearchResult
@@ -224,13 +281,14 @@ class PineconeVectorStore:
                             except (ValueError, KeyError):
                                 entry_sub_type_enum = KnowledgeEntrySubType.MISC_INTERACTION
 
+                            title = _derive_rebuild_title(metadata, category, entry_id)
                             rebuilt[vector_id] = KnowledgeEntry(
                                 entry_id=entry_id,
                                 user_id=user_id,
                                 entry_type=entry_type_enum,
                                 entry_sub_type=entry_sub_type_enum,
                                 category=category,
-                                title=str(metadata.get("title") or entry_id),
+                                title=title,
                                 content=str(metadata.get("content") or ""),
                                 metadata=metadata,
                             )

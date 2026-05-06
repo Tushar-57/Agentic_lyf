@@ -98,8 +98,8 @@ interface KnowledgeSnapshotCache {
   lastSyncedAt: string | null
 }
 
-const KNOWLEDGE_CACHE_KEY_PREFIX = 'agentic-knowledge-view-cache-v4'
-const KNOWLEDGE_CACHE_VERSION = 4
+const KNOWLEDGE_CACHE_KEY_PREFIX = 'agentic-knowledge-view-cache-v5'
+const KNOWLEDGE_CACHE_VERSION = 5
 const KNOWLEDGE_CACHE_TTL_MS = 90 * 1000
 
 const resolveKnowledgeCacheKey = (): string => {
@@ -351,47 +351,61 @@ const resolveEntryType = (entry: KnowledgeEntry, resolvedCategory: string): stri
   return entryType || 'memory'
 }
 
-const shouldUseDerivedTimeEntryTitle = (title: string): boolean => {
-  const normalized = String(title || '').trim().toLowerCase()
-  if (!normalized) {
-    return true
-  }
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-  return normalized.startsWith('interaction with time entry')
+const needsDerivedTitle = (title: string): boolean => {
+  const t = String(title || '').trim()
+  return !t || UUID_PATTERN.test(t) || t.toLowerCase().startsWith('interaction with time entry')
 }
 
-const resolveDisplayTitle = (entry: KnowledgeEntry, displayType: string): string => {
-  if (displayType !== 'time_entry') {
-    return entry.title
-  }
+const resolveDisplayTitle = (entry: KnowledgeEntry, displayType: string, displayCategory: string): string => {
+  const rawTitle = String(entry.title || '').trim()
 
-  if (!shouldUseDerivedTimeEntryTitle(entry.title)) {
-    return normalizeDurationTokensInText(entry.title)
+  if (!needsDerivedTitle(rawTitle)) {
+    return displayType === 'time_entry' ? normalizeDurationTokensInText(rawTitle) : rawTitle
   }
 
   const metadata = entry.metadata || {}
   const context = (metadata.context || {}) as Record<string, any>
 
-  const project = String(context.project_name || '').trim()
-  const activity = String(context.description || context.task_name || '').trim()
-  const durationLabel = formatDurationMinutes(context.duration_minutes)
-  const durationSuffix = durationLabel
-    ? ` (${durationLabel})`
-    : ''
+  if (displayType === 'time_entry') {
+    const project = String(context.project_name || metadata.project_name || '').trim()
+    const activity = String(
+      context.description || context.task_name ||
+      metadata.description || metadata.task_name || ''
+    ).trim()
+    const durationLabel = formatDurationMinutes(
+      context.duration_minutes ?? metadata.duration_minutes
+    )
+    const durationSuffix = durationLabel ? ` (${durationLabel})` : ''
 
-  let base = ''
-  if (project && activity && project.toLowerCase() !== activity.toLowerCase()) {
-    base = `${project}: ${activity}`
-  } else {
-    base = activity || project
+    let base = ''
+    if (project && activity && project.toLowerCase() !== activity.toLowerCase()) {
+      base = `${project}: ${activity}`
+    } else {
+      base = activity || project
+    }
+
+    if (!base) return `Time Entry${durationSuffix}`
+    const compact = base.length > 90 ? `${base.slice(0, 87)}...` : base
+    return normalizeDurationTokensInText(`Time Entry - ${compact}${durationSuffix}`)
   }
 
-  if (!base) {
-    return `Time Entry${durationSuffix}`
+  if (displayCategory === 'habit_snapshot') {
+    const date = String(context.captured_at || metadata.captured_at || '').slice(0, 10)
+    return date ? `Habit Snapshot - ${date}` : 'Habit Snapshot'
   }
 
-  const compact = base.length > 90 ? `${base.slice(0, 87)}...` : base
-  return `Time Entry - ${compact}${durationSuffix}`
+  if (displayCategory === 'daily_checkup') {
+    const ctype = String(context.checkup_type || metadata.checkup_type || '').trim()
+    const date = String(context.checkup_date || metadata.checkup_date || '').slice(0, 10)
+    const label = ctype ? ctype.charAt(0).toUpperCase() + ctype.slice(1) : 'Daily'
+    return date ? `${label} Checkup - ${date}` : `${label} Checkup`
+  }
+
+  // Generic: derive from category
+  const catDisplay = displayCategory.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+  return catDisplay || 'Knowledge Entry'
 }
 
 type HighlightItem = {
@@ -1296,7 +1310,7 @@ export const KnowledgeBaseViewer: React.FC<KnowledgeBaseViewerProps> = ({
     .map((entry) => {
       const displayCategory = resolveEntryCategory(entry)
       const displayType = resolveEntryType(entry, displayCategory)
-      const displayTitle = resolveDisplayTitle(entry, displayType)
+      const displayTitle = resolveDisplayTitle(entry, displayType, displayCategory)
 
       return {
         ...entry,
