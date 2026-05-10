@@ -465,6 +465,13 @@ class KnowledgeBaseService:
         self._get_all_cache_at = 0.0
         self._get_all_cache_lock = asyncio.Lock()
 
+        # Tag catalog cache (tag_id -> tag_name) used by time-entry embedding
+        # to surface human-readable tag names from the catalog instead of
+        # opaque numeric IDs. Lazily populated on first time-entry embed and
+        # cleared by _invalidate_get_all_cache so new tag syncs surface.
+        self._tag_catalog_cache: Dict[str, str] = {}
+        self._tag_catalog_cache_loaded = False
+
         self._bootstrap_knowledge_db_store()
 
     def _attach_embedding_to_entry(self, entry: Optional[KnowledgeEntry]) -> Optional[KnowledgeEntry]:
@@ -934,6 +941,17 @@ class KnowledgeBaseService:
             return facts
 
         if strategy_category == "time_entry":
+            # ── Conditional lead: user free-form context dominates structured signal.
+            # context_notes (user-written) > ai_detail (system-augmented). Both reach the
+            # backend in EMBEDDING_CONTEXT_ALLOWLIST but were never surfaced to the
+            # embedding text — fixed here so semantic search can match user intent.
+            context_notes_value = context_payload.get("context_notes")
+            ai_detail_value = context_payload.get("ai_detail")
+            if context_notes_value:
+                add_fact(facts, "User note", context_notes_value)
+            if ai_detail_value:
+                add_fact(facts, "AI detail", ai_detail_value)
+
             add_fact(facts, "Task", context_payload.get("description") or context_payload.get("task_name") or normalized_title)
             add_fact(facts, "Project", context_payload.get("project_name"))
 
@@ -950,7 +968,34 @@ class KnowledgeBaseService:
             add_fact(facts, "Linked goal", context_payload.get("linked_goal"))
             add_fact(facts, "Focus score", context_payload.get("focus_score"))
             add_fact(facts, "Energy score", context_payload.get("energy_score"))
+            # Second-tier signal: blockers go after the conditional lead and core fields.
+            # Recurring blocker patterns surface via search_behavioral_insights tool.
             add_fact(facts, "Blockers", context_payload.get("blockers"))
+
+            # Temporal signals (AlterEgo sends these but we never used them).
+            # weekday/hour_of_day let semantic search match queries like
+            # "what did I work on Tuesday afternoons" or "morning deep work".
+            weekday = context_payload.get("weekday") or metadata_payload.get("weekday")
+            hour_of_day = context_payload.get("hour_of_day")
+            if hour_of_day is None:
+                hour_of_day = metadata_payload.get("hour_of_day")
+            add_fact(facts, "Weekday", weekday)
+            if hour_of_day is not None:
+                add_fact(facts, "Hour of day", hour_of_day)
+
+            # Boundary flags — only emit when true. Surfaces "how do my days start/end".
+            if context_payload.get("is_first_entry_of_day") or metadata_payload.get("is_first_entry_of_day"):
+                add_fact(facts, "Day boundary", "start")
+            if context_payload.get("is_last_entry_of_day") or metadata_payload.get("is_last_entry_of_day"):
+                add_fact(facts, "Day boundary", "end")
+
+            # Resolve tag IDs to human-readable names from tag_catalog cache.
+            # AlterEgo also sends `tags` (resolved names) since Phase 7d, so prefer those
+            # but fall back to tag_id lookup for backfill / older payloads.
+            resolved_tag_names = self._resolve_time_entry_tag_names(context_payload, metadata_payload)
+            if resolved_tag_names:
+                add_fact(facts, "Tags", resolved_tag_names)
+
             return facts
 
         if strategy_category == "user_profile":
@@ -980,11 +1025,46 @@ class KnowledgeBaseService:
 
         if strategy_category == "goals":
             add_fact(facts, "Goal", normalized_title)
+            # Description/content is the user's "why" in their own words — highest signal
+            # when present. Falls back gracefully when only milestones exist.
+            goal_description = (
+                metadata_payload.get("description")
+                or context_payload.get("description")
+                or normalized_content
+            )
+            add_fact(facts, "Description", goal_description)
             add_fact(facts, "Category", metadata_payload.get("category"))
             add_fact(facts, "Priority", metadata_payload.get("priority"))
-            add_fact(facts, "Milestones", metadata_payload.get("milestones"))
+            add_fact(facts, "Why it matters", metadata_payload.get("whyItMatters") or context_payload.get("whyItMatters"))
+
+            # Estimated effort hours — was sent by AlterEgo mapGoals() but ignored.
+            # Lets queries match "ambitious goal" (high hours) or "quick wins" (low hours).
+            effort_hours = (
+                metadata_payload.get("estimatedEffortHours")
+                or context_payload.get("estimatedEffortHours")
+                or metadata_payload.get("estimated_effort_hours")
+            )
+            if effort_hours is not None:
+                add_fact(facts, "Estimated effort hours", effort_hours)
+
             add_fact(facts, "Target date", metadata_payload.get("endDate"))
-            add_fact(facts, "Why it matters", metadata_payload.get("whyItMatters"))
+            add_fact(facts, "Milestones", metadata_payload.get("milestones"))
+
+            # SMART criteria: surface a measurable note when the user has set
+            # specific/measurable/timeBound flags. Otherwise stays silent.
+            smart_payload = (
+                metadata_payload.get("smart_criteria")
+                or metadata_payload.get("smartCriteria")
+                or context_payload.get("smart_criteria")
+                or context_payload.get("smartCriteria")
+            )
+            smart_note = self._format_smart_criteria_note(smart_payload)
+            if smart_note:
+                add_fact(facts, "SMART note", smart_note)
+
+            # Status flag (active / at_risk / ghost / completed) lets retrieval
+            # surface "what goals am I letting slip" without LLM inference.
+            add_fact(facts, "Status", metadata_payload.get("status") or context_payload.get("status"))
             return facts
 
         if strategy_category == "insight":
@@ -1176,6 +1256,139 @@ class KnowledgeBaseService:
         """Compose stable sha256 ID from string parts. Used for upserts."""
         joined = "::".join(str(part) for part in parts if part is not None)
         return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+    # ────────────────────────────────────────────────────────────────────────
+    # Tag catalog resolution (lazy in-memory cache, refreshed on demand).
+    # AlterEgo syncs tag_catalog entries separately; we look them up here so
+    # time entries embed semantic tag NAMES (e.g. "deep_work", "client_alpha")
+    # rather than opaque numeric IDs (e.g. 42, 87) which carry no signal.
+    # ────────────────────────────────────────────────────────────────────────
+
+    def _refresh_tag_catalog_cache_sync(self) -> None:
+        """Synchronously rebuild the tag_id → name map from existing KB entries.
+
+        Called from the embedding-build path which is sync. Reads the metadata
+        cache the vector store already keeps in memory — no Pinecone roundtrip.
+        Silent failure: an empty cache just means tag IDs stay numeric in the
+        embedding (degraded but not broken).
+        """
+        try:
+            cache: Dict[str, str] = {}
+            entries: List[Any] = []
+            try:
+                entries = self.vector_store.get_all_entries() or []
+            except Exception:
+                entries = []
+            for entry in entries:
+                try:
+                    category = ""
+                    metadata: Dict[str, Any] = {}
+                    title = ""
+                    if isinstance(entry, dict):
+                        category = str(entry.get("category") or "").lower()
+                        metadata = entry.get("metadata") or {}
+                        title = str(entry.get("title") or "")
+                    else:
+                        category = str(getattr(entry, "category", "") or "").lower()
+                        metadata = getattr(entry, "metadata", None) or {}
+                        title = str(getattr(entry, "title", "") or "")
+                    if category != "tag_catalog":
+                        continue
+                    if not isinstance(metadata, dict):
+                        continue
+                    ctx = metadata.get("context") if isinstance(metadata.get("context"), dict) else {}
+                    tag_id = (
+                        metadata.get("tag_id")
+                        or ctx.get("tag_id")
+                        or metadata.get("tagId")
+                        or ctx.get("tagId")
+                    )
+                    tag_name = (
+                        metadata.get("tag_name")
+                        or ctx.get("tag_name")
+                        or metadata.get("name")
+                        or ctx.get("name")
+                        or title
+                    )
+                    if tag_id is not None and tag_name:
+                        cache[str(tag_id)] = str(tag_name).strip()
+                except Exception:
+                    continue
+            self._tag_catalog_cache = cache
+            self._tag_catalog_cache_loaded = True
+        except Exception:
+            # Cache stays empty / stale — non-fatal.
+            self._tag_catalog_cache_loaded = True
+
+    def _resolve_time_entry_tag_names(
+        self,
+        context_payload: Dict[str, Any],
+        metadata_payload: Dict[str, Any],
+    ) -> List[str]:
+        """Return a list of human-readable tag names for a time entry.
+
+        Resolution order:
+          1. Pre-resolved `tags` array on the payload (AlterEgo Phase 7d sends this).
+          2. `tag_ids` looked up against the tag_catalog cache.
+
+        Numeric IDs that can't be resolved are dropped rather than emitted as
+        opaque numbers — they would dilute the embedding space without helping.
+        """
+        # Already resolved upstream — use as-is.
+        prebuilt = context_payload.get("tags") or metadata_payload.get("tags")
+        if isinstance(prebuilt, list) and prebuilt:
+            names = [str(t).strip() for t in prebuilt if str(t).strip()]
+            if names:
+                return names
+
+        raw_ids = (
+            context_payload.get("tag_ids")
+            or metadata_payload.get("tag_ids")
+            or context_payload.get("tagIds")
+            or metadata_payload.get("tagIds")
+        )
+        if not raw_ids or not isinstance(raw_ids, list):
+            return []
+
+        if not getattr(self, "_tag_catalog_cache_loaded", False):
+            self._refresh_tag_catalog_cache_sync()
+
+        cache = getattr(self, "_tag_catalog_cache", {}) or {}
+        if not cache:
+            return []
+
+        resolved: List[str] = []
+        for tid in raw_ids:
+            name = cache.get(str(tid))
+            if name:
+                resolved.append(name)
+        return resolved
+
+    @staticmethod
+    def _format_smart_criteria_note(smart_payload: Any) -> Optional[str]:
+        """Convert SMART criteria flags into a single descriptive note.
+
+        AlterEgo sends a dict like:
+          {"specific": {"checked": true}, "measurable": {"checked": false}, ...}
+        Output: "specific, timeBound checked" — only flags that are true. Returns
+        None when nothing is checked (don't pollute embedding with empty struct).
+        """
+        if not isinstance(smart_payload, dict):
+            return None
+        checked: List[str] = []
+        for key, value in smart_payload.items():
+            is_checked = False
+            if isinstance(value, dict):
+                is_checked = bool(value.get("checked") or value.get("value"))
+            elif isinstance(value, bool):
+                is_checked = value
+            elif isinstance(value, str):
+                is_checked = value.strip().lower() in {"true", "yes", "checked"}
+            if is_checked:
+                checked.append(str(key))
+        if not checked:
+            return None
+        return ", ".join(sorted(checked)) + " checked"
 
     @staticmethod
     def _kv(label: str, value: Any) -> Optional[str]:
@@ -1974,6 +2187,10 @@ class KnowledgeBaseService:
         """Invalidate the request-level cache for get_all_entries."""
         self._get_all_cache = None
         self._get_all_cache_at = 0.0
+        # New entry could be a tag_catalog row; flush the tag-name cache so the
+        # next time-entry embed picks up the fresh name. Cheap to rebuild.
+        self._tag_catalog_cache = {}
+        self._tag_catalog_cache_loaded = False
 
     async def delete_entries(self, entry_ids: List[str]) -> int:
         """Delete multiple knowledge entries in a single vector index rebuild pass."""

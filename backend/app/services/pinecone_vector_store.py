@@ -473,16 +473,18 @@ class PineconeVectorStore:
     def add_entry(self, entry: KnowledgeEntry, embedding: List[float], persist: bool = True) -> None:
         normalized_embedding = self._normalize_embedding(embedding)
 
+        # Pinecone vector metadata: keep core IDs + a category-specific
+        # signal slice so cold-rebuilds don't lose per-vector intelligence
+        # (without DB store this was the only source of truth, and
+        # habit_entry / time_entry_v2 / goal_v2 came back null-fielded).
+        pinecone_metadata = self._build_pinecone_metadata(entry)
+
         self.index.upsert(
             vectors=[
                 {
                     "id": entry.entry_id,
                     "values": normalized_embedding,
-                    "metadata": {
-                        "entry_id": entry.entry_id,
-                        "user_id": self.user_id,
-                        "category": str(entry.category or ""),
-                    },
+                    "metadata": pinecone_metadata,
                 }
             ],
             namespace=self.namespace,
@@ -494,6 +496,87 @@ class PineconeVectorStore:
 
         if persist:
             self._save_metadata()
+
+    def _build_pinecone_metadata(self, entry: KnowledgeEntry) -> Dict[str, Any]:
+        """Compose the metadata dict that goes alongside the vector in Pinecone.
+
+        Always includes core identity. Pulls a small category-specific slice
+        from {@code entry.metadata} so cold cache rebuilds (which only see
+        Pinecone metadata) preserve enough signal to reconstruct the
+        intelligence-engine view — e.g. per-habit completion rates, time
+        entry productivity scores, goal status. Pinecone caps metadata at
+        ~40KB per vector so we slice rather than dump everything.
+        """
+        pinecone_meta: Dict[str, Any] = {
+            "entry_id": entry.entry_id,
+            "user_id": self.user_id,
+            "category": str(entry.category or ""),
+            "entry_type": str(getattr(entry.entry_type, "value", entry.entry_type) or ""),
+            "entry_sub_type": str(getattr(entry.entry_sub_type, "value", entry.entry_sub_type) or ""),
+        }
+        try:
+            if entry.title:
+                pinecone_meta["title"] = str(entry.title)[:200]
+        except Exception:
+            pass
+
+        category = (entry.category or "").lower()
+        local_meta = entry.metadata if isinstance(entry.metadata, dict) else {}
+
+        # Per-category signal preservation. Only fields that round-trip to
+        # primitives (str/int/float/bool/list-of-str) — Pinecone rejects
+        # nested dicts at the top level of metadata.
+        slice_keys: List[str] = []
+        if category == "habit_entry":
+            slice_keys = [
+                "habit_id", "habit_name", "completion_7d", "completion_30d",
+                "streak", "pattern", "priority", "trend",
+                "last_completed", "last_skipped", "has_note_to_ai",
+                "checkup_date", "captured_at",
+            ]
+        elif category == "daily_habit_summary":
+            slice_keys = ["checkup_date", "captured_at", "total_habits"]
+        elif category in ("time_entry", "time_entry_v2"):
+            slice_keys = [
+                "start_time", "end_time", "duration_minutes",
+                "weekday", "hour_of_day", "linked_goal", "project_id",
+                "work_type", "energy_pattern", "focus_quality",
+                "productivity_score", "is_first_entry_of_day", "is_last_entry_of_day",
+            ]
+        elif category in ("goal", "goals", "goal_v2"):
+            slice_keys = [
+                "goal_id", "status", "invested_hours", "hours_this_month",
+                "days_remaining", "progress_percent", "priority", "category",
+            ]
+        elif category in ("morning_intent", "evening_reflection"):
+            slice_keys = ["checkup_date", "captured_at", "focus_target"]
+        elif category == "task_entry":
+            slice_keys = [
+                "task_id", "status", "priority", "due_date",
+                "linked_goal", "has_note_to_ai",
+            ]
+        elif category in ("insight_v2", "pattern_v2"):
+            slice_keys = [
+                "insight_type", "pattern_type", "severity",
+                "generated_by", "generated_at", "goal_id", "habit_id",
+                "frequency", "delta", "direction",
+            ]
+        elif category == "tag_catalog":
+            slice_keys = ["tag_id", "tag_name", "name", "usage_count"]
+
+        for key in slice_keys:
+            value = local_meta.get(key)
+            if value is None:
+                continue
+            if isinstance(value, (str, int, float, bool)):
+                pinecone_meta[key] = value
+            elif isinstance(value, list) and all(isinstance(v, (str, int, float, bool)) for v in value):
+                pinecone_meta[key] = [str(v) for v in value]
+            else:
+                # Skip nested types — Pinecone metadata doesn't accept them.
+                continue
+
+        return pinecone_meta
 
     def update_entry(self, entry: KnowledgeEntry, embedding: List[float], persist: bool = True) -> None:
         self.add_entry(entry, embedding, persist=persist)

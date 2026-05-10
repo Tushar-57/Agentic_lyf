@@ -36,7 +36,11 @@ async def get_pending_interactions():
             raise HTTPException(status_code=500, detail="Interaction recorder not initialized")
         
         logger.info("recorder_instance", f"Recorder instance ID: {id(recorder)}")
-        pending = recorder.get_pending_interactions()
+        # Bug fix: get_pending_interactions is async — must await. Without await
+        # it returns a coroutine; len() raises TypeError and the endpoint 500s,
+        # which causes the UI to render "All Caught Up" while the stats endpoint
+        # (which uses a sync count path) keeps showing the red dot.
+        pending = await recorder.get_pending_interactions()
         logger.info("pending_count", f"Got {len(pending)} pending interactions", {"count": len(pending)})
         return [InteractionResponse(**interaction) for interaction in pending]
         
