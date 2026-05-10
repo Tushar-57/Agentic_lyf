@@ -62,9 +62,179 @@ def _derive_rebuild_title(metadata: dict, category: str, entry_id: str) -> str:
         label = ctype.capitalize() if ctype else "Daily"
         return f"{label} Checkup{' - ' + date_str if date_str else ''}"
 
+    # Intelligence-engine v2 categories: rich content already stored in metadata —
+    # surface it in the title so the KB explorer shows the actual semantic
+    # signal (per-habit completion, classified time entry summary, ghost-goal
+    # warning, etc.) instead of "Habit Snapshot" / generic placeholder.
+    if cat == "habit_entry":
+        habit_name = str(metadata.get("habit_name") or ctx.get("habit_name") or "").strip()
+        comp_7d = metadata.get("completion_7d") if metadata.get("completion_7d") is not None else ctx.get("completion_7d")
+        streak = metadata.get("streak") if metadata.get("streak") is not None else ctx.get("streak")
+        bits = []
+        if habit_name:
+            bits.append(habit_name)
+        if comp_7d is not None:
+            bits.append(f"completion_7d:{comp_7d}%")
+        if streak is not None:
+            bits.append(f"streak:{streak}d")
+        if bits:
+            return "Habit · " + " · ".join(str(b) for b in bits)
+        return "Habit Entry"
+
+    if cat == "daily_habit_summary":
+        date_str = str(
+            metadata.get("checkup_date") or ctx.get("checkup_date") or ""
+        ).strip()[:10]
+        return f"Habits Daily Summary{' - ' + date_str if date_str else ''}"
+
+    if cat in ("time_entry_v2", "time_tracking_v2"):
+        work_type = str(metadata.get("work_type") or "").replace("_", " ").strip()
+        prod = metadata.get("productivity_score")
+        focus = metadata.get("focus_quality")
+        bits = []
+        if work_type:
+            bits.append(work_type)
+        if prod is not None:
+            bits.append(f"productivity:{prod}")
+        if focus is not None:
+            bits.append(f"focus:{focus}")
+        return "Time · " + " · ".join(str(b) for b in bits) if bits else "Time Entry"
+
+    if cat in ("goal_v2",):
+        title_part = str(metadata.get("title") or ctx.get("title") or "").strip()
+        status = str(metadata.get("status") or "").strip()
+        invested = metadata.get("invested_hours")
+        bits = []
+        if title_part:
+            bits.append(title_part)
+        if status:
+            bits.append(f"status:{status}")
+        if invested is not None:
+            bits.append(f"invested:{invested}h")
+        return "Goal · " + " · ".join(str(b) for b in bits) if bits else "Goal"
+
+    if cat == "task_entry":
+        title_part = str(metadata.get("title") or ctx.get("title") or "").strip()
+        status = str(metadata.get("status") or "").strip()
+        priority = str(metadata.get("priority") or "").strip()
+        bits = [b for b in [title_part, status, priority] if b]
+        return "Task · " + " · ".join(bits) if bits else "Task"
+
+    if cat == "morning_intent":
+        date_str = str(metadata.get("checkup_date") or "").strip()[:10]
+        target = str(metadata.get("focus_target") or "").strip()
+        if target:
+            target = target if len(target) <= 60 else f"{target[:57]}..."
+        return f"Morning Intent{' - ' + date_str if date_str else ''}{' · ' + target if target else ''}"
+
+    if cat == "evening_reflection":
+        date_str = str(metadata.get("checkup_date") or "").strip()[:10]
+        return f"Evening Reflection{' - ' + date_str if date_str else ''}"
+
+    if cat in ("insight_v2", "pattern_v2"):
+        kind = str(metadata.get("insight_type") or metadata.get("pattern_type") or "").replace("_", " ").strip()
+        return ("Insight · " if cat == "insight_v2" else "Pattern · ") + (kind.title() if kind else cat.replace("_", " ").title())
+
+    if cat == "tag_catalog":
+        tag_name = str(metadata.get("tag_name") or metadata.get("name") or "").strip()
+        return f"Tag · {tag_name}" if tag_name else "Tag"
+
     # Generic: use category as human-readable title
     cat_display = category.replace("_", " ").title()
     return cat_display if cat_display else entry_id
+
+
+def _derive_rebuild_content(metadata: dict, category: str, title: str) -> str:
+    """Reconstruct a content string from category-specific metadata fields.
+
+    Used when the original embedding text was lost (cold rebuild from Pinecone
+    against pre-enrichment vectors). Each branch reproduces the same single-line
+    "intelligence engine" format the per-type embedding builders use, so the
+    KB explorer card body matches what semantic search actually matches on.
+    """
+    cat = str(category or "").lower()
+    ctx = metadata.get("context") if isinstance(metadata.get("context"), dict) else {}
+
+    def _get(*keys):
+        for k in keys:
+            v = metadata.get(k)
+            if v is None or v == "":
+                v = ctx.get(k) if isinstance(ctx, dict) else None
+            if v not in (None, ""):
+                return v
+        return None
+
+    if cat == "habit_entry":
+        bits = [
+            f"habit:{_get('habit_name') or 'unknown'}",
+            f"streak:{_get('streak') or 0}d",
+            f"completion_7d:{_get('completion_7d') or 0}%",
+            f"completion_30d:{_get('completion_30d') or 0}%",
+        ]
+        for k in ("trend", "pattern", "priority", "last_completed", "last_skipped"):
+            v = _get(k)
+            if v not in (None, "", 0):
+                bits.append(f"{k}:{v}")
+        return " | ".join(bits)
+
+    if cat == "daily_habit_summary":
+        date = _get("checkup_date") or ""
+        total = _get("total_habits") or 0
+        return f"daily_habits:{date} | total:{total}"
+
+    if cat in ("time_entry", "time_entry_v2"):
+        bits = []
+        wt = _get("work_type")
+        if wt:
+            bits.append(str(wt))
+        ep = _get("energy_pattern")
+        fq = _get("focus_quality")
+        prod = _get("productivity_score")
+        if fq is not None:
+            bits.append(f"focus:{fq}")
+        if ep:
+            bits.append(f"energy:{ep}")
+        if prod is not None:
+            bits.append(f"productivity:{prod}")
+        wd = _get("weekday")
+        hr = _get("hour_of_day")
+        if wd:
+            bits.append(f"weekday:{wd}")
+        if hr is not None:
+            bits.append(f"hour:{hr}")
+        return " | ".join(bits) if bits else title
+
+    if cat == "goal_v2":
+        bits = [f"goal:{title}"]
+        for k in ("status", "invested_hours", "hours_this_month", "days_remaining", "priority"):
+            v = _get(k)
+            if v not in (None, ""):
+                bits.append(f"{k}:{v}")
+        return " | ".join(bits)
+
+    if cat == "task_entry":
+        bits = [f"task:{title}"]
+        for k in ("status", "priority", "due_date", "linked_goal"):
+            v = _get(k)
+            if v not in (None, ""):
+                bits.append(f"{k}:{v}")
+        return " | ".join(bits)
+
+    if cat == "morning_intent":
+        return f"morning_intent:{_get('checkup_date') or ''} | focus_target:{_get('focus_target') or ''}"
+
+    if cat == "evening_reflection":
+        return f"evening_reflection:{_get('checkup_date') or ''}"
+
+    if cat in ("insight_v2", "pattern_v2"):
+        kind = _get("insight_type") or _get("pattern_type") or ""
+        return f"{cat}:{kind}" if kind else title
+
+    if cat == "tag_catalog":
+        return f"tag:{_get('tag_name') or _get('name') or title}"
+
+    return title or category.replace("_", " ").title()
+
 
 import numpy as np
 
@@ -115,6 +285,10 @@ class PineconeVectorStore:
 
         self.entry_metadata: Dict[str, KnowledgeEntry] = {}
         self._load_metadata()
+        # Fix mistyped v2 entries that an older rebuild path persisted as
+        # "Preference / Other Preference" because it didn't recognise the new
+        # categories. Idempotent — entries already on the right type are no-ops.
+        self._reclassify_v2_categories_in_cache()
 
         self._ensure_index_exists()
         self.index = self._client.Index(self.index_name)
@@ -256,18 +430,40 @@ class PineconeVectorStore:
                             raw_entry_sub_type = metadata.get("entry_sub_type")
                             if not raw_entry_type:
                                 cat_lower = category.lower()
-                                if cat_lower in ("time_entry", "time_tracking"):
+                                # Intelligence-engine v2 categories carry richer
+                                # type metadata once written; this map is the
+                                # rebuild fallback for older vectors that
+                                # predate _build_pinecone_metadata enrichment.
+                                if cat_lower in ("time_entry", "time_tracking", "time_entry_v2"):
                                     raw_entry_type = "interaction"
                                     raw_entry_sub_type = raw_entry_sub_type or "work interaction"
-                                elif cat_lower in ("habit_snapshot", "habit"):
+                                elif cat_lower in ("habit_snapshot", "habit", "habit_entry", "daily_habit_summary"):
                                     raw_entry_type = "interaction"
                                     raw_entry_sub_type = raw_entry_sub_type or "health interaction"
-                                elif cat_lower in ("goal", "goals"):
-                                    raw_entry_type = "preference"
+                                elif cat_lower in ("goal", "goals", "goal_v2"):
+                                    raw_entry_type = "insight" if cat_lower == "goal_v2" else "preference"
                                     raw_entry_sub_type = raw_entry_sub_type or "goal"
-                                elif cat_lower in ("insight", "insights", "daily_checkup"):
+                                elif cat_lower in ("morning_intent", "evening_reflection", "daily_checkup"):
                                     raw_entry_type = "insight"
                                     raw_entry_sub_type = raw_entry_sub_type or "misc insight"
+                                elif cat_lower in ("insight", "insights", "insight_v2"):
+                                    raw_entry_type = "insight"
+                                    raw_entry_sub_type = raw_entry_sub_type or "important insight"
+                                elif cat_lower == "pattern_v2":
+                                    raw_entry_type = "pattern"
+                                    raw_entry_sub_type = raw_entry_sub_type or "conscious patterns"
+                                elif cat_lower == "task_entry":
+                                    raw_entry_type = "interaction"
+                                    raw_entry_sub_type = raw_entry_sub_type or "work interaction"
+                                elif cat_lower == "tag_catalog":
+                                    raw_entry_type = "preference"
+                                    raw_entry_sub_type = raw_entry_sub_type or "other preference"
+                                elif cat_lower == "chat_interaction":
+                                    raw_entry_type = "interaction"
+                                    raw_entry_sub_type = raw_entry_sub_type or "personal interaction"
+                                elif cat_lower in ("user_preference", "preference_update"):
+                                    raw_entry_type = "user_preference"
+                                    raw_entry_sub_type = raw_entry_sub_type or "user profile"
                                 else:
                                     raw_entry_type = "preference"
                                     raw_entry_sub_type = raw_entry_sub_type or "other preference"
@@ -282,6 +478,18 @@ class PineconeVectorStore:
                                 entry_sub_type_enum = KnowledgeEntrySubType.MISC_INTERACTION
 
                             title = _derive_rebuild_title(metadata, category, entry_id)
+                            # Surface the rich embedding text as content when
+                            # the metadata captured a slice of it. Without this,
+                            # the KB explorer rendered a generic placeholder
+                            # ("Knowledge entry captured for X context.") for
+                            # every v2 entry on cold rebuild.
+                            content_value = str(
+                                metadata.get("content")
+                                or metadata.get("embedding_text")
+                                or ""
+                            )
+                            if not content_value:
+                                content_value = _derive_rebuild_content(metadata, category, title)
                             rebuilt[vector_id] = KnowledgeEntry(
                                 entry_id=entry_id,
                                 user_id=user_id,
@@ -289,7 +497,7 @@ class PineconeVectorStore:
                                 entry_sub_type=entry_sub_type_enum,
                                 category=category,
                                 title=title,
-                                content=str(metadata.get("content") or ""),
+                                content=content_value,
                                 metadata=metadata,
                             )
                         except Exception as build_exc:
@@ -311,6 +519,94 @@ class PineconeVectorStore:
                 )
         except Exception as exc:
             logger.warning("rebuild_cache_failed", f"Failed to rebuild metadata cache from Pinecone: {exc}", {"error": str(exc)})
+
+    def _reclassify_v2_categories_in_cache(self) -> None:
+        """Repair entries that an older rebuild typed as Preference/Other Preference.
+
+        The first version of _rebuild_cache_from_pinecone had no mapping for v2
+        categories (time_entry_v2, habit_entry, daily_habit_summary, goal_v2,
+        task_entry, morning_intent, evening_reflection, insight_v2, pattern_v2,
+        tag_catalog) and fell through to the generic
+        "preference / other preference" default. Existing pickle caches retain
+        that mistyping.
+
+        This pass walks the in-memory cache, fixes the type pair for known
+        v2 categories, and rewrites titles + content from the metadata slice
+        so the KB explorer card shows a meaningful summary instead of the
+        generic "Knowledge entry captured for X context." placeholder.
+        """
+        v2_type_map: Dict[str, tuple] = {
+            "time_entry_v2": ("interaction", "work interaction"),
+            "habit_entry": ("interaction", "health interaction"),
+            "daily_habit_summary": ("interaction", "health interaction"),
+            "goal_v2": ("insight", "goal"),
+            "task_entry": ("interaction", "work interaction"),
+            "morning_intent": ("insight", "misc insight"),
+            "evening_reflection": ("insight", "misc insight"),
+            "insight_v2": ("insight", "important insight"),
+            "pattern_v2": ("pattern", "conscious patterns"),
+            "tag_catalog": ("preference", "other preference"),
+            "chat_interaction": ("interaction", "personal interaction"),
+        }
+        if not self.entry_metadata:
+            return
+
+        changed = 0
+        for entry_id, entry in list(self.entry_metadata.items()):
+            try:
+                category = str(getattr(entry, "category", "") or "").lower()
+                if category not in v2_type_map:
+                    continue
+                target_type, target_sub = v2_type_map[category]
+                current_type = str(getattr(entry.entry_type, "value", entry.entry_type) or "").lower()
+                current_sub = str(getattr(entry.entry_sub_type, "value", entry.entry_sub_type) or "").lower()
+                needs_type_fix = (current_type, current_sub) != (target_type, target_sub)
+                generic_content = str(getattr(entry, "content", "") or "").strip()
+                needs_content_fix = (
+                    not generic_content
+                    or generic_content.lower().startswith("knowledge entry captured for")
+                )
+
+                if not needs_type_fix and not needs_content_fix:
+                    continue
+
+                metadata = getattr(entry, "metadata", None) or {}
+                derived_title = _derive_rebuild_title(metadata, category, entry_id)
+                derived_content = (
+                    generic_content
+                    if generic_content and not needs_content_fix
+                    else _derive_rebuild_content(metadata, category, derived_title)
+                )
+
+                if needs_type_fix:
+                    try:
+                        entry.entry_type = KnowledgeEntryType(target_type)
+                    except (ValueError, KeyError):
+                        pass
+                    try:
+                        entry.entry_sub_type = KnowledgeEntrySubType(target_sub)
+                    except (ValueError, KeyError):
+                        pass
+
+                if derived_title and derived_title != entry.title:
+                    entry.title = derived_title
+                if derived_content and derived_content != entry.content:
+                    entry.content = derived_content
+
+                changed += 1
+            except Exception as exc:
+                logger.debug("reclassify_failed", f"Skipping entry {entry_id}: {exc}", {"entry_id": entry_id})
+
+        if changed:
+            try:
+                self._save_metadata()
+            except Exception as exc:
+                logger.warning("reclassify_save_failed", f"Failed to persist reclassified cache: {exc}", {"error": str(exc)})
+            logger.info(
+                "v2_categories_reclassified",
+                f"Reclassified {changed} v2 cache entries",
+                {"count": changed, "namespace": self.namespace}
+            )
 
     def _save_metadata(self) -> None:
         try:
