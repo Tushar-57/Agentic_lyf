@@ -8,6 +8,10 @@ import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+// Bring the .daily-checkup / .dc-* class set into the bundle so chat-rendered
+// morning/evening checkup HTML inherits the proper visual contract regardless
+// of whether the analytics dashboard has been loaded yet.
+import '../knowledge/checkup.css'
 
 interface ChatContextSummary {
   tasks_count: number
@@ -1105,11 +1109,15 @@ const MessageBubble = React.forwardRef<HTMLDivElement, { message: Message; isLas
                   ? JSON.stringify(content, null, 2)
                   : String(content || 'No content')
 
-              // Check if content contains daily checkup HTML - render as raw HTML
+              // Daily-checkup HTML renders with the dc-* class set defined in
+              // checkup.css. Tailwind Typography (`prose`) on the parent
+              // overrides every nested element style, so the rich semantic
+              // markup was being flattened into plain text. The
+              // not-prose escape disables prose for this subtree only.
               if (contentStr.includes('class="daily-checkup"') || contentStr.includes("class='daily-checkup'")) {
                 return (
                   <div
-                    className="daily-checkup-wrapper"
+                    className="not-prose checkup-html-render"
                     dangerouslySetInnerHTML={{ __html: contentStr }}
                   />
                 )

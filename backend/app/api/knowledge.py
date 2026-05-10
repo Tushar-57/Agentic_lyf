@@ -1292,7 +1292,23 @@ async def _generate_checkup_message(
                 "You are a precise productivity coach and schedule designer. "
                 "Return ONLY valid HTML markup that can be directly rendered in a web UI. "
                 "Do NOT use markdown, code fences, or explanations outside HTML. "
-                "Do NOT emit <html>, <head>, <body>, <script>, or <style> tags."
+                "Do NOT emit <html>, <head>, <body>, <script>, or <style> tags. "
+                # Anti-boilerplate clause — earlier responses parroted the schedule
+                # seed verbatim ("Anchor your day before context switching", "Lock
+                # the execution sequence around outcomes and constraints", "Protect
+                # focused time for highest-leverage progress"). Block those
+                # explicitly so the model has to write fresh copy that references
+                # the user's actual goals and recent work patterns.
+                "Anti-boilerplate rule: NEVER reuse these stock phrases — "
+                "'Anchor your day', 'Lock the execution sequence', "
+                "'Protect focused time for highest-leverage progress', "
+                "'Absorb interruptions without breaking deep-work outcomes', "
+                "'Advance the next critical task before reactive work'. "
+                "Each block title + reason must reference the user's stated "
+                "priorities (e.g. Skill Development, LeetCode), recent project "
+                "names, or specific yesterday outcomes by name. If a block is "
+                "generic (break, admin), say WHY for THIS user (e.g. 'reset "
+                "before LeetCode block'), not corporate filler."
             )
         else:
             system_content = (
@@ -3208,9 +3224,15 @@ async def run_morning_checkup(request: DailyCheckupRequest):
             avg_daily_minutes=avg_daily_minutes,
         )
 
+        # Build a TYPE-only schedule hint instead of full pre-written copy.
+        # The previous "schedule_seed" included title+reason verbatim — gpt-3.5
+        # would parrot those strings for every block, so every checkup looked
+        # identical regardless of the user's actual goals or recent work.
+        # Now we hand the model timing windows + block-type tags only and let
+        # it write fresh, user-specific titles.
         schedule_seed = " | ".join(
             [
-                f"{block['start_label']}-{block['end_label']}: {block['title']} ({block['reason']})"
+                f"{block['start_label']}-{block['end_label']} (type:{block.get('priority', 'medium')})"
                 for block in schedule_blocks
             ]
         )
@@ -3230,10 +3252,13 @@ async def run_morning_checkup(request: DailyCheckupRequest):
         )
         fallback_text = _build_fallback_checkup_message(fallback_lines, communication_profile, "morning")
 
+        # Drop the duplicate Communication profile line (already embedded in the
+        # system prompt via style_directive) so the model has more headroom for
+        # actual user context. Was producing 1655-input-token requests where
+        # ~250 tokens were the same style boilerplate twice.
         llm_prompt = (
             f"Date: {checkup_date.isoformat()}\n"
             f"Intent note: {note or 'none'}\n"
-            f"Communication profile: {style_directive}\n"
             f"Focus target: {focus_target}\n"
             f"Work hours: {work_hours}\n"
             f"Check-in time: {check_in_time}\n"
@@ -3611,10 +3636,11 @@ async def run_evening_checkup(request: DailyCheckupRequest):
         )
         fallback_text = _build_fallback_checkup_message(fallback_lines, communication_profile, "evening")
 
+        # Style directive lives in the system prompt — strip the duplicate so
+        # the user prompt has more headroom for actual reflection data.
         llm_prompt = (
             f"Date: {checkup_date.isoformat()}\n"
             f"Reflection note: {note or 'none'}\n"
-            f"Communication profile: {style_directive}\n"
             f"Total minutes: {round(total_minutes, 1)}\n"
             f"Billable minutes: {round(billable_minutes, 1)}\n"
             f"Sessions: {len(today_entries)}\n"

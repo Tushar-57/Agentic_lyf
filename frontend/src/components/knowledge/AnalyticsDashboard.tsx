@@ -52,9 +52,18 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn, formatMinutesToHoursMinutes } from '@/lib/utils'
+import './checkup.css'
 
-// CSS class names for premium checkup rendered HTML content
-const PREMIUM_CHECKUP_HTML_CLASSNAMES = 'prose prose-sm dark:prose-invert max-w-none text-sm leading-relaxed text-foreground'
+// Wrapper class for the LLM-emitted morning/evening checkup HTML.
+//
+// The previous value (`prose prose-sm ...`) used Tailwind Typography, which
+// resets default semantics and overrides any inner element styling — including
+// the dc-* class set the backend prompt declares. Result: the rich semantic
+// markup the model returned was being flattened into a tower of unstyled text.
+//
+// Now we just attach a stable wrapper class so checkup.css can scope styles
+// safely and the .daily-checkup / .dc-* rules apply to the rendered output.
+const PREMIUM_CHECKUP_HTML_CLASSNAMES = 'checkup-html-render text-sm leading-relaxed'
 
 interface AnalyticsData {
   interactions: {
