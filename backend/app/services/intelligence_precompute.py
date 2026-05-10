@@ -151,13 +151,10 @@ class IntelligencePrecomputeService:
     ) -> Dict[str, Any]:
         start_time = entry.get("start_time")
         weekday, hour = None, None
-        if start_time:
-            try:
-                dt = datetime.fromisoformat(str(start_time).replace("Z", "+00:00"))
-                weekday = dt.strftime("%A").lower()
-                hour = dt.hour
-            except (ValueError, TypeError):
-                pass
+        dt = self._parse_dt_aware(start_time) if start_time else None
+        if dt is not None:
+            weekday = dt.strftime("%A").lower()
+            hour = dt.hour
         return {
             "entry_id": entry.get("entry_id"),
             "alterego_entry_id": entry.get("alterego_entry_id") or entry.get("entry_id"),
@@ -609,11 +606,7 @@ class IntelligencePrecomputeService:
         results: List[Dict[str, Any]] = []
         for e in entries or []:
             meta = self._entry_meta(e)
-            start = meta.get("start_time")
-            try:
-                dt = datetime.fromisoformat(str(start).replace("Z", "+00:00")) if start else None
-            except (ValueError, TypeError):
-                dt = None
+            dt = self._parse_dt_aware(meta.get("start_time"))
             if dt and dt >= cutoff:
                 if exclude_cutoff and dt >= exclude_cutoff:
                     continue
@@ -664,10 +657,7 @@ class IntelligencePrecomputeService:
         for e in entries or []:
             meta = self._entry_meta(e)
             created = meta.get("created_at") or meta.get("start_time") or getattr(e, "created_at", None)
-            try:
-                dt = datetime.fromisoformat(str(created).replace("Z", "+00:00")) if created else None
-            except (ValueError, TypeError):
-                dt = None
+            dt = self._parse_dt_aware(created)
             if dt and dt >= cutoff:
                 out.append(meta)
         return out
@@ -706,33 +696,53 @@ class IntelligencePrecomputeService:
         return str(getattr(entry, "content", "") or "")
 
     @staticmethod
+    def _parse_dt_aware(value: Any) -> Optional[datetime]:
+        """Parse an ISO datetime string into a tz-aware UTC datetime.
+
+        AlterEgo sends timestamps both as 'Z'-suffixed UTC ('2026-05-07T19:35:36Z')
+        and as naive local strings ('2026-05-07T19:35:36'). datetime.fromisoformat
+        produces a naive datetime for the latter, which crashed comparisons against
+        datetime.now(timezone.utc) with "can't compare offset-naive and offset-aware".
+        Naive inputs are assumed to already be UTC and tagged as such so all
+        downstream arithmetic stays consistent.
+        """
+        if not value:
+            return None
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        try:
+            text = str(value).strip()
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            dt = datetime.fromisoformat(text)
+        except (ValueError, TypeError):
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    @staticmethod
     def _avg_productivity(entries: List[Dict[str, Any]]) -> Optional[float]:
         scores = [float(e.get("productivity_score") or 0) for e in entries if e.get("productivity_score") is not None]
         if not scores:
             return None
         return sum(scores) / len(scores)
 
-    @staticmethod
-    def _goal_age_days(goal: Dict[str, Any]) -> int:
-        created = goal.get("created_at") or goal.get("start_date")
-        if not created:
+    @classmethod
+    def _goal_age_days(cls, goal: Dict[str, Any]) -> int:
+        dt = cls._parse_dt_aware(goal.get("created_at") or goal.get("start_date"))
+        if dt is None:
             return 0
-        try:
-            dt = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
-            return (datetime.now(timezone.utc) - dt).days
-        except (ValueError, TypeError):
-            return 0
+        return (datetime.now(timezone.utc) - dt).days
 
-    @staticmethod
-    def _goal_days_remaining(goal: Dict[str, Any]) -> Optional[int]:
-        end = goal.get("endDate") or goal.get("end_date") or goal.get("target_date")
-        if not end:
+    @classmethod
+    def _goal_days_remaining(cls, goal: Dict[str, Any]) -> Optional[int]:
+        dt = cls._parse_dt_aware(
+            goal.get("endDate") or goal.get("end_date") or goal.get("target_date")
+        )
+        if dt is None:
             return None
-        try:
-            dt = datetime.fromisoformat(str(end).replace("Z", "+00:00"))
-            return max((dt - datetime.now(timezone.utc)).days, 0)
-        except (ValueError, TypeError):
-            return None
+        return max((dt - datetime.now(timezone.utc)).days, 0)
 
     @staticmethod
     def _iso_week() -> str:

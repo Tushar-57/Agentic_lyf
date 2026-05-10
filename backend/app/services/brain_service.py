@@ -232,6 +232,15 @@ class BrainService:
         try:
             if isinstance(candidate, datetime):
                 return candidate if candidate.tzinfo else candidate.replace(tzinfo=timezone.utc)
-            return datetime.fromisoformat(str(candidate).replace("Z", "+00:00"))
+            text = str(candidate).strip()
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            dt = datetime.fromisoformat(text)
         except (ValueError, TypeError):
             return None
+        # Naive ISO inputs (e.g. AlterEgo's "2026-05-07T19:35:36" with no offset)
+        # would otherwise crash the recall_working recency filter where they
+        # get compared against datetime.now(timezone.utc). Treat as UTC.
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt

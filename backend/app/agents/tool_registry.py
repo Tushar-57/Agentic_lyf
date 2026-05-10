@@ -80,9 +80,18 @@ def _entry_dt(entry: Any) -> Optional[datetime]:
     if not candidate:
         return None
     try:
-        return datetime.fromisoformat(str(candidate).replace("Z", "+00:00"))
+        text = str(candidate).strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        dt = datetime.fromisoformat(text)
     except (ValueError, TypeError):
         return None
+    # Naive timestamps (no offset, no Z) crash the _filter_recent comparison
+    # against datetime.now(timezone.utc). Treat as UTC so all entry datetimes
+    # round-trip through the same tz.
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def _filter_recent(entries: List[Any], days: int) -> List[Any]:
@@ -644,7 +653,13 @@ def make_health_tools(brain, kb) -> List[Callable]:
             name = str(md.get("habit_name") or "").lower()
             if target in name and md.get("last_completed"):
                 try:
-                    days_active.append(datetime.fromisoformat(str(md["last_completed"]).replace("Z", "+00:00")).strftime("%A"))
+                    raw = str(md["last_completed"]).strip()
+                    if raw.endswith("Z"):
+                        raw = raw[:-1] + "+00:00"
+                    parsed = datetime.fromisoformat(raw)
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=timezone.utc)
+                    days_active.append(parsed.strftime("%A"))
                 except (ValueError, TypeError):
                     continue
         weekday_counts = Counter(days_active)
